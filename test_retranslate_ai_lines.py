@@ -25,6 +25,35 @@ from worker import VideoWorker
 
 
 class RetranslateAiLinesSafetyTest(unittest.TestCase):
+    def test_known_source_hallucination_requires_full_retranscribe_before_translation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config, video, paths = _fixture(root)
+            source = read_srt(paths.ja_srt)
+            write_srt(
+                paths.ja_srt,
+                [
+                    SrtBlock(
+                        source[0].index,
+                        source[0].timing,
+                        ["この動画の字幕は視聴者によって作成されました。"],
+                    ),
+                    *source[1:],
+                ],
+            )
+            worker = _worker_that_publishes(paths)
+            translator = Mock()
+
+            with (
+                patch("retranslate_ai_lines.VideoWorker", return_value=worker),
+                patch("retranslate_ai_lines.SubtitleTranslator", return_value=translator),
+                self.assertRaisesRegex(RuntimeError, "use full retranscribe instead"),
+            ):
+                retranslate_lines(config, video, {1}, logging.getLogger("test.retranslate.hallucination"))
+
+            translator.translate_blocks.assert_not_called()
+            self.assertEqual(read_srt(paths.ja_srt)[0].text, ["この動画の字幕は視聴者によって作成されました。"])
+
     def test_corrupt_quality_events_fail_closed_without_translation_or_clearing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

@@ -23,7 +23,7 @@ from scan_state import ScanStateStore
 from srt_utils import SrtBlock, read_srt, validate_translation, write_srt
 from subtitle_paths import paths_for_video
 from subtitle_quality import quality_report_candidates
-from transcriber import asr_diagnostics_path, asr_transcription_hold_path
+from transcriber import _is_hallucination_text, asr_diagnostics_path, asr_transcription_hold_path
 from translation_quality import (
     read_translation_quality_events_strict,
     read_translation_quality_hold_strict,
@@ -107,6 +107,17 @@ def retranslate_lines(config: object, video: Path, indexes: set[int], logger: lo
             raise ValueError(f"Subtitle line indexes do not exist: {missing[:20]}")
 
         selected_source = [source_by_index[index] for index in sorted(indexes)]
+        hallucination_indexes = [
+            block.index
+            for block in source_blocks
+            if _is_hallucination_text(" ".join(block.text), config)
+        ]
+        if hallucination_indexes:
+            raise RuntimeError(
+                "Japanese transcript contains known ASR hallucination text at lines "
+                f"{hallucination_indexes[:20]}; retranscription is required; "
+                "use full retranscribe instead"
+            )
         temp_translation = Path(config.work_path) / f"line-retranslate-{hashlib.sha1(str(resolved_video).encode()).hexdigest()[:16]}.srt"
         context = build_series_metadata_context(resolved_video, config, logger)
         translator = SubtitleTranslator(config, logger)
