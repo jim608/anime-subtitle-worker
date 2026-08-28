@@ -119,8 +119,9 @@ def inspect_completed_delivery_canary(video: str | Path, config: Any) -> dict[st
 
 def commit_completed_delivery_canary(video: str | Path, config: Any) -> dict[str, Any]:
     preview = inspect_completed_delivery_canary(video, config)
-    if preview.get("ready") is not True:
-        reason = str(preview.get("reason_code") or "preflight_not_ready")
+    reason = str(preview.get("reason_code") or "")
+    if preview.get("ready") is not True and reason != "recovery_pending":
+        reason = reason or "preflight_not_ready"
         raise CompletedDeliveryError(
             f"completed-delivery canary preflight is not ready: reason={reason}"
         )

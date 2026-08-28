@@ -175,17 +175,48 @@ class CompletedDeliveryCanaryTest(unittest.TestCase):
         self.assertEqual(payload["target_count"], 1)
         self.assertTrue(payload["source_retained"])
 
-    def test_commit_refuses_when_preview_is_not_ready(self) -> None:
+    def test_commit_recovers_owned_pending_delivery(self) -> None:
+        target = Path("/anime/Series/Episode.mkv")
+        result = CompletedDeliveryResult(
+            destination="/completed/Series/Episode.mkv",
+            receipt="/work/receipts/receipt.json",
+            output_sha256="a" * 64,
+            output_size=123,
+            publication_manifest_sha256="b" * 64,
+            recovered=True,
+        )
+        with (
+            patch.object(
+                canary,
+                "inspect_completed_delivery_canary",
+                return_value={
+                    "ready": False,
+                    "reason_code": "recovery_pending",
+                    "target": str(target),
+                    "queue": {"status": "succeeded"},
+                    "strict_publication": {"manifest_sha256": "b" * 64},
+                },
+            ),
+            patch.object(canary, "deliver_completed_mkv", return_value=result) as deliver,
+            patch.object(canary, "validate_completed_delivery", return_value=True) as validate,
+        ):
+            payload = canary.commit_completed_delivery_canary(target, SimpleNamespace())
+
+        deliver.assert_called_once_with(target.resolve(), unittest.mock.ANY)
+        validate.assert_called_once_with(target.resolve(), unittest.mock.ANY, verify_streams=True)
+        self.assertTrue(payload["result"]["recovered"])
+
+    def test_commit_refuses_other_not_ready_reason(self) -> None:
         target = Path("/anime/Series/Episode.mkv")
         with (
             patch.object(
                 canary,
                 "inspect_completed_delivery_canary",
-                return_value={"ready": False, "reason_code": "recovery_pending"},
+                return_value={"ready": False, "reason_code": "queue_not_terminal"},
             ),
             patch.object(canary, "deliver_completed_mkv") as deliver,
         ):
-            with self.assertRaisesRegex(CompletedDeliveryError, "recovery_pending"):
+            with self.assertRaisesRegex(CompletedDeliveryError, "queue_not_terminal"):
                 canary.commit_completed_delivery_canary(target, SimpleNamespace())
 
         deliver.assert_not_called()
