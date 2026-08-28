@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://anime-subtitle-worker.local/schemas/unattended-acceptance-observations-v1.json",
+  "title": "Anime subtitle unattended acceptance observations",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract",
+    "schema_version",
+    "suite_id",
+    "plan_sha256",
+    "started_at",
+    "finished_at",
+    "manual_interventions",
+    "cases"
+  ],
+  "properties": {
+    "contract": {"const": "anime-unattended-acceptance-observations-v1"},
+    "schema_version": {"enum": [1, 2]},
+    "suite_id": {"type": "string", "minLength": 1},
+    "plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "started_at": {"type": "number", "exclusiveMinimum": 0},
+    "finished_at": {"type": "number", "exclusiveMinimum": 0},
+    "manual_interventions": {"type": "array"},
+    "cases": {
+      "type": "array",
+      "minItems": 100,
+      "maxItems": 100,
+      "items": {"$ref": "#/$defs/caseObservation"}
+    }
+  },
+  "$defs": {
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "kind": {"type": "string"},
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "faultObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fault_id", "status", "injected_at", "evidence"],
+      "properties": {
+        "fault_id": {"type": "string", "minLength": 1},
+        "status": {"enum": ["recovered", "not_recovered", "not_injected"]},
+        "injected_at": {"type": "number", "exclusiveMinimum": 0},
+        "recovered_at": {"type": ["number", "null"]},
+        "evidence": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/evidence"}}
+      }
+    },
+    "caseObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "canonical_path",
+        "obligation_id",
+        "route",
+        "started_at",
+        "finished_at",
+        "outcome",
+        "review_required",
+        "manual_interventions",
+        "errors",
+        "evidence",
+        "faults"
+      ],
+      "properties": {
+        "case_id": {"type": "string", "minLength": 1},
+        "canonical_path": {"type": "string", "minLength": 1},
+        "obligation_id": {"type": "string", "pattern": "^aiobl_[0-9a-f]{64}$"},
+        "route": {
+          "enum": [
+            "existing_zh_tw",
+            "zh_cn_opencc",
+            "japanese_subtitle_translation",
+            "japanese_audio_asr"
+          ]
+        },
+        "started_at": {"type": "number", "exclusiveMinimum": 0},
+        "finished_at": {"type": "number", "exclusiveMinimum": 0},
+        "outcome": {"enum": ["completed", "failed", "review_required"]},
+        "review_required": {"type": "boolean"},
+        "manual_interventions": {"type": "array"},
+        "errors": {"type": "array", "items": {"type": "string"}},
+        "evidence": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/evidence"}},
+        "completed_delivery": {"$ref": "#/$defs/completedDeliveryObservation"},
+        "faults": {"type": "array", "items": {"$ref": "#/$defs/faultObservation"}}
+      }
+    },
+    "completedDeliveryObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["receipt", "final_mkv"],
+      "properties": {
+        "receipt": {"$ref": "#/$defs/evidence"},
+        "final_mkv": {"$ref": "#/$defs/evidence"}
+      }
+    }
+  }
+}

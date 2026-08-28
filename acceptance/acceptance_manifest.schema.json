@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://anime-subtitle-worker.local/schemas/unattended-acceptance-plan-v1.json",
+  "title": "Anime subtitle unattended acceptance plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract", "schema_version", "suite_id", "created_at", "cases"],
+  "properties": {
+    "contract": {"const": "anime-unattended-acceptance-plan-v1"},
+    "schema_version": {"enum": [1, 2]},
+    "suite_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "created_at": {"type": "number", "exclusiveMinimum": 0},
+    "cases": {
+      "type": "array",
+      "minItems": 100,
+      "maxItems": 100,
+      "items": {"$ref": "#/$defs/case"}
+    }
+  },
+  "$defs": {
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["case_id", "media", "expected_route", "strata", "faults"],
+      "properties": {
+        "case_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+        "expected_route": {
+          "enum": [
+            "existing_zh_tw",
+            "zh_cn_opencc",
+            "japanese_subtitle_translation",
+            "japanese_audio_asr"
+          ]
+        },
+        "media": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "canonical_path",
+            "media_size",
+            "media_mtime_ns",
+            "media_fingerprint",
+            "policy_revision",
+            "obligation_id"
+          ],
+          "properties": {
+            "canonical_path": {"type": "string", "minLength": 1},
+            "media_size": {"type": "integer", "minimum": 1},
+            "media_mtime_ns": {"type": "integer", "minimum": 1},
+            "media_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "policy_revision": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "obligation_id": {"type": "string", "pattern": "^aiobl_[0-9a-f]{64}$"}
+          }
+        },
+        "strata": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "series_id",
+            "container",
+            "duration_bucket",
+            "audio_layout",
+            "subtitle_layout",
+            "release_profile"
+          ],
+          "properties": {
+            "series_id": {"type": "string", "minLength": 1},
+            "container": {"type": "string", "minLength": 1},
+            "duration_bucket": {"enum": ["short", "standard", "long"]},
+            "audio_layout": {"type": "string", "minLength": 1},
+            "subtitle_layout": {"type": "string", "minLength": 1},
+            "release_profile": {"type": "string", "minLength": 1}
+          }
+        },
+        "completed_delivery": {"$ref": "#/$defs/completedDelivery"},
+        "faults": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["fault_id", "scenario", "trigger"],
+            "properties": {
+              "fault_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+              "scenario": {
+                "enum": [
+                  "worker_kill",
+                  "translation_timeout",
+                  "asr_process_crash",
+                  "gpu_oom",
+                  "model_unavailable",
+                  "output_publish_interrupt",
+                  "temporary_io_error",
+                  "temporary_database_busy",
+                  "mux_process_crash",
+                  "completed_publish_interrupt"
+                ]
+              },
+              "trigger": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    },
+    "completedDelivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_sha256", "receipt_path", "destination"],
+      "properties": {
+        "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "receipt_path": {"type": "string", "minLength": 1},
+        "destination": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

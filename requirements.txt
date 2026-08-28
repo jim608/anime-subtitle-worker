@@ -1,0 +1,20 @@
+--extra-index-url https://download.pytorch.org/whl/cu124
+faster-whisper==1.1.1
+ctranslate2==4.5.0
+openai
+pyyaml
+tqdm
+requests
+opencc-python-reimplemented
+nvidia-cuda-runtime-cu12==12.4.127
+nvidia-cublas-cu12==12.4.5.8
+nvidia-cudnn-cu12==9.1.0.70
+torch==2.6.0+cu124
+torchaudio==2.6.0+cu124
+git+https://github.com/huggingface/transformers.git
+accelerate
+punctuators==0.0.5
+soundfile
+librosa
+demucs
+watchdog

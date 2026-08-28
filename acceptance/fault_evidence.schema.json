@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://anime-subtitle-worker.local/schemas/fault-injection-evidence-v1.json",
+  "title": "Automatic fault injection and recovery evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract",
+    "schema_version",
+    "suite_id",
+    "case_id",
+    "obligation_id",
+    "fault_id",
+    "scenario",
+    "trigger",
+    "injected_at",
+    "observed_failure",
+    "recovery",
+    "manual_interventions"
+  ],
+  "properties": {
+    "contract": {"const": "anime-fault-injection-evidence-v1"},
+    "schema_version": {"enum": [1, 2]},
+    "suite_id": {"type": "string", "minLength": 1},
+    "case_id": {"type": "string", "minLength": 1},
+    "obligation_id": {"type": "string", "pattern": "^aiobl_[0-9a-f]{64}$"},
+    "fault_id": {"type": "string", "minLength": 1},
+    "scenario": {
+      "enum": [
+        "worker_kill",
+        "translation_timeout",
+        "asr_process_crash",
+        "gpu_oom",
+        "model_unavailable",
+        "output_publish_interrupt",
+        "temporary_io_error",
+        "temporary_database_busy",
+        "mux_process_crash",
+        "completed_publish_interrupt"
+      ]
+    },
+    "trigger": {"type": "string", "minLength": 1},
+    "injected_at": {"type": "number", "exclusiveMinimum": 0},
+    "observed_failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "error_code", "observed_at"],
+      "properties": {
+        "stage": {"type": "string", "minLength": 1},
+        "error_code": {"type": "string", "minLength": 1},
+        "observed_at": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
+    "recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["automatic", "started_at", "completed_at", "checkpoint"],
+      "properties": {
+        "automatic": {"const": true},
+        "started_at": {"type": "number", "exclusiveMinimum": 0},
+        "completed_at": {"type": "number", "exclusiveMinimum": 0},
+        "checkpoint": {"type": "string", "minLength": 1}
+      }
+    },
+    "manual_interventions": {"type": "array", "maxItems": 0}
+  }
+}
