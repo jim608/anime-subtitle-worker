@@ -110,6 +110,8 @@ class CompletedDeliveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             source = root / "source.mkv"
+            attachment = root / "font.ttf"
+            attachment.write_bytes(b"fixture-font-attachment")
             subprocess.run(
                 [
                     shutil.which("ffmpeg") or "ffmpeg",
@@ -129,6 +131,12 @@ class CompletedDeliveryTests(unittest.TestCase):
                     "mpeg4",
                     "-c:a",
                     "aac",
+                    "-attach",
+                    str(attachment),
+                    "-metadata:s:t",
+                    "mimetype=application/x-truetype-font",
+                    "-metadata:s:t",
+                    "filename=font.ttf",
                     "-shortest",
                     str(source),
                 ],
@@ -159,9 +167,15 @@ class CompletedDeliveryTests(unittest.TestCase):
             delivery._run_mux(source, output, publication, timeout=30, logger=None)
             delivery._verify_muxed_output(source, output, publication, timeout=30)
             probe = delivery._probe(output, timeout=30)
-            generated = probe["streams"][-3:]
+            generated = [
+                stream for stream in probe["streams"] if stream.get("codec_type") == "subtitle"
+            ][-3:]
             self.assertEqual([stream["tags"]["language"] for stream in generated], ["ja", "zh-CN", "zh-TW"])
             self.assertEqual(generated[-1]["disposition"]["default"], 1)
+            self.assertEqual(
+                sum(1 for stream in probe["streams"] if stream.get("codec_type") == "attachment"),
+                1,
+            )
 
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg tools unavailable")
     def test_commit_crash_recovers_final_without_remux_or_source_removal(self) -> None:

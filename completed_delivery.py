@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import asdict, dataclass
 import hashlib
 import json
@@ -479,19 +480,36 @@ def _verify_muxed_output(
     output_streams = output_probe["streams"]
     if len(output_streams) != len(source_streams) + len(publication["tracks"]):
         raise CompletedDeliveryError("muxed MKV stream count does not preserve the source plus publication tracks")
-    for index, source_stream in enumerate(source_streams):
-        if _stream_signature(source_stream) != _stream_signature(output_streams[index]):
-            raise CompletedDeliveryError(f"muxed MKV changed source stream {index}")
-    _validate_duration(source_probe, output_probe)
-    if _av_copy_hash(source, timeout=timeout) != _av_copy_hash(output, timeout=timeout):
-        raise CompletedDeliveryError("muxed MKV audio/video packet content differs from the source")
 
     source_subtitle_count = sum(
         1 for stream in source_streams if stream.get("codec_type") == "subtitle"
     )
+    output_subtitle_entries = [
+        (position, stream)
+        for position, stream in enumerate(output_streams)
+        if stream.get("codec_type") == "subtitle"
+    ]
+    expected_subtitle_count = source_subtitle_count + len(publication["tracks"])
+    if len(output_subtitle_entries) != expected_subtitle_count:
+        raise CompletedDeliveryError(
+            "muxed MKV subtitle stream count does not preserve the source plus publication tracks"
+        )
+    generated_entries = output_subtitle_entries[source_subtitle_count:]
+    generated_positions = {position for position, _stream in generated_entries}
+    source_signatures = Counter(_stream_signature(stream) for stream in source_streams)
+    preserved_signatures = Counter(
+        _stream_signature(stream)
+        for position, stream in enumerate(output_streams)
+        if position not in generated_positions
+    )
+    if preserved_signatures != source_signatures:
+        raise CompletedDeliveryError("muxed MKV changed the preserved source stream set")
+    _validate_duration(source_probe, output_probe)
+    if _av_copy_hash(source, timeout=timeout) != _av_copy_hash(output, timeout=timeout):
+        raise CompletedDeliveryError("muxed MKV audio/video packet content differs from the source")
+
     for index, track in enumerate(publication["tracks"]):
-        absolute_index = len(source_streams) + index
-        stream = output_streams[absolute_index]
+        _absolute_index, stream = generated_entries[index]
         if stream.get("codec_type") != "subtitle" or str(stream.get("codec_name") or "").lower() not in {
             "ass",
             "ssa",
