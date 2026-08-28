@@ -520,12 +520,14 @@ def _scan_and_process(
                     video,
                     delivery_attempt_id,
                 )
+                process_kwargs = {"resource_launch_plan": plan}
+                if acceptance_attempt_context is not None:
+                    process_kwargs["acceptance_attempt_context"] = acceptance_attempt_context
                 ok = _process_video_with_policy(
                     worker,
                     video,
                     logger,
-                    resource_launch_plan=plan,
-                    acceptance_attempt_context=acceptance_attempt_context,
+                    **process_kwargs,
                 )
                 _mark_queue_result(
                     queue_state,
@@ -619,12 +621,15 @@ def _scan_and_process(
                             video,
                             delivery_attempt_id,
                         )
+                    submit_kwargs = {}
+                    if acceptance_attempt_context is not None:
+                        submit_kwargs["acceptance_attempt_context"] = acceptance_attempt_context
                     future = executor.submit(
                         _process_video_with_policy,
                         VideoWorker(worker.config, logger),
                         video,
                         logger,
-                        acceptance_attempt_context=acceptance_attempt_context,
+                        **submit_kwargs,
                     )
                     futures[future] = (video, delivery_attempt_id)
 
