@@ -9,9 +9,13 @@ import os
 import re
 import sqlite3
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 import uuid
 
+from acceptance_queue_lane import (
+    ACCEPTANCE_QUEUE_TARGET_COUNT,
+    AcceptanceQueueTarget,
+)
 from mikan_source import extract_episode_number
 from subtitle_extract import SIDECAR_SUBTITLE_EXTENSIONS
 from subtitle_paths import finished_subtitle_paths
@@ -593,19 +597,93 @@ class ScanStateStore:
         }
         return force_ai, force_ai or manual_retry
 
-    def mark_ai_queue_running(self, path: Path) -> None:
+    def mark_ai_queue_running(
+        self,
+        path: Path,
+        *,
+        acceptance_target: AcceptanceQueueTarget | None = None,
+    ) -> None:
         now = time.time()
-        self._conn.execute(
-            """
-            UPDATE ai_candidate_queue
-            SET status = 'running',
-                running_at = ?,
-                next_retry_at = 0,
-                updated_at = ?
-            WHERE path = ?
-            """,
-            (now, now, _queue_path(path)),
-        )
+        if acceptance_target is None:
+            self._conn.execute(
+                """
+                UPDATE ai_candidate_queue
+                SET status = 'running',
+                    running_at = ?,
+                    next_retry_at = 0,
+                    updated_at = ?
+                WHERE path = ?
+                """,
+                (now, now, _queue_path(path)),
+            )
+        else:
+            retry_strategies = tuple(sorted(AI_QUEUE_AUTOMATIC_RETRY_STRATEGIES))
+            retry_placeholders = ", ".join("?" for _item in retry_strategies)
+            changed = self._conn.execute(
+                f"""
+                UPDATE ai_candidate_queue AS q
+                SET status = 'running',
+                    running_at = ?,
+                    next_retry_at = 0,
+                    updated_at = ?
+                WHERE q.path = ?
+                  AND q.mtime_ns = ?
+                  AND (
+                        q.status = 'queued'
+                        OR (
+                            q.status = 'failed_retry'
+                            AND q.next_retry_at <= ?
+                            AND q.last_error_at > 0
+                            AND q.last_error_code != ''
+                            AND q.retry_strategy IN ({retry_placeholders})
+                            AND EXISTS (
+                                SELECT 1
+                                FROM ai_delivery_attempts a
+                                WHERE a.obligation_id = ?
+                                  AND a.attempt_number = (
+                                      SELECT attempt_count
+                                      FROM ai_delivery_obligations
+                                      WHERE obligation_id = ?
+                                  )
+                                  AND a.status = 'retryable_failure'
+                                  AND a.error_code = q.last_error_code
+                                  AND a.finished_at >= q.last_error_at
+                                  AND a.finished_at <= q.last_error_at + ?
+                            )
+                        )
+                  )
+                  AND EXISTS (
+                        SELECT 1
+                        FROM ai_delivery_obligations o
+                        WHERE o.obligation_id = ?
+                          AND o.canonical_path = q.path
+                          AND o.media_fingerprint = ?
+                          AND o.media_size = ?
+                          AND o.media_mtime_ns = q.mtime_ns
+                          AND o.policy_revision = ?
+                          AND o.state = 'open'
+                  )
+                """,
+                (
+                    now,
+                    now,
+                    acceptance_target.canonical_path,
+                    acceptance_target.media_mtime_ns,
+                    now,
+                    *retry_strategies,
+                    acceptance_target.obligation_id,
+                    acceptance_target.obligation_id,
+                    AI_QUEUE_RETRY_ATTEMPT_LINK_MAX_SKEW_SECONDS,
+                    acceptance_target.obligation_id,
+                    acceptance_target.media_fingerprint,
+                    acceptance_target.media_size,
+                    acceptance_target.policy_revision,
+                ),
+            ).rowcount
+            if int(changed or 0) != 1:
+                raise ValueError(
+                    "acceptance queue target is not an exact, open, claimable identity"
+                )
         self.update_ai_job_stage(path, "worker", "running", "Worker started")
 
     def mark_ai_queue_done(
@@ -1561,6 +1639,115 @@ class ScanStateStore:
             requeued += 1
         return requeued
 
+    def requeue_acceptance_running_targets(
+        self,
+        targets: Sequence[AcceptanceQueueTarget],
+        *,
+        stale_after_seconds: int | None = None,
+        message: str = "Worker restarted before this acceptance job finished",
+    ) -> int:
+        """Requeue only exact running identities from the fixed acceptance lane."""
+
+        if len(targets) != ACCEPTANCE_QUEUE_TARGET_COUNT:
+            raise ValueError(
+                f"acceptance queue lane requires exactly {ACCEPTANCE_QUEUE_TARGET_COUNT} targets"
+            )
+        now = time.time()
+        cutoff = (
+            now - max(60, int(stale_after_seconds or 0))
+            if stale_after_seconds is not None
+            else None
+        )
+        requeued = 0
+        for target in targets:
+            stale_sql = ""
+            parameters: list[Any] = [
+                now,
+                target.canonical_path,
+                target.media_mtime_ns,
+            ]
+            if cutoff is not None:
+                stale_sql = """
+                  AND COALESCE(
+                        (
+                            SELECT ai_job_state.updated_at
+                            FROM ai_job_state
+                            WHERE ai_job_state.path = q.path
+                        ),
+                        q.updated_at,
+                        q.running_at,
+                        q.added_at,
+                        0
+                      ) <= ?
+                """
+                parameters.append(cutoff)
+            parameters.extend(
+                (
+                    target.obligation_id,
+                    target.media_fingerprint,
+                    target.media_size,
+                    target.policy_revision,
+                )
+            )
+            changed = self._conn.execute(
+                f"""
+                UPDATE ai_candidate_queue AS q
+                SET status = 'queued',
+                    updated_at = ?,
+                    running_at = 0,
+                    next_retry_at = 0,
+                    last_error = '',
+                    last_error_at = 0
+                WHERE q.path = ?
+                  AND q.mtime_ns = ?
+                  AND q.status = 'running'
+                  {stale_sql}
+                  AND EXISTS (
+                        SELECT 1
+                        FROM ai_delivery_obligations o
+                        WHERE o.obligation_id = ?
+                          AND o.canonical_path = q.path
+                          AND o.media_fingerprint = ?
+                          AND o.media_size = ?
+                          AND o.media_mtime_ns = q.mtime_ns
+                          AND o.policy_revision = ?
+                          AND o.state = 'open'
+                  )
+                """,
+                tuple(parameters),
+            ).rowcount
+            if int(changed or 0) != 1:
+                continue
+            attempts = self._conn.execute(
+                """
+                SELECT attempt_id
+                FROM ai_delivery_attempts
+                WHERE obligation_id = ? AND status = 'running'
+                ORDER BY started_at ASC, attempt_id ASC
+                """,
+                (target.obligation_id,),
+            ).fetchall()
+            stage = "stale_recovery" if cutoff is not None else "restart_recovery"
+            error_code = (
+                "stale_running_requeued" if cutoff is not None else "worker_restarted"
+            )
+            for (attempt_id,) in attempts:
+                self.finish_ai_delivery_attempt(
+                    str(attempt_id),
+                    status="deferred",
+                    stage=stage,
+                    error_code=error_code,
+                    detail=message,
+                )
+            self.update_ai_job_stage(
+                Path(target.canonical_path),
+                "queued",
+                "queued",
+                message,
+            )
+            requeued += 1
+        return requeued
+
     def requeue_running_from_previous_worker(
         self,
         message: str = "Worker restarted before this job finished",
@@ -1715,6 +1902,7 @@ class ScanStateStore:
         *,
         oldest_first: bool = False,
         now: float | None = None,
+        acceptance_targets: Sequence[AcceptanceQueueTarget] | None = None,
     ) -> list[Path]:
         """Return queued work plus only provenance-backed due retries.
 
@@ -1729,8 +1917,14 @@ class ScanStateStore:
         Queue age remains only the compatibility fallback for untracked rows.
         """
 
-        added_direction = "ASC" if oldest_first else "DESC"
         observed_at = float(time.time() if now is None else now)
+        if acceptance_targets is not None:
+            return self._iter_acceptance_queue_candidates(
+                acceptance_targets,
+                observed_at=observed_at,
+            )
+
+        added_direction = "ASC" if oldest_first else "DESC"
         retry_strategies = tuple(sorted(AI_QUEUE_AUTOMATIC_RETRY_STRATEGIES))
         retry_placeholders = ", ".join("?" for _item in retry_strategies)
         rows = self._conn.execute(
@@ -1778,6 +1972,82 @@ class ScanStateStore:
                 q.path COLLATE NOCASE ASC
             """,
             (
+                observed_at,
+                *retry_strategies,
+                AI_QUEUE_RETRY_ATTEMPT_LINK_MAX_SKEW_SECONDS,
+            ),
+        ).fetchall()
+        return [Path(str(row[0])) for row in rows]
+
+    def _iter_acceptance_queue_candidates(
+        self,
+        targets: Sequence[AcceptanceQueueTarget],
+        *,
+        observed_at: float,
+    ) -> list[Path]:
+        """Return only exact open identities from the fixed 100-case lane."""
+
+        if len(targets) != ACCEPTANCE_QUEUE_TARGET_COUNT:
+            raise ValueError(
+                f"acceptance queue lane requires exactly {ACCEPTANCE_QUEUE_TARGET_COUNT} targets"
+            )
+        values_sql = ",".join("(?,?,?,?,?,?,?)" for _target in targets)
+        target_parameters: list[Any] = []
+        for target in targets:
+            target_parameters.extend(
+                (
+                    target.ordinal,
+                    target.canonical_path,
+                    target.media_size,
+                    target.media_mtime_ns,
+                    target.media_fingerprint,
+                    target.policy_revision,
+                    target.obligation_id,
+                )
+            )
+        retry_strategies = tuple(sorted(AI_QUEUE_AUTOMATIC_RETRY_STRATEGIES))
+        retry_placeholders = ", ".join("?" for _item in retry_strategies)
+        rows = self._conn.execute(
+            f"""
+            WITH acceptance_targets(
+                ordinal, canonical_path, media_size, media_mtime_ns,
+                media_fingerprint, policy_revision, obligation_id
+            ) AS (VALUES {values_sql})
+            SELECT q.path
+            FROM acceptance_targets t
+            JOIN ai_candidate_queue q
+              ON q.path = t.canonical_path
+             AND q.mtime_ns = t.media_mtime_ns
+            JOIN ai_delivery_obligations o
+              ON o.obligation_id = t.obligation_id
+             AND o.canonical_path = t.canonical_path
+             AND o.media_size = t.media_size
+             AND o.media_mtime_ns = t.media_mtime_ns
+             AND o.media_fingerprint = t.media_fingerprint
+             AND o.policy_revision = t.policy_revision
+             AND o.state = 'open'
+            WHERE q.status = 'queued'
+               OR (
+                    q.status = 'failed_retry'
+                    AND q.next_retry_at <= ?
+                    AND q.last_error_at > 0
+                    AND q.last_error_code != ''
+                    AND q.retry_strategy IN ({retry_placeholders})
+                    AND EXISTS (
+                        SELECT 1
+                        FROM ai_delivery_attempts a
+                        WHERE a.obligation_id = t.obligation_id
+                          AND a.attempt_number = o.attempt_count
+                          AND a.status = 'retryable_failure'
+                          AND a.error_code = q.last_error_code
+                          AND a.finished_at >= q.last_error_at
+                          AND a.finished_at <= q.last_error_at + ?
+                    )
+               )
+            ORDER BY t.ordinal ASC
+            """,
+            (
+                *target_parameters,
                 observed_at,
                 *retry_strategies,
                 AI_QUEUE_RETRY_ATTEMPT_LINK_MAX_SKEW_SECONDS,
@@ -1866,6 +2136,7 @@ class ScanStateStore:
         eligible_at: float | None = None,
         source: str = "scan",
         obligation_id: str | None = None,
+        acceptance_run_id: str | None = None,
     ) -> dict[str, Any]:
         """Create one durable AI delivery denominator unit, idempotently.
 
@@ -1885,6 +2156,7 @@ class ScanStateStore:
         )
         expected_id = str(identity["obligation_id"])
         normalized_id = str(obligation_id or expected_id).strip()
+        normalized_acceptance_run_id = str(acceptance_run_id or "").strip()
         if normalized_id != expected_id:
             raise ValueError(
                 "obligation_id does not match canonical path/media/policy identity: "
@@ -1921,9 +2193,9 @@ class ScanStateStore:
                 """
                 INSERT OR IGNORE INTO ai_delivery_obligations(
                     obligation_id, canonical_path, media_fingerprint, media_size,
-                    media_mtime_ns, policy_revision, source, state, eligible_at,
+                    media_mtime_ns, policy_revision, acceptance_run_id, source, state, eligible_at,
                     due_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)
                 """,
                 (
                     normalized_id,
@@ -1932,6 +2204,7 @@ class ScanStateStore:
                     int(media_size),
                     int(media_mtime_ns),
                     identity["policy_revision"],
+                    normalized_acceptance_run_id or None,
                     str(source or "scan")[:100],
                     admitted_at,
                     due_at,
@@ -1959,6 +2232,12 @@ class ScanStateStore:
                 raise ValueError(
                     "AI delivery identity is already owned by another obligation id: "
                     f"stored={stored['obligation_id']} requested={normalized_id}"
+                )
+            if stored.get("acceptance_run_id", "") != normalized_acceptance_run_id:
+                raise ValueError(
+                    "AI delivery identity is bound to a different acceptance run: "
+                    f"stored={stored.get('acceptance_run_id') or '-'} "
+                    f"requested={normalized_acceptance_run_id or '-'}"
                 )
             if stored["state"] == "excluded" and int(stored["attempt_count"]) == 0:
                 reopened = self._conn.execute(
@@ -2013,6 +2292,7 @@ class ScanStateStore:
         *,
         attempt_id: str | None = None,
         started_at: float | None = None,
+        acceptance_run_id: str | None = None,
     ) -> dict[str, Any]:
         obligation = self.get_ai_delivery_obligation(obligation_id)
         if obligation is None:
@@ -2020,6 +2300,11 @@ class ScanStateStore:
         if obligation["state"] != "open":
             raise ValueError(
                 f"AI delivery obligation is not open: {obligation_id} state={obligation['state']}"
+            )
+        normalized_acceptance_run_id = str(acceptance_run_id or "").strip()
+        if obligation.get("acceptance_run_id", "") != normalized_acceptance_run_id:
+            raise ValueError(
+                "AI delivery attempt acceptance run does not match its obligation"
             )
         now = time.time()
         started = float(now if started_at is None else started_at)
@@ -2037,11 +2322,19 @@ class ScanStateStore:
         self._conn.execute(
             """
             INSERT INTO ai_delivery_attempts(
-                attempt_id, obligation_id, attempt_number, status, started_at,
+                attempt_id, obligation_id, acceptance_run_id, attempt_number, status, started_at,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, 'running', ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?)
             """,
-            (normalized_id, str(obligation_id), attempt_number, started, now, now),
+            (
+                normalized_id,
+                str(obligation_id),
+                normalized_acceptance_run_id or None,
+                attempt_number,
+                started,
+                now,
+                now,
+            ),
         )
         self._conn.execute(
             """
@@ -3451,6 +3744,7 @@ class ScanStateStore:
                 media_size INTEGER NOT NULL,
                 media_mtime_ns INTEGER NOT NULL,
                 policy_revision TEXT NOT NULL,
+                acceptance_run_id TEXT,
                 source TEXT NOT NULL DEFAULT 'scan',
                 state TEXT NOT NULL DEFAULT 'open',
                 eligible_at REAL NOT NULL,
@@ -3475,6 +3769,7 @@ class ScanStateStore:
             CREATE TABLE IF NOT EXISTS ai_delivery_attempts (
                 attempt_id TEXT PRIMARY KEY,
                 obligation_id TEXT NOT NULL,
+                acceptance_run_id TEXT,
                 attempt_number INTEGER NOT NULL,
                 status TEXT NOT NULL,
                 stage TEXT NOT NULL DEFAULT '',
@@ -3547,6 +3842,7 @@ class ScanStateStore:
                 ON ai_media_inventory(epoch_id, canonical_path);
             """
         )
+        self._ensure_ai_delivery_acceptance_columns()
         self._ensure_ai_inventory_epoch_columns()
         now = time.time()
         self._conn.execute(
@@ -3652,6 +3948,15 @@ class ScanStateStore:
                 "ALTER TABLE ai_inventory_epochs "
                 "ADD COLUMN dirty_generation INTEGER NOT NULL DEFAULT 0"
             )
+
+    def _ensure_ai_delivery_acceptance_columns(self) -> None:
+        for table in ("ai_delivery_obligations", "ai_delivery_attempts"):
+            rows = self._conn.execute(f"PRAGMA table_info({table})").fetchall()
+            existing = {str(row[1]) for row in rows}
+            if "acceptance_run_id" not in existing:
+                self._conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN acceptance_run_id TEXT"
+                )
 
     def _ensure_video_scan_cache_columns(self) -> None:
         rows = self._conn.execute("PRAGMA table_info(video_scan_cache)").fetchall()
@@ -3796,6 +4101,7 @@ _AI_DELIVERY_OBLIGATION_FIELDS = (
     "media_size",
     "media_mtime_ns",
     "policy_revision",
+    "acceptance_run_id",
     "source",
     "state",
     "eligible_at",
@@ -3816,6 +4122,7 @@ _AI_DELIVERY_OBLIGATION_FIELDS = (
 _AI_DELIVERY_ATTEMPT_FIELDS = (
     "attempt_id",
     "obligation_id",
+    "acceptance_run_id",
     "attempt_number",
     "status",
     "stage",
@@ -3888,6 +4195,7 @@ def _stable_ai_delivery_attempt_id(obligation_id: str, attempt_number: int) -> s
 
 def _ai_delivery_obligation_dict(row: tuple[Any, ...]) -> dict[str, Any]:
     payload = dict(zip(_AI_DELIVERY_OBLIGATION_FIELDS, row, strict=True))
+    payload["acceptance_run_id"] = str(payload.get("acceptance_run_id") or "")
     for key in ("media_size", "media_mtime_ns", "attempt_count"):
         try:
             payload[key] = int(payload[key] if payload[key] is not None else 0)
@@ -3908,6 +4216,7 @@ def _ai_delivery_obligation_dict(row: tuple[Any, ...]) -> dict[str, Any]:
 
 def _ai_delivery_attempt_dict(row: tuple[Any, ...]) -> dict[str, Any]:
     payload = dict(zip(_AI_DELIVERY_ATTEMPT_FIELDS, row, strict=True))
+    payload["acceptance_run_id"] = str(payload.get("acceptance_run_id") or "")
     payload["attempt_number"] = int(payload["attempt_number"] or 0)
     for key in ("started_at", "finished_at", "created_at", "updated_at"):
         payload[key] = float(payload[key] or 0)

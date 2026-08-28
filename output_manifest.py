@@ -9,6 +9,7 @@ from typing import Any
 
 from processing_provenance import processing_config_signature
 from safe_files import atomic_write_text, sha256_file
+from acceptance_queue_lane import acceptance_run_id_for_video
 from scan_state import ai_delivery_identity
 
 
@@ -137,6 +138,9 @@ def write_output_manifest(
         "outputs": files,
         "provenance": provenance or {},
     }
+    acceptance_run_id = acceptance_run_id_for_video(config, video)
+    if acceptance_run_id:
+        payload["acceptance_run_id"] = acceptance_run_id
     if publication is not None:
         payload["publication"] = publication
         if not _publication_source_provenance_matches(
@@ -181,6 +185,12 @@ def validate_output_manifest(
     except (OSError, json.JSONDecodeError):
         return False
     if not isinstance(payload, dict) or payload.get("schema_version") not in SUPPORTED_MANIFEST_SCHEMA_VERSIONS:
+        return False
+    try:
+        acceptance_run_id = acceptance_run_id_for_video(config, video)
+    except (OSError, TypeError, ValueError):
+        return False
+    if acceptance_run_id and str(payload.get("acceptance_run_id") or "") != acceptance_run_id:
         return False
     schema_version = int(payload.get("schema_version") or 0)
     if require_delivery_evidence and schema_version != MANIFEST_SCHEMA_VERSION:

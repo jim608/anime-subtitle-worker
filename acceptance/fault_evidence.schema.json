@@ -20,8 +20,9 @@
   ],
   "properties": {
     "contract": {"const": "anime-fault-injection-evidence-v1"},
-    "schema_version": {"enum": [1, 2]},
+    "schema_version": {"enum": [1, 2, 3]},
     "suite_id": {"type": "string", "minLength": 1},
+    "acceptance_run_id": {"type": "string", "pattern": "^accrun_[0-9a-f]{48}$"},
     "case_id": {"type": "string", "minLength": 1},
     "obligation_id": {"type": "string", "pattern": "^aiobl_[0-9a-f]{64}$"},
     "fault_id": {"type": "string", "minLength": 1},

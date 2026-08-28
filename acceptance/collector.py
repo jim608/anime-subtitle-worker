@@ -14,6 +14,7 @@ from safe_files import sha256_file
 from .harness import (
     AcceptanceInputError,
     COMPLETED_DELIVERY_FAULT_SCENARIOS,
+    FRESH_PLAN_SCHEMA_VERSION,
     OBSERVATION_CONTRACT,
     ROUTES,
     _COMPLETED_FAULT_LEDGER_STAGE,
@@ -21,6 +22,7 @@ from .harness import (
     _provenance_route,
     _verify_structured_fault_evidence,
     read_json_object,
+    validate_plan,
     validate_plan_structure,
 )
 
@@ -46,6 +48,8 @@ def collect_observations(
     plan_file = Path(plan_path)
     plan = read_json_object(plan_file)
     structure_errors = validate_plan_structure(plan)
+    if plan.get("schema_version") == FRESH_PLAN_SCHEMA_VERSION:
+        structure_errors = validate_plan(plan, config)
     if structure_errors:
         preview = "; ".join(structure_errors[:8])
         suffix = f"; plus {len(structure_errors) - 8} more" if len(structure_errors) > 8 else ""
@@ -69,6 +73,12 @@ def collect_observations(
                     config,
                     suite_id=str(plan["suite_id"]),
                     plan_schema_version=int(plan["schema_version"]),
+                    acceptance_run_id=str(plan.get("run_id") or ""),
+                    plan_created_at=(
+                        float(plan["created_at"])
+                        if plan.get("schema_version") == FRESH_PLAN_SCHEMA_VERSION
+                        else None
+                    ),
                     plan_reference=plan_reference,
                     fault_root=fault_root,
                     ledger=ledger,
@@ -78,7 +88,7 @@ def collect_observations(
 
     starts = [float(item["started_at"]) for item in cases]
     finishes = [float(item["finished_at"]) for item in cases]
-    return {
+    result = {
         "contract": OBSERVATION_CONTRACT,
         "schema_version": int(plan["schema_version"]),
         "suite_id": str(plan["suite_id"]),
@@ -88,6 +98,9 @@ def collect_observations(
         "manual_interventions": [],
         "cases": cases,
     }
+    if plan.get("schema_version") == FRESH_PLAN_SCHEMA_VERSION:
+        result["run_id"] = str(plan.get("run_id") or "")
+    return result
 
 
 def observation_summary(observations: dict[str, Any]) -> dict[str, Any]:
@@ -136,6 +149,8 @@ def _collect_case(
     *,
     suite_id: str,
     plan_schema_version: int,
+    acceptance_run_id: str = "",
+    plan_created_at: float | None = None,
     plan_reference: dict[str, Any],
     fault_root: Path,
     ledger: "_ReadonlyLedger",
@@ -150,6 +165,7 @@ def _collect_case(
     manual_interventions: list[Any] = []
     time_values: list[float] = []
     evidence: list[dict[str, Any]] = []
+    fresh_case = plan_schema_version == FRESH_PLAN_SCHEMA_VERSION
 
     try:
         identity = delivery_identity(video, config)
@@ -177,12 +193,28 @@ def _collect_case(
         missing_error="output_manifest_missing_or_unreadable",
     )
     if isinstance(manifest, dict):
+        if fresh_case and str(manifest.get("acceptance_run_id") or "") != acceptance_run_id:
+            errors.append("output_manifest_acceptance_run_id_mismatch")
         _add_timestamp(time_values, manifest.get("completed_at"))
+        if fresh_case:
+            _require_fresh_timestamp(
+                manifest.get("completed_at"),
+                plan_created_at,
+                "output_manifest_completed_before_plan",
+                errors,
+            )
         delivery = manifest.get("delivery")
         if not isinstance(delivery, dict):
             errors.append("output_manifest_delivery_missing")
         else:
             _add_timestamp(time_values, delivery.get("verified_at"))
+            if fresh_case:
+                _require_fresh_timestamp(
+                    delivery.get("verified_at"),
+                    plan_created_at,
+                    "output_manifest_verified_before_plan",
+                    errors,
+                )
             if delivery.get("obligation_id") != obligation_id:
                 errors.append("output_manifest_obligation_mismatch")
             if delivery.get("policy_revision") != media.get("policy_revision"):
@@ -203,8 +235,18 @@ def _collect_case(
     )
     actual_route = ""
     if isinstance(provenance, dict):
+        if fresh_case and str(provenance.get("acceptance_run_id") or "") != acceptance_run_id:
+            errors.append("processing_provenance_acceptance_run_id_mismatch")
         for field in ("created_at", "run_started_at", "updated_at", "finished_at"):
             _add_timestamp(time_values, provenance.get(field))
+        if fresh_case:
+            for field in ("run_started_at", "finished_at"):
+                _require_fresh_timestamp(
+                    provenance.get(field),
+                    plan_created_at,
+                    f"processing_provenance_{field}_before_plan",
+                    errors,
+                )
         if provenance.get("status") != "complete":
             errors.append("processing_provenance_not_complete")
         if str(provenance.get("video_path") or "") != str(video):
@@ -225,9 +267,28 @@ def _collect_case(
     else:
         for field in ("eligible_at", "verified_at"):
             _add_timestamp(time_values, ledger_row.get(field))
+            if fresh_case:
+                _require_fresh_timestamp(
+                    ledger_row.get(field),
+                    plan_created_at,
+                    f"delivery_ledger_{field}_before_plan",
+                    errors,
+                )
+        if fresh_case and str(ledger_row.get("acceptance_run_id") or "") != acceptance_run_id:
+            errors.append("delivery_ledger_acceptance_run_id_mismatch")
         for attempt in attempts:
+            if fresh_case and str(attempt.get("acceptance_run_id") or "") != acceptance_run_id:
+                errors.append("delivery_attempt_acceptance_run_id_mismatch")
             _add_timestamp(time_values, attempt.get("started_at"))
             _add_timestamp(time_values, attempt.get("finished_at"))
+            if fresh_case:
+                for field in ("started_at", "finished_at"):
+                    _require_fresh_timestamp(
+                        attempt.get(field),
+                        plan_created_at,
+                        f"delivery_attempt_{field}_before_plan",
+                        errors,
+                    )
         _check_ledger(
             ledger_row,
             attempts,
@@ -247,6 +308,8 @@ def _collect_case(
             media=media,
             manifest_file=manifest_file,
             manifest_digest=manifest_digest,
+            acceptance_run_id=acceptance_run_id if fresh_case else "",
+            plan_created_at=plan_created_at,
         )
         errors.extend(completed_errors)
         completed_ok = not completed_errors
@@ -326,6 +389,7 @@ def _collect_case(
                 fault=fault,
                 observation=fault_observation,
                 plan_schema_version=plan_schema_version,
+                acceptance_run_id=acceptance_run_id,
             )
             if structured_error:
                 fault_errors.append(structured_error)
@@ -380,6 +444,8 @@ def _collect_case(
         "evidence": evidence,
         "faults": observed_faults,
     }
+    if fresh_case:
+        result["acceptance_run_id"] = acceptance_run_id
     if completed_observation is not None:
         result["completed_delivery"] = completed_observation
     return result
@@ -391,6 +457,8 @@ def _collect_completed_delivery(
     media: dict[str, Any],
     manifest_file: Path,
     manifest_digest: str,
+    acceptance_run_id: str = "",
+    plan_created_at: float | None = None,
 ) -> tuple[dict[str, Any], list[str], float | None]:
     receipt_file = Path(str(planned.get("receipt_path") or ""))
     destination = Path(str(planned.get("destination") or ""))
@@ -406,7 +474,13 @@ def _collect_completed_delivery(
     output_digest = ""
     committed_at: float | None = None
     if isinstance(receipt, dict):
+        if acceptance_run_id and str(receipt.get("acceptance_run_id") or "") != acceptance_run_id:
+            errors.append("completed_delivery_acceptance_run_id_mismatch")
         committed_at = _positive_timestamp(receipt.get("committed_at"))
+        if plan_created_at is not None and (
+            committed_at is None or committed_at < plan_created_at
+        ):
+            errors.append("completed_delivery_committed_before_plan")
         if receipt.get("state") != "committed" or committed_at is None:
             errors.append("completed_delivery_receipt_not_committed")
         if receipt.get("source_retained") is not True:
@@ -541,6 +615,17 @@ def _add_timestamp(values: list[float], value: Any) -> None:
         values.append(parsed)
 
 
+def _require_fresh_timestamp(
+    value: Any,
+    plan_created_at: float | None,
+    error: str,
+    errors: list[str],
+) -> None:
+    parsed = _positive_timestamp(value)
+    if plan_created_at is None or parsed is None or parsed < plan_created_at:
+        errors.append(error)
+
+
 def _positive_timestamp(value: Any) -> float | None:
     if isinstance(value, bool):
         return None
@@ -608,12 +693,24 @@ class _ReadonlyLedger:
         if self.connection is None:
             return None, [], "scanner state database is unavailable"
         try:
+            obligation_columns = {
+                str(item[1])
+                for item in self.connection.execute(
+                    "PRAGMA table_info(ai_delivery_obligations)"
+                ).fetchall()
+            }
+            run_id_projection = (
+                "acceptance_run_id"
+                if "acceptance_run_id" in obligation_columns
+                else "NULL AS acceptance_run_id"
+            )
             row = self.connection.execute(
-                """
+                f"""
                 SELECT obligation_id, canonical_path, media_fingerprint, media_size,
                        media_mtime_ns, policy_revision, state, outcome_code,
                        manifest_path, manifest_sha256, verification_json,
-                       eligible_at, due_at, verified_at, attempt_count
+                       eligible_at, due_at, verified_at, attempt_count,
+                       {run_id_projection}
                 FROM ai_delivery_obligations WHERE obligation_id=?
                 """,
                 (obligation_id,),
@@ -625,12 +722,24 @@ class _ReadonlyLedger:
                 ledger["verification"] = json.loads(str(ledger.pop("verification_json") or "{}"))
             except json.JSONDecodeError:
                 ledger["verification"] = None
+            attempt_columns = {
+                str(item[1])
+                for item in self.connection.execute(
+                    "PRAGMA table_info(ai_delivery_attempts)"
+                ).fetchall()
+            }
+            attempt_run_id_projection = (
+                "acceptance_run_id"
+                if "acceptance_run_id" in attempt_columns
+                else "NULL AS acceptance_run_id"
+            )
             attempts = [
                 dict(item)
                 for item in self.connection.execute(
-                    """
+                    f"""
                     SELECT attempt_id, attempt_number, status, stage, error_code,
-                           detail, started_at, finished_at
+                           detail, started_at, finished_at,
+                           {attempt_run_id_projection}
                     FROM ai_delivery_attempts
                     WHERE obligation_id=? ORDER BY attempt_number
                     """,

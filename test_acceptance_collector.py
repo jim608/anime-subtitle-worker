@@ -163,13 +163,22 @@ class AcceptanceCollectorTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def collect_case(self, planned: dict | None = None) -> dict:
+    def collect_case(
+        self,
+        planned: dict | None = None,
+        *,
+        plan_schema_version: int = 2,
+        acceptance_run_id: str = "",
+        plan_created_at: float | None = None,
+    ) -> dict:
         with _ReadonlyLedger(self.config) as ledger:
             return _collect_case(
                 planned or self.case,
                 self.config,
                 suite_id="suite",
-                plan_schema_version=2,
+                plan_schema_version=plan_schema_version,
+                acceptance_run_id=acceptance_run_id,
+                plan_created_at=plan_created_at,
                 plan_reference=self.plan_ref,
                 fault_root=self.root / "fault-evidence",
                 ledger=ledger,
@@ -207,6 +216,21 @@ class AcceptanceCollectorTests(unittest.TestCase):
         observed = self.collect_case()
         self.assertEqual("failed", observed["outcome"])
         self.assertIn("output_manifest_missing_or_unreadable", observed["errors"])
+
+    def test_fresh_case_without_worker_run_binding_fails_closed(self) -> None:
+        run_id = "accrun_" + "1" * 48
+        observed = self.collect_case(
+            plan_schema_version=3,
+            acceptance_run_id=run_id,
+            plan_created_at=self.started - 1,
+        )
+        self.assertEqual("failed", observed["outcome"])
+        self.assertEqual(run_id, observed["acceptance_run_id"])
+        self.assertIn("output_manifest_acceptance_run_id_mismatch", observed["errors"])
+        self.assertIn("processing_provenance_acceptance_run_id_mismatch", observed["errors"])
+        self.assertIn("delivery_ledger_acceptance_run_id_mismatch", observed["errors"])
+        self.assertIn("delivery_attempt_acceptance_run_id_mismatch", observed["errors"])
+        self.assertIn("completed_delivery_acceptance_run_id_mismatch", observed["errors"])
 
     def test_missing_fault_is_not_recovered(self) -> None:
         planned = deepcopy(self.case)

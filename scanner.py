@@ -11,6 +11,7 @@ import threading
 import time
 
 from ai_failure_markers import recent_ai_failure
+from acceptance_queue_lane import acceptance_run_id_for_video, load_acceptance_queue_lane
 from audio import (
     manifest_confirms_no_non_commentary_japanese_audio,
     probe_audio_stream_manifest,
@@ -879,6 +880,7 @@ class VideoScanner:
                         else self._queue_batch_added_at
                     ),
                     source="scan_force_ai",
+                    acceptance_run_id=acceptance_run_id_for_video(self.config, video),
                 )
                 if changed or state.in_transaction:
                     self._note_state_write()
@@ -911,6 +913,7 @@ class VideoScanner:
                     else self._queue_batch_added_at
                 ),
                 source="scan",
+                acceptance_run_id=acceptance_run_id_for_video(self.config, video),
             )
             if changed:
                 self._note_state_write()
@@ -936,6 +939,7 @@ class VideoScanner:
                     else self._queue_batch_added_at
                 ),
                 source="scan_failure_cooldown",
+                acceptance_run_id=acceptance_run_id_for_video(self.config, video),
             )
             self._note_state_write()
             return
@@ -1190,15 +1194,26 @@ class VideoScanner:
         if state is None:
             return []
 
-        self._backfill_active_queue_obligations()
-
-        requeued = state.requeue_stale_running(
-            getattr(
-                self.config,
-                "ai_queue_stage_stale_seconds",
-                getattr(self.config, "ai_queue_running_stale_seconds", 21600),
+        acceptance_lane = load_acceptance_queue_lane(self.config)
+        if acceptance_lane is None:
+            self._backfill_active_queue_obligations()
+            requeued = state.requeue_stale_running(
+                getattr(
+                    self.config,
+                    "ai_queue_stage_stale_seconds",
+                    getattr(self.config, "ai_queue_running_stale_seconds", 21600),
+                )
             )
-        )
+        else:
+            requeued = state.requeue_acceptance_running_targets(
+                acceptance_lane.targets,
+                stale_after_seconds=getattr(
+                    self.config,
+                    "ai_queue_stage_stale_seconds",
+                    getattr(self.config, "ai_queue_running_stale_seconds", 21600),
+                ),
+                message="Timed-out acceptance lane job was safely requeued",
+            )
         if requeued:
             self._note_state_write()
             self._commit_state_if_needed(force=True)
@@ -1220,7 +1235,12 @@ class VideoScanner:
                 self._queue_selection_cycle,
                 oldest_interval,
             )
-        for video in state.iter_ai_queue_candidates(oldest_first=oldest_first):
+        for video in state.iter_ai_queue_candidates(
+            oldest_first=oldest_first,
+            acceptance_targets=(
+                acceptance_lane.targets if acceptance_lane is not None else None
+            ),
+        ):
             if not video.exists() or video.suffix.lower() not in set(self.config.video_extensions):
                 if state.remove_ai_queue_candidate(video, mark_inventory_dirty=True):
                     self._note_state_write()

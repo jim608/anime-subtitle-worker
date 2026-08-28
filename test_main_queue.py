@@ -198,6 +198,51 @@ class MainQueueResultTest(unittest.TestCase):
         state.commit.assert_called_once_with()
         sleep.assert_called_once_with(0.1)
 
+    def test_acceptance_lane_claim_binds_obligation_and_attempt_to_run_id(self) -> None:
+        state = Mock()
+        target = object()
+        run_id = "accrun_" + "3" * 48
+        lane = Mock(run_id=run_id)
+        lane.target_for_path.return_value = target
+        state.ensure_ai_delivery_obligation.return_value = {"obligation_id": "obligation-1"}
+        state.begin_ai_delivery_attempt.return_value = {"attempt_id": "attempt-1"}
+        video = Path("/anime/Series S01E01.mkv")
+        identity = {
+            "obligation_id": "obligation-1",
+            "policy_revision": "policy-1",
+            "media": {
+                "media_size": 10,
+                "media_mtime_ns": 20,
+                "media_fingerprint": "fingerprint-1",
+            },
+        }
+
+        with (
+            patch.object(main_module, "load_acceptance_queue_lane", return_value=lane),
+            patch.object(main_module, "verify_acceptance_queue_target_source") as verify,
+            patch("output_manifest.delivery_identity", return_value=identity),
+        ):
+            attempt_id = main_module._mark_queue_running(
+                state,
+                video,
+                SimpleNamespace(),
+            )
+
+        self.assertEqual(attempt_id, "attempt-1")
+        verify.assert_called_once_with(target, ANY)
+        state.mark_ai_queue_running.assert_called_once_with(
+            video,
+            acceptance_target=target,
+        )
+        self.assertEqual(
+            state.ensure_ai_delivery_obligation.call_args.kwargs["acceptance_run_id"],
+            run_id,
+        )
+        state.begin_ai_delivery_attempt.assert_called_once_with(
+            "obligation-1",
+            acceptance_run_id=run_id,
+        )
+
     def test_delivery_attempt_succeeds_only_with_strict_current_manifest(self) -> None:
         from output_manifest import write_output_manifest
 

@@ -46,8 +46,14 @@ REPORT_CONTRACT = "anime-unattended-acceptance-report-v1"
 FAULT_EVIDENCE_CONTRACT = "anime-fault-injection-evidence-v1"
 PLAN_SCHEMA_VERSION = 2
 OBSERVATION_SCHEMA_VERSION = 2
-SUPPORTED_PLAN_SCHEMA_VERSIONS = frozenset({1, PLAN_SCHEMA_VERSION})
-SUPPORTED_OBSERVATION_SCHEMA_VERSIONS = frozenset({1, OBSERVATION_SCHEMA_VERSION})
+FRESH_PLAN_SCHEMA_VERSION = 3
+FRESH_OBSERVATION_SCHEMA_VERSION = 3
+PRE_ADMISSION_CONTRACT = "anime-unattended-pre-admission-v1"
+RUN_CLAIM_CONTRACT = "anime-unattended-acceptance-run-claim-v1"
+SUPPORTED_PLAN_SCHEMA_VERSIONS = frozenset({1, PLAN_SCHEMA_VERSION, FRESH_PLAN_SCHEMA_VERSION})
+SUPPORTED_OBSERVATION_SCHEMA_VERSIONS = frozenset(
+    {1, OBSERVATION_SCHEMA_VERSION, FRESH_OBSERVATION_SCHEMA_VERSION}
+)
 REQUIRED_CASE_COUNT = 100
 MINIMUM_UNATTENDED_SUCCESSES = 99
 MAXIMUM_REVIEW_CASES = 1
@@ -119,10 +125,24 @@ _COMPLETED_FAULT_LEDGER_STAGE = {
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _OBLIGATION_ID = re.compile(r"aiobl_[0-9a-f]{64}")
 _SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+_FRESH_RUN_ID = re.compile(r"accrun_[0-9a-f]{48}")
 
 
 class AcceptanceInputError(ValueError):
     """Raised when an acceptance input cannot be parsed at all."""
+
+
+def fresh_run_id(nonce: str, corpus_manifest_sha256: str) -> str:
+    """Derive the immutable run identity from a one-use nonce and corpus file."""
+
+    if not _HEX64.fullmatch(str(nonce)):
+        raise AcceptanceInputError("fresh acceptance nonce must be lowercase SHA-256")
+    if not _HEX64.fullmatch(str(corpus_manifest_sha256)):
+        raise AcceptanceInputError("fresh corpus manifest SHA-256 is invalid")
+    digest = hashlib.sha256(
+        f"{nonce}\0{corpus_manifest_sha256}".encode("ascii")
+    ).hexdigest()
+    return f"accrun_{digest[:48]}"
 
 
 def read_json_object(path: str | Path) -> dict[str, Any]:
@@ -203,15 +223,19 @@ def duration_bucket(duration_seconds: float) -> str:
 
 def validate_plan_structure(plan: dict[str, Any]) -> list[str]:
     errors: list[str] = []
+    schema_version = plan.get("schema_version")
+    fresh_plan = schema_version == FRESH_PLAN_SCHEMA_VERSION
+    allowed_top_fields = {"contract", "schema_version", "suite_id", "created_at", "cases"}
+    if fresh_plan:
+        allowed_top_fields.update({"run_id", "nonce", "pre_admission"})
     _reject_unknown_fields(
         plan,
-        {"contract", "schema_version", "suite_id", "created_at", "cases"},
+        allowed_top_fields,
         "plan",
         errors,
     )
     if plan.get("contract") != ACCEPTANCE_CONTRACT:
         errors.append(f"contract must be {ACCEPTANCE_CONTRACT}")
-    schema_version = plan.get("schema_version")
     if schema_version not in SUPPORTED_PLAN_SCHEMA_VERSIONS:
         errors.append(
             f"schema_version must be one of {sorted(SUPPORTED_PLAN_SCHEMA_VERSIONS)}"
@@ -220,6 +244,62 @@ def validate_plan_structure(plan: dict[str, Any]) -> list[str]:
     if not isinstance(suite_id, str) or not _SAFE_ID.fullmatch(suite_id):
         errors.append("suite_id must be a stable 1-128 character identifier")
     _require_positive_timestamp(plan.get("created_at"), "created_at", errors)
+    if fresh_plan:
+        run_id = plan.get("run_id")
+        nonce = plan.get("nonce")
+        if not isinstance(run_id, str) or not _FRESH_RUN_ID.fullmatch(run_id):
+            errors.append("run_id must be an accrun_ identity for a schema v3 plan")
+        if suite_id != run_id:
+            errors.append("suite_id must equal run_id for a schema v3 plan")
+        if not isinstance(nonce, str) or not _HEX64.fullmatch(nonce):
+            errors.append("nonce must be a one-use lowercase SHA-256 value")
+        pre_admission = plan.get("pre_admission")
+        if not isinstance(pre_admission, dict):
+            errors.append("pre_admission is required by schema_version 3")
+        else:
+            _reject_unknown_fields(
+                pre_admission,
+                {
+                    "contract",
+                    "corpus_manifest_path",
+                    "corpus_manifest_sha256",
+                    "baseline_checked_at",
+                    "run_claim_path",
+                },
+                "pre_admission",
+                errors,
+            )
+            if pre_admission.get("contract") != PRE_ADMISSION_CONTRACT:
+                errors.append(f"pre_admission.contract must be {PRE_ADMISSION_CONTRACT}")
+            corpus_path = pre_admission.get("corpus_manifest_path")
+            claim_path = pre_admission.get("run_claim_path")
+            for field, value in (
+                ("corpus_manifest_path", corpus_path),
+                ("run_claim_path", claim_path),
+            ):
+                if not isinstance(value, str) or not value or not Path(value).is_absolute():
+                    errors.append(f"pre_admission.{field} must be an absolute path")
+            corpus_digest = pre_admission.get("corpus_manifest_sha256")
+            if not isinstance(corpus_digest, str) or not _HEX64.fullmatch(corpus_digest):
+                errors.append("pre_admission.corpus_manifest_sha256 must be lowercase SHA-256")
+            baseline_at = _positive_float(pre_admission.get("baseline_checked_at"))
+            created_at = _positive_float(plan.get("created_at"))
+            if baseline_at is None:
+                errors.append("pre_admission.baseline_checked_at must be a positive timestamp")
+            elif created_at is not None and baseline_at > created_at:
+                errors.append("pre_admission baseline must be checked no later than created_at")
+            if (
+                isinstance(run_id, str)
+                and isinstance(nonce, str)
+                and isinstance(corpus_digest, str)
+                and _HEX64.fullmatch(nonce)
+                and _HEX64.fullmatch(corpus_digest)
+            ):
+                try:
+                    if run_id != fresh_run_id(nonce, corpus_digest):
+                        errors.append("run_id does not match nonce and corpus manifest SHA-256")
+                except AcceptanceInputError:
+                    pass
     cases = plan.get("cases")
     if not isinstance(cases, list):
         return [*errors, "cases must be a list"]
@@ -241,7 +321,9 @@ def validate_plan_structure(plan: dict[str, Any]) -> list[str]:
     completed_receipts: list[str] = []
     completed_source_sha256s: list[str] = []
     required_fault_scenarios = (
-        FAULT_SCENARIOS if schema_version == PLAN_SCHEMA_VERSION else BASE_FAULT_SCENARIOS
+        FAULT_SCENARIOS
+        if schema_version in {PLAN_SCHEMA_VERSION, FRESH_PLAN_SCHEMA_VERSION}
+        else BASE_FAULT_SCENARIOS
     )
     for index, case in enumerate(cases):
         prefix = f"cases[{index}]"
@@ -256,6 +338,7 @@ def validate_plan_structure(plan: dict[str, Any]) -> list[str]:
                 "expected_route",
                 "strata",
                 "completed_delivery",
+                "pre_admission",
                 "faults",
             },
             prefix,
@@ -276,16 +359,19 @@ def validate_plan_structure(plan: dict[str, Any]) -> list[str]:
         if not isinstance(media, dict):
             errors.append(f"{prefix}.media must be an object")
         else:
+            allowed_media_fields = {
+                "canonical_path",
+                "media_size",
+                "media_mtime_ns",
+                "media_fingerprint",
+                "policy_revision",
+                "obligation_id",
+            }
+            if fresh_plan:
+                allowed_media_fields.add("source_sha256")
             _reject_unknown_fields(
                 media,
-                {
-                    "canonical_path",
-                    "media_size",
-                    "media_mtime_ns",
-                    "media_fingerprint",
-                    "policy_revision",
-                    "obligation_id",
-                },
+                allowed_media_fields,
                 f"{prefix}.media",
                 errors,
             )
@@ -314,6 +400,10 @@ def validate_plan_structure(plan: dict[str, Any]) -> list[str]:
                 errors.append(f"{prefix}.media.obligation_id must be an aiobl_ identity")
             else:
                 obligation_ids.append(obligation)
+            if fresh_plan:
+                source_digest = media.get("source_sha256")
+                if not isinstance(source_digest, str) or not _HEX64.fullmatch(source_digest):
+                    errors.append(f"{prefix}.media.source_sha256 must be lowercase SHA-256")
 
         strata = case.get("strata")
         if not isinstance(strata, dict):
@@ -346,9 +436,47 @@ def validate_plan_structure(plan: dict[str, Any]) -> list[str]:
             else:
                 buckets.append(str(bucket))
 
+        pre_admission_case = case.get("pre_admission")
+        if fresh_plan and not isinstance(pre_admission_case, dict):
+            errors.append(f"{prefix}.pre_admission is required by schema_version 3")
+        if pre_admission_case is not None:
+            if not fresh_plan:
+                errors.append(f"{prefix}.pre_admission is only valid for schema_version 3")
+            elif not isinstance(pre_admission_case, dict):
+                errors.append(f"{prefix}.pre_admission must be an object")
+            else:
+                baseline_fields = {
+                    "checked_at",
+                    "queue_row_absent",
+                    "obligation_absent",
+                    "output_manifest_absent",
+                    "processing_provenance_absent",
+                    "completed_receipt_absent",
+                    "completed_destination_absent",
+                    "completed_marker_absent",
+                    "completed_partial_absent",
+                }
+                _reject_unknown_fields(
+                    pre_admission_case,
+                    baseline_fields,
+                    f"{prefix}.pre_admission",
+                    errors,
+                )
+                checked_at = _positive_float(pre_admission_case.get("checked_at"))
+                created_at = _positive_float(plan.get("created_at"))
+                if checked_at is None:
+                    errors.append(f"{prefix}.pre_admission.checked_at must be positive")
+                elif created_at is not None and checked_at > created_at:
+                    errors.append(f"{prefix}.pre_admission.checked_at is after plan created_at")
+                for field in sorted(baseline_fields - {"checked_at"}):
+                    if pre_admission_case.get(field) is not True:
+                        errors.append(f"{prefix}.pre_admission.{field} must prove absence")
+
         completed_delivery = case.get("completed_delivery")
-        if schema_version == PLAN_SCHEMA_VERSION and not isinstance(completed_delivery, dict):
-            errors.append(f"{prefix}.completed_delivery is required by schema_version 2")
+        if schema_version in {PLAN_SCHEMA_VERSION, FRESH_PLAN_SCHEMA_VERSION} and not isinstance(
+            completed_delivery, dict
+        ):
+            errors.append(f"{prefix}.completed_delivery is required by schema_version {schema_version}")
         if completed_delivery is not None:
             if not isinstance(completed_delivery, dict):
                 errors.append(f"{prefix}.completed_delivery must be an object")
@@ -366,6 +494,10 @@ def validate_plan_structure(plan: dict[str, Any]) -> list[str]:
                     )
                 else:
                     completed_source_sha256s.append(source_digest)
+                    if fresh_plan and isinstance(media, dict) and media.get("source_sha256") != source_digest:
+                        errors.append(
+                            f"{prefix}.completed_delivery.source_sha256 must match media.source_sha256"
+                        )
                 for field, values in (
                     ("receipt_path", completed_receipts),
                     ("destination", completed_destinations),
@@ -476,6 +608,8 @@ def validate_plan(
     media_probe: Callable[[Path], dict[str, Any]] = probe_media,
 ) -> list[str]:
     errors = validate_plan_structure(plan)
+    if plan.get("schema_version") == FRESH_PLAN_SCHEMA_VERSION:
+        errors.extend(_validate_fresh_plan_artifacts(plan))
     cases = plan.get("cases")
     if not isinstance(cases, list) or len(cases) != REQUIRED_CASE_COUNT:
         return errors
@@ -532,6 +666,11 @@ def validate_plan(
                 source_digest = sha256_file(path)
                 if completed_plan.get("source_sha256") != source_digest:
                     errors.append(f"{prefix}: completed delivery source SHA-256 drifted")
+                if (
+                    plan.get("schema_version") == FRESH_PLAN_SCHEMA_VERSION
+                    and media.get("source_sha256") != source_digest
+                ):
+                    errors.append(f"{prefix}: pre-admission source SHA-256 drifted")
                 expected_destination = completed_delivery_destination(path, config)
                 expected_receipt = completed_delivery_receipt_path(path, config)
                 if _normalized_path_key(completed_plan.get("destination", "")) != _normalized_path_key(
@@ -547,6 +686,40 @@ def validate_plan(
     return errors
 
 
+def _validate_fresh_plan_artifacts(plan: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    pre_admission = plan.get("pre_admission")
+    if not isinstance(pre_admission, dict):
+        return ["fresh plan pre_admission contract is missing"]
+    created_at = _positive_float(plan.get("created_at"))
+    if created_at is not None and created_at > time.time() + 300:
+        errors.append("fresh plan created_at is implausibly in the future")
+    corpus_path = Path(str(pre_admission.get("corpus_manifest_path") or ""))
+    corpus_digest = str(pre_admission.get("corpus_manifest_sha256") or "")
+    try:
+        if not corpus_path.is_file() or sha256_file(corpus_path) != corpus_digest:
+            errors.append("pre-admission corpus manifest is missing or changed")
+    except OSError:
+        errors.append("pre-admission corpus manifest is unreadable")
+    claim_path = Path(str(pre_admission.get("run_claim_path") or ""))
+    try:
+        claim = read_json_object(claim_path)
+    except AcceptanceInputError:
+        errors.append("fresh acceptance run claim is missing or unreadable")
+        return errors
+    expected_claim = {
+        "contract": RUN_CLAIM_CONTRACT,
+        "schema_version": 1,
+        "run_id": plan.get("run_id"),
+        "nonce": plan.get("nonce"),
+        "corpus_manifest_sha256": corpus_digest,
+        "created_at": plan.get("created_at"),
+    }
+    if claim != expected_claim:
+        errors.append("fresh acceptance run claim does not match the immutable plan")
+    return errors
+
+
 def validate_observations(
     observations: dict[str, Any],
     *,
@@ -554,18 +727,22 @@ def validate_observations(
     plan_file_sha256: str,
 ) -> list[str]:
     errors: list[str] = []
+    fresh_plan = plan.get("schema_version") == FRESH_PLAN_SCHEMA_VERSION
+    allowed_observation_fields = {
+        "contract",
+        "schema_version",
+        "suite_id",
+        "plan_sha256",
+        "started_at",
+        "finished_at",
+        "manual_interventions",
+        "cases",
+    }
+    if fresh_plan:
+        allowed_observation_fields.add("run_id")
     _reject_unknown_fields(
         observations,
-        {
-            "contract",
-            "schema_version",
-            "suite_id",
-            "plan_sha256",
-            "started_at",
-            "finished_at",
-            "manual_interventions",
-            "cases",
-        },
+        allowed_observation_fields,
         "observations",
         errors,
     )
@@ -581,6 +758,8 @@ def validate_observations(
         errors.append("observation schema_version does not match the plan")
     if observations.get("suite_id") != plan.get("suite_id"):
         errors.append("observation suite_id does not match the plan")
+    if fresh_plan and observations.get("run_id") != plan.get("run_id"):
+        errors.append("observation run_id does not match the fresh plan")
     if observations.get("plan_sha256") != plan_file_sha256:
         errors.append("observation plan_sha256 does not match the exact plan file")
     started = _positive_float(observations.get("started_at"))
@@ -589,6 +768,9 @@ def validate_observations(
         errors.append("observations.started_at must be a positive timestamp")
     if finished is None or (started is not None and finished < started):
         errors.append("observations.finished_at must be at or after started_at")
+    plan_created_at = _positive_float(plan.get("created_at")) if fresh_plan else None
+    if started is not None and plan_created_at is not None and started < plan_created_at:
+        errors.append("fresh observations started before plan created_at")
     manual = observations.get("manual_interventions")
     if not isinstance(manual, list):
         errors.append("observations.manual_interventions must be a list")
@@ -608,23 +790,26 @@ def validate_observations(
         if not isinstance(item, dict):
             errors.append(f"{prefix} must be an object")
             continue
+        allowed_case_fields = {
+            "case_id",
+            "canonical_path",
+            "obligation_id",
+            "route",
+            "started_at",
+            "finished_at",
+            "outcome",
+            "review_required",
+            "manual_interventions",
+            "errors",
+            "evidence",
+            "completed_delivery",
+            "faults",
+        }
+        if fresh_plan:
+            allowed_case_fields.add("acceptance_run_id")
         _reject_unknown_fields(
             item,
-            {
-                "case_id",
-                "canonical_path",
-                "obligation_id",
-                "route",
-                "started_at",
-                "finished_at",
-                "outcome",
-                "review_required",
-                "manual_interventions",
-                "errors",
-                "evidence",
-                "completed_delivery",
-                "faults",
-            },
+            allowed_case_fields,
             prefix,
             errors,
         )
@@ -638,6 +823,8 @@ def validate_observations(
             errors.append(f"{prefix}: unknown case_id {case_id!r}")
             continue
         media = planned.get("media") or {}
+        if fresh_plan and item.get("acceptance_run_id") != plan.get("run_id"):
+            errors.append(f"{prefix}: acceptance_run_id does not match the fresh plan")
         if item.get("canonical_path") != media.get("canonical_path"):
             errors.append(f"{prefix}: canonical_path does not match the plan")
         if item.get("obligation_id") != media.get("obligation_id"):
@@ -654,6 +841,13 @@ def validate_observations(
             started <= item_started <= item_finished <= finished
         ):
             errors.append(f"{prefix}: timestamps are outside the suite window")
+        if (
+            fresh_plan
+            and item_started is not None
+            and plan_created_at is not None
+            and item_started < plan_created_at
+        ):
+            errors.append(f"{prefix}: fresh case started before plan created_at")
         if item.get("outcome") not in {"completed", "failed", "review_required"}:
             errors.append(f"{prefix}.outcome must be completed, failed, or review_required")
         if not isinstance(item.get("review_required"), bool):
@@ -767,6 +961,13 @@ def validate_observations(
                 item_started <= injected <= item_finished
             ):
                 errors.append(f"{fault_prefix}.injected_at is outside the case window")
+            if (
+                fresh_plan
+                and injected is not None
+                and plan_created_at is not None
+                and injected < plan_created_at
+            ):
+                errors.append(f"{fault_prefix}.injected_at is before plan created_at")
             if fault.get("status") == "recovered" and (
                 recovered is None or (injected is not None and recovered < injected)
             ):
@@ -840,6 +1041,16 @@ def evaluate_acceptance(
                 observed,
                 config,
                 suite_id=str(plan.get("suite_id") or ""),
+                acceptance_run_id=(
+                    str(plan.get("run_id") or "")
+                    if plan_schema_version == FRESH_PLAN_SCHEMA_VERSION
+                    else ""
+                ),
+                plan_created_at=(
+                    _positive_float(plan.get("created_at"))
+                    if plan_schema_version == FRESH_PLAN_SCHEMA_VERSION
+                    else None
+                ),
                 control_snapshot=control_snapshot,
                 plan_schema_version=plan_schema_version,
             )
@@ -980,6 +1191,8 @@ def _evaluate_case(
     config: Any,
     *,
     suite_id: str,
+    acceptance_run_id: str,
+    plan_created_at: float | None,
     control_snapshot: dict[str, Any],
     plan_schema_version: int,
 ) -> dict[str, Any]:
@@ -994,6 +1207,7 @@ def _evaluate_case(
     observation_review = bool((observed or {}).get("review_required") is True)
     manual = (observed or {}).get("manual_interventions")
     manual_count = len(manual) if isinstance(manual, list) else 1
+    fresh_case = plan_schema_version == FRESH_PLAN_SCHEMA_VERSION
     if observed is None:
         reasons.append("missing_observation")
     else:
@@ -1007,6 +1221,8 @@ def _evaluate_case(
         reasons.append(f"observation_outcome:{observation_outcome or 'missing'}")
     if route != expected_route:
         reasons.append("observed_route_mismatch")
+    if fresh_case and str((observed or {}).get("acceptance_run_id") or "") != acceptance_run_id:
+        reasons.append("observation_acceptance_run_id_mismatch")
     if manual_count:
         reasons.append("case_manual_intervention")
 
@@ -1036,6 +1252,24 @@ def _evaluate_case(
         manifest_digest = sha256_file(manifest_path)
     except (AcceptanceInputError, OSError):
         reasons.append("output_manifest_unreadable")
+    if fresh_case and (
+        not isinstance(manifest, dict)
+        or str(manifest.get("acceptance_run_id") or "") != acceptance_run_id
+    ):
+        reasons.append("output_manifest_acceptance_run_id_mismatch")
+    if fresh_case and isinstance(manifest, dict):
+        for field in ("completed_at",):
+            value = _positive_float(manifest.get(field))
+            if value is None or (plan_created_at is not None and value < plan_created_at):
+                reasons.append(f"output_manifest_{field}_before_fresh_plan")
+        delivery_payload = manifest.get("delivery")
+        verified_at = _positive_float(
+            delivery_payload.get("verified_at") if isinstance(delivery_payload, dict) else None
+        )
+        if verified_at is None or (
+            plan_created_at is not None and verified_at < plan_created_at
+        ):
+            reasons.append("output_manifest_verified_at_before_fresh_plan")
     if current_identity is not None:
         valid_manifest = validate_output_manifest(
             video,
@@ -1099,6 +1333,8 @@ def _evaluate_case(
     if not isinstance(provenance, dict):
         reasons.append("processing_provenance_missing")
     else:
+        if fresh_case and str(provenance.get("acceptance_run_id") or "") != acceptance_run_id:
+            reasons.append("processing_provenance_acceptance_run_id_mismatch")
         if provenance.get("schema_version") != 1:
             reasons.append("processing_provenance_schema_invalid")
         if str(provenance.get("video_path") or "") != str(video):
@@ -1125,6 +1361,12 @@ def _evaluate_case(
             observed_start <= run_start <= run_finish <= observed_finish
         ):
             reasons.append("processing_provenance_outside_observed_window")
+        if fresh_case and (
+            run_start is None
+            or plan_created_at is None
+            or run_start < plan_created_at
+        ):
+            reasons.append("processing_provenance_started_before_fresh_plan")
         provenance_file = provenance_path_for_video(config, video)
         try:
             evidence.append({"kind": "processing_provenance", "path": str(provenance_file), "sha256": sha256_file(provenance_file)})
@@ -1138,6 +1380,13 @@ def _evaluate_case(
     if ledger_error:
         reasons.append(f"delivery_ledger:{ledger_error}")
     elif ledger is not None:
+        if fresh_case and str(ledger.get("acceptance_run_id") or "") != acceptance_run_id:
+            reasons.append("delivery_ledger_acceptance_run_id_mismatch")
+        if fresh_case and any(
+            str(attempt.get("acceptance_run_id") or "") != acceptance_run_id
+            for attempt in attempts
+        ):
+            reasons.append("delivery_attempt_acceptance_run_id_mismatch")
         exact_fields = (
             "obligation_id",
             "canonical_path",
@@ -1183,6 +1432,19 @@ def _evaluate_case(
             reasons.append("delivery_ledger_attempt_count_mismatch")
         if not attempts or str(attempts[-1].get("status") or "") != "succeeded":
             reasons.append("delivery_ledger_has_no_terminal_success_attempt")
+        if fresh_case and plan_created_at is not None:
+            ledger_times = [ledger.get("eligible_at"), ledger.get("verified_at")]
+            ledger_times.extend(
+                value
+                for attempt in attempts
+                for value in (attempt.get("started_at"), attempt.get("finished_at"))
+            )
+            if any(
+                (timestamp := _positive_float(value)) is None
+                or timestamp < plan_created_at
+                for value in ledger_times
+            ):
+                reasons.append("delivery_ledger_evidence_before_fresh_plan")
 
     planned_completed = planned.get("completed_delivery")
     completed_delivery_required = isinstance(planned_completed, dict)
@@ -1198,6 +1460,8 @@ def _evaluate_case(
                 manifest_path=manifest_path,
                 manifest_digest=manifest_digest,
                 publication=publication,
+                acceptance_run_id=acceptance_run_id,
+                plan_created_at=plan_created_at,
                 observed_started_at=_positive_float((observed or {}).get("started_at")),
                 observed_finished_at=_positive_float((observed or {}).get("finished_at")),
             )
@@ -1250,6 +1514,7 @@ def _evaluate_case(
                         fault=fault,
                         observation=actual,
                         plan_schema_version=plan_schema_version,
+                        acceptance_run_id=acceptance_run_id,
                     )
                     if structured_error:
                         structured_evidence_errors.append(structured_error)
@@ -1357,6 +1622,8 @@ def _evaluate_completed_delivery(
     publication: dict[str, Any] | None,
     observed_started_at: float | None,
     observed_finished_at: float | None,
+    acceptance_run_id: str = "",
+    plan_created_at: float | None = None,
 ) -> tuple[dict[str, Any], list[str], list[dict[str, Any]]]:
     """Independently verify a committed completed-MKV receipt and artifact.
 
@@ -1454,8 +1721,12 @@ def _evaluate_completed_delivery(
             "source_retained",
             "committed_at",
         }
+        if acceptance_run_id:
+            expected_top_fields.add("acceptance_run_id")
         if set(receipt) != expected_top_fields:
             reasons.append("completed_delivery_receipt_fields_invalid")
+        if acceptance_run_id and str(receipt.get("acceptance_run_id") or "") != acceptance_run_id:
+            reasons.append("completed_delivery_acceptance_run_id_mismatch")
         if receipt.get("schema_version") != COMPLETED_DELIVERY_SCHEMA_VERSION:
             reasons.append("completed_delivery_receipt_schema_invalid")
         if receipt.get("contract") != COMPLETED_DELIVERY_CONTRACT:
@@ -1523,6 +1794,8 @@ def _evaluate_completed_delivery(
         committed_at = _positive_float(receipt.get("committed_at"))
         if committed_at is None:
             reasons.append("completed_delivery_committed_at_invalid")
+        elif plan_created_at is not None and committed_at < plan_created_at:
+            reasons.append("completed_delivery_committed_before_fresh_plan")
         elif (
             observed_started_at is not None
             and observed_finished_at is not None
@@ -1703,12 +1976,22 @@ def _read_delivery_ledger(
     connection: sqlite3.Connection | None = None
     try:
         connection = _connect_readonly(path)
+        obligation_columns = {
+            str(item[1])
+            for item in connection.execute("PRAGMA table_info(ai_delivery_obligations)").fetchall()
+        }
+        run_id_projection = (
+            "acceptance_run_id"
+            if "acceptance_run_id" in obligation_columns
+            else "NULL AS acceptance_run_id"
+        )
         row = connection.execute(
-            """
+            f"""
             SELECT obligation_id, canonical_path, media_fingerprint, media_size,
                    media_mtime_ns, policy_revision, state, outcome_code,
                    manifest_path, manifest_sha256, verification_json,
-                   eligible_at, due_at, verified_at, attempt_count
+                   eligible_at, due_at, verified_at, attempt_count,
+                   {run_id_projection}
             FROM ai_delivery_obligations WHERE obligation_id=?
             """,
             (obligation_id,),
@@ -1721,12 +2004,22 @@ def _read_delivery_ledger(
         except json.JSONDecodeError:
             verification = None
         ledger["verification"] = verification
+        attempt_columns = {
+            str(item[1])
+            for item in connection.execute("PRAGMA table_info(ai_delivery_attempts)").fetchall()
+        }
+        attempt_run_id_projection = (
+            "acceptance_run_id"
+            if "acceptance_run_id" in attempt_columns
+            else "NULL AS acceptance_run_id"
+        )
         attempts = [
             dict(item)
             for item in connection.execute(
-                """
+                f"""
                 SELECT attempt_id, attempt_number, status, stage, error_code,
-                       detail, started_at, finished_at
+                       detail, started_at, finished_at,
+                       {attempt_run_id_projection}
                 FROM ai_delivery_attempts
                 WHERE obligation_id=? ORDER BY attempt_number
                 """,
@@ -1905,6 +2198,7 @@ def _verify_structured_fault_evidence(
     fault: dict[str, Any],
     observation: dict[str, Any],
     plan_schema_version: int,
+    acceptance_run_id: str = "",
 ) -> str:
     try:
         payload = read_json_object(path)
@@ -1923,17 +2217,32 @@ def _verify_structured_fault_evidence(
         "observed_failure",
         "recovery",
         "manual_interventions",
+        "acceptance_run_id",
     }
     unknown = sorted(str(key) for key in payload if str(key) not in allowed)
     if unknown:
         return f"unknown fields {unknown}"
     evidence_schema_version = payload.get("schema_version")
-    if evidence_schema_version not in {1, 2}:
+    if evidence_schema_version not in {1, 2, 3}:
         return "schema_version is unsupported"
-    if fault.get("scenario") in COMPLETED_DELIVERY_FAULT_SCENARIOS and evidence_schema_version != 2:
-        return "completed-delivery fault evidence requires schema_version 2"
+    if fault.get("scenario") in COMPLETED_DELIVERY_FAULT_SCENARIOS:
+        required_evidence_version = (
+            FRESH_PLAN_SCHEMA_VERSION
+            if plan_schema_version == FRESH_PLAN_SCHEMA_VERSION
+            else 2
+        )
+        if evidence_schema_version != required_evidence_version:
+            return (
+                "completed-delivery fault evidence requires schema_version "
+                f"{required_evidence_version}"
+            )
     if plan_schema_version == 1 and evidence_schema_version != 1:
         return "schema_version does not match the v1 plan"
+    if plan_schema_version == FRESH_PLAN_SCHEMA_VERSION:
+        if evidence_schema_version != FRESH_PLAN_SCHEMA_VERSION:
+            return "fresh fault evidence requires schema_version 3"
+        if str(payload.get("acceptance_run_id") or "") != acceptance_run_id:
+            return "acceptance_run_id does not match the fresh plan"
     expected = {
         "contract": FAULT_EVIDENCE_CONTRACT,
         "suite_id": suite_id,

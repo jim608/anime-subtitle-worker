@@ -832,6 +832,25 @@ class AcceptanceHarnessTests(unittest.TestCase):
             ),
             "",
         )
+        fresh_run_id = "accrun_" + "3" * 48
+        payload["schema_version"] = 3
+        payload["acceptance_run_id"] = fresh_run_id
+        self._write_json(path, payload)
+        self.assertEqual(
+            _verify_structured_fault_evidence(
+                path,
+                suite_id=self.plan["suite_id"],
+                case_id=self.plan["cases"][0]["case_id"],
+                obligation_id=self.plan["cases"][0]["media"]["obligation_id"],
+                fault=fault,
+                observation=observation,
+                plan_schema_version=3,
+                acceptance_run_id=fresh_run_id,
+            ),
+            "",
+        )
+        payload["schema_version"] = 2
+        payload.pop("acceptance_run_id")
         payload["observed_failure"]["stage"] = "translation"
         self._write_json(path, payload)
         self.assertIn(

@@ -16,8 +16,9 @@
   ],
   "properties": {
     "contract": {"const": "anime-unattended-acceptance-observations-v1"},
-    "schema_version": {"enum": [1, 2]},
+    "schema_version": {"enum": [1, 2, 3]},
     "suite_id": {"type": "string", "minLength": 1},
+    "run_id": {"type": "string", "pattern": "^accrun_[0-9a-f]{48}$"},
     "plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "started_at": {"type": "number", "exclusiveMinimum": 0},
     "finished_at": {"type": "number", "exclusiveMinimum": 0},
@@ -71,6 +72,7 @@
       ],
       "properties": {
         "case_id": {"type": "string", "minLength": 1},
+        "acceptance_run_id": {"type": "string", "pattern": "^accrun_[0-9a-f]{48}$"},
         "canonical_path": {"type": "string", "minLength": 1},
         "obligation_id": {"type": "string", "pattern": "^aiobl_[0-9a-f]{64}$"},
         "route": {

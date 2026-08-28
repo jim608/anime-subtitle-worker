@@ -22,6 +22,11 @@ from ai_scheduler_state import (
     start_ai_scheduler_heartbeat,
     update_ai_scheduler_state,
 )
+from acceptance_queue_lane import (
+    AcceptanceQueueLaneError,
+    load_acceptance_queue_lane,
+    verify_acceptance_queue_target_source,
+)
 
 
 AI_SCHEDULER_WAKE_EVENT = threading.Event()
@@ -296,6 +301,7 @@ def _scan_and_process(
     queue_only: bool = False,
     shutdown_event: threading.Event | None = None,
 ) -> int:
+    acceptance_lane = load_acceptance_queue_lane(worker.config)
     if _shutdown_requested(shutdown_event):
         update_ai_scheduler_state(
             worker.config,
@@ -318,7 +324,7 @@ def _scan_and_process(
         )
         logger.info("Deployment hold is active; no AI work will be claimed.")
         return 0
-    if _ai_queue_paused(worker.config):
+    if _ai_queue_paused(worker.config) and acceptance_lane is None:
         update_ai_scheduler_state(
             worker.config,
             state="paused",
@@ -344,7 +350,7 @@ def _scan_and_process(
         logger=logger,
     )
     try:
-        if queue_only:
+        if queue_only or acceptance_lane is not None:
             videos = scanner.queued_candidates(max_candidates=scan_limit)
         else:
             videos = scanner.scan(max_candidates=scan_limit)
@@ -443,7 +449,7 @@ def _scan_and_process(
                 if _shutdown_requested(shutdown_event):
                     logger.info("Shutdown requested; stopping before next queued video.")
                     break
-                if _ai_queue_paused(worker.config):
+                if _ai_queue_paused(worker.config) and acceptance_lane is None:
                     logger.info("AI queue pause requested; current video is complete and no additional video will start.")
                     break
                 # Every candidate gets a fresh decision before either the
@@ -537,7 +543,7 @@ def _scan_and_process(
                     if _shutdown_requested(shutdown_event):
                         logger.info("Shutdown requested; not starting additional queued videos.")
                         return
-                    if _ai_queue_paused(worker.config):
+                    if _ai_queue_paused(worker.config) and acceptance_lane is None:
                         logger.info("AI queue pause requested; running videos may finish but no additional video will start.")
                         return
                     with _AI_REVIEW_REMEDIATION_HANDOFF_LOCK:
@@ -1152,6 +1158,7 @@ def _refresh_ai_queue_state(scanner: VideoScanner, logger) -> None:
 def _requeue_stale_ai_running(config, logger) -> int:
     """Requeue expired running rows without walking or reclassifying media."""
 
+    acceptance_lane = load_acceptance_queue_lane(config)
     state = _open_ai_queue_state(config)
     if state is None:
         logger.info("Stale AI running requeue skipped because the queue state is disabled.")
@@ -1164,10 +1171,17 @@ def _requeue_stale_ai_running(config, logger) -> int:
         )
     )
     try:
-        count = state.requeue_stale_running(
-            stale_after_seconds,
-            reconcile_completed=False,
-        )
+        if acceptance_lane is None:
+            count = state.requeue_stale_running(
+                stale_after_seconds,
+                reconcile_completed=False,
+            )
+        else:
+            count = state.requeue_acceptance_running_targets(
+                acceptance_lane.targets,
+                stale_after_seconds=stale_after_seconds,
+                message="Timed-out acceptance lane job was safely requeued",
+            )
         state.commit()
     except BaseException:
         state.rollback()
@@ -5463,6 +5477,7 @@ def _open_ai_queue_state(config):
 
 
 def _requeue_previous_worker_running(config, logger) -> int:
+    acceptance_lane = load_acceptance_queue_lane(config)
     state = _open_ai_queue_state(config)
     if state is None:
         return 0
@@ -5476,12 +5491,22 @@ def _requeue_previous_worker_running(config, logger) -> int:
                 attempt_started_at=float(attempt["started_at"]),
             )
 
-        count = state.requeue_running_from_previous_worker(
-            delivery_evidence_resolver=resolve_delivery_evidence,
-        )
+        if acceptance_lane is None:
+            count = state.requeue_running_from_previous_worker(
+                delivery_evidence_resolver=resolve_delivery_evidence,
+            )
+        else:
+            count = state.requeue_acceptance_running_targets(
+                acceptance_lane.targets,
+                message="Worker restarted before this acceptance job finished",
+            )
         state.commit()
         if count:
-            logger.warning("Requeued running AI job(s) left by previous worker process: count=%s", count)
+            logger.warning(
+                "Requeued running AI job(s) left by previous worker process: count=%s acceptance_run_id=%s",
+                count,
+                acceptance_lane.run_id if acceptance_lane is not None else "-",
+            )
         return count
     finally:
         state.close()
@@ -5490,10 +5515,22 @@ def _requeue_previous_worker_running(config, logger) -> int:
 def _mark_queue_running(state, video, config=None) -> str:
     if state is None:
         return ""
+    acceptance_target = None
+    acceptance_run_id = ""
+    if config is not None:
+        acceptance_lane = load_acceptance_queue_lane(config)
+        if acceptance_lane is not None:
+            acceptance_target = acceptance_lane.target_for_path(video)
+            if acceptance_target is None:
+                raise AcceptanceQueueLaneError(
+                    f"refusing non-allowlisted acceptance queue claim: {video}"
+                )
+            verify_acceptance_queue_target_source(acceptance_target, config)
+            acceptance_run_id = acceptance_lane.run_id
     claimed: dict[str, str] = {"attempt_id": ""}
 
     def claim() -> None:
-        state.mark_ai_queue_running(video)
+        state.mark_ai_queue_running(video, acceptance_target=acceptance_target)
         if config is None:
             return
         from output_manifest import delivery_identity
@@ -5508,8 +5545,12 @@ def _mark_queue_running(state, video, config=None) -> str:
             eligible_at=state.ai_delivery_admission_bound(),
             source="queue_claim",
             obligation_id=str(identity["obligation_id"]),
+            acceptance_run_id=acceptance_run_id,
         )
-        attempt = state.begin_ai_delivery_attempt(str(obligation["obligation_id"]))
+        attempt = state.begin_ai_delivery_attempt(
+            str(obligation["obligation_id"]),
+            acceptance_run_id=acceptance_run_id,
+        )
         claimed["attempt_id"] = str(attempt["attempt_id"])
 
     _commit_ai_queue_state_write(state, claim)

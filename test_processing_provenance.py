@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from processing_provenance import (
     ProvenanceRecorder,
@@ -59,8 +60,29 @@ class ProcessingProvenanceTests(unittest.TestCase):
         self.assertEqual(payload["asr"]["model"], "large-v3")
         self.assertEqual(payload["outcome"]["created"], 3)
         self.assertEqual(payload["stages"][-1]["status"], "ok")
+        self.assertNotIn("acceptance_run_id", payload)
         self.assertFalse(provenance_path_for_video(self.config, self.video).with_suffix(".json.tmp").exists())
         json.loads(provenance_path_for_video(self.config, self.video).read_text(encoding="utf-8"))
+
+    def test_acceptance_run_id_is_persisted_and_changes_resume_identity(self) -> None:
+        first_run_id = "accrun_" + "3" * 48
+        second_run_id = "accrun_" + "4" * 48
+        with patch(
+            "processing_provenance.acceptance_run_id_for_video",
+            return_value=first_run_id,
+        ):
+            original = ProvenanceRecorder(self.config, self.video)
+            original.record_stage("translation", "running", "old acceptance run")
+
+        with patch(
+            "processing_provenance.acceptance_run_id_for_video",
+            return_value=second_run_id,
+        ):
+            restarted = ProvenanceRecorder(self.config, self.video)
+
+        self.assertEqual(restarted.payload["acceptance_run_id"], second_run_id)
+        self.assertEqual(restarted.payload["stages"], [])
+        self.assertNotEqual(restarted.payload["created_at"], original.payload["created_at"])
 
     def test_recorder_restarts_when_processing_policy_identity_changes(self) -> None:
         original = ProvenanceRecorder(self.config, self.video)

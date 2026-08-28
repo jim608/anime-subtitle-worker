@@ -122,6 +122,8 @@ class AppConfig:
     scanner_state_path: str = "scanner_state.sqlite3"
     scanner_recent_first: bool = True
     scanner_queue_enabled: bool = True
+    acceptance_queue_lane_enabled: bool = False
+    acceptance_queue_lane_plan_path: str = "acceptance/plan.json"
     scanner_event_watch_enabled: bool = False
     scanner_event_stability_interval_seconds: float = 2.0
     scanner_event_watch_health_interval_seconds: float = 30.0
@@ -760,6 +762,16 @@ def load_config(config_path: str | Path) -> AppConfig:
         scanner_state_path=_as_optional_str(raw, "scanner_state_path", "scanner_state.sqlite3"),
         scanner_recent_first=_optional_bool(raw, "scanner_recent_first", True),
         scanner_queue_enabled=_optional_bool(raw, "scanner_queue_enabled", True),
+        acceptance_queue_lane_enabled=_optional_bool(
+            raw,
+            "acceptance_queue_lane_enabled",
+            False,
+        ),
+        acceptance_queue_lane_plan_path=_as_optional_str(
+            raw,
+            "acceptance_queue_lane_plan_path",
+            "acceptance/plan.json",
+        ),
         scanner_event_watch_enabled=_optional_bool(raw, "scanner_event_watch_enabled", False),
         scanner_event_stability_interval_seconds=_optional_positive_float(
             raw,
@@ -1893,6 +1905,13 @@ def _validate_config(config: AppConfig) -> None:
             raise ConfigError(
                 "completed_delivery_path must be a dedicated mount outside work_path."
             )
+
+    if config.acceptance_queue_lane_enabled and (
+        not config.scanner_cache_enabled or not config.scanner_queue_enabled
+    ):
+        raise ConfigError(
+            "acceptance_queue_lane_enabled requires scanner_cache_enabled and scanner_queue_enabled."
+        )
 
     if not config.allowed_source_languages:
         raise ConfigError("allowed_source_languages must contain at least one language code.")

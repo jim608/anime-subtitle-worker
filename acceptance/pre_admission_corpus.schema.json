@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://anime-subtitle-worker.local/schemas/pre-admission-corpus-v1.json",
+  "title": "Fresh unattended acceptance corpus request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract", "schema_version", "nonce", "cases"],
+  "properties": {
+    "contract": {"const": "anime-unattended-pre-admission-corpus-v1"},
+    "schema_version": {"const": 1},
+    "nonce": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "cases": {
+      "type": "array",
+      "minItems": 100,
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["case_id", "canonical_path", "expected_route", "release_profile"],
+        "properties": {
+          "case_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+          "canonical_path": {"type": "string", "minLength": 1},
+          "expected_route": {
+            "enum": ["existing_zh_tw", "zh_cn_opencc", "japanese_subtitle_translation", "japanese_audio_asr"]
+          },
+          "release_profile": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

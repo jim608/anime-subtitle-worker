@@ -21,6 +21,7 @@ from output_manifest import (
     validate_output_manifest,
 )
 from safe_files import atomic_write_text, fsync_directory, sha256_file
+from acceptance_queue_lane import acceptance_run_id_for_video
 
 
 COMPLETED_DELIVERY_SCHEMA_VERSION = 1
@@ -166,6 +167,9 @@ def deliver_completed_mkv(
         "publication": publication["semantics"],
         "destination": str(destination),
     }
+    acceptance_run_id = acceptance_run_id_for_video(config, source)
+    if acceptance_run_id:
+        transaction_identity["acceptance_run_id"] = acceptance_run_id
 
     existing = _load_json(receipt_path)
     if existing is not None and _receipt_identity_matches(existing, transaction_identity):
@@ -336,6 +340,9 @@ def validate_completed_delivery(
             "publication": publication["semantics"],
             "destination": str(destination),
         }
+        acceptance_run_id = acceptance_run_id_for_video(config, source)
+        if acceptance_run_id:
+            expected["acceptance_run_id"] = acceptance_run_id
         receipt = _load_json(receipt_path)
         if receipt is None or not _receipt_identity_matches(receipt, expected):
             return False

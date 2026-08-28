@@ -281,6 +281,46 @@ class AiDeliveryLedgerTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_acceptance_run_id_binds_obligation_and_attempt_additively(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Episode.mkv"
+            video.write_bytes(b"media")
+            stat = video.stat()
+            run_id = "accrun_" + "3" * 48
+            store = ScanStateStore(root / "state.sqlite3")
+            try:
+                obligation = store.ensure_ai_delivery_obligation(
+                    video,
+                    media_size=stat.st_size,
+                    media_mtime_ns=stat.st_mtime_ns,
+                    policy_revision="policy-v1",
+                    eligible_at=1000,
+                    acceptance_run_id=run_id,
+                )
+                attempt = store.begin_ai_delivery_attempt(
+                    obligation["obligation_id"],
+                    started_at=1001,
+                    acceptance_run_id=run_id,
+                )
+                self.assertEqual(run_id, obligation["acceptance_run_id"])
+                self.assertEqual(run_id, attempt["acceptance_run_id"])
+                with self.assertRaises(ValueError):
+                    store.ensure_ai_delivery_obligation(
+                        video,
+                        media_size=stat.st_size,
+                        media_mtime_ns=stat.st_mtime_ns,
+                        policy_revision="policy-v1",
+                        eligible_at=1000,
+                    )
+                with self.assertRaises(ValueError):
+                    store.begin_ai_delivery_attempt(
+                        obligation["obligation_id"],
+                        acceptance_run_id="accrun_" + "4" * 48,
+                    )
+            finally:
+                store.close()
+
     def test_identity_changes_for_media_or_policy_revision(self) -> None:
         path = Path("Episode.mkv")
         first = ai_delivery_identity(

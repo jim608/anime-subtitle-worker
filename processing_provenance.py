@@ -8,6 +8,7 @@ import time
 from typing import Any
 
 from safe_files import atomic_write_text
+from acceptance_queue_lane import acceptance_run_id_for_video
 
 
 PROVENANCE_SCHEMA_VERSION = 1
@@ -74,7 +75,7 @@ class ProvenanceRecorder:
             video_info = {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
         except OSError:
             video_info = {"size": 0, "mtime_ns": 0}
-        return {
+        payload = {
             "schema_version": PROVENANCE_SCHEMA_VERSION,
             "video_path": str(self.video),
             "video": video_info,
@@ -84,6 +85,10 @@ class ProvenanceRecorder:
             "status": "created",
             "stages": [],
         }
+        acceptance_run_id = acceptance_run_id_for_video(self.config, self.video)
+        if acceptance_run_id:
+            payload["acceptance_run_id"] = acceptance_run_id
+        return payload
 
     def _write(self) -> None:
         atomic_write_text(
@@ -106,6 +111,7 @@ def _provenance_identity_matches(
         and existing.get("video_path") == current["video_path"]
         and existing.get("video") == current["video"]
         and existing.get("config_signature") == current["config_signature"]
+        and existing.get("acceptance_run_id") == current.get("acceptance_run_id")
     )
 
 

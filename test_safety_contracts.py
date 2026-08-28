@@ -124,6 +124,38 @@ class SafeFileContractTests(unittest.TestCase):
             output.write_bytes(b"tampered")
             self.assertFalse(validate_output_manifest(video, config, verify_hashes=True))
 
+    def test_acceptance_manifest_is_run_bound_only_for_the_enabled_lane(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = SimpleNamespace(work_path=root, ai_output_manifest_path="manifests")
+            video = root / "episode.mkv"
+            output = root / "episode.AI.ass"
+            video.write_bytes(b"video")
+            output.write_bytes(b"subtitle")
+            run_id = "accrun_" + "3" * 48
+
+            with patch("output_manifest.acceptance_run_id_for_video", return_value=run_id):
+                manifest_path = write_output_manifest(video, config, [output])
+                self.assertTrue(validate_output_manifest(video, config))
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["acceptance_run_id"], run_id)
+
+            payload.pop("acceptance_run_id")
+            manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+            with patch("output_manifest.acceptance_run_id_for_video", return_value=run_id):
+                self.assertFalse(validate_output_manifest(video, config))
+
+            other_video = root / "production.mkv"
+            other_output = root / "production.AI.ass"
+            other_video.write_bytes(b"video")
+            other_output.write_bytes(b"subtitle")
+            with patch("output_manifest.acceptance_run_id_for_video", return_value=""):
+                other_manifest = write_output_manifest(other_video, config, [other_output])
+            self.assertNotIn(
+                "acceptance_run_id",
+                json.loads(other_manifest.read_text(encoding="utf-8")),
+            )
+
     def test_manifest_v2_is_strict_delivery_evidence_for_one_media_policy_revision(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

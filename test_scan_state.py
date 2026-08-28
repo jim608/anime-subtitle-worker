@@ -9,15 +9,105 @@ import time
 import unittest
 from unittest.mock import patch
 
+from acceptance_queue_lane import AcceptanceQueueTarget
 from scan_state import (
     AI_INVENTORY_MAX_AGE_SECONDS,
     AI_INVENTORY_RUNNING_STALE_SECONDS,
     ScanStateStore,
     _configure_scan_state_connection,
+    ai_delivery_identity,
 )
 
 
 class ScanStateStoreQueueTest(unittest.TestCase):
+    def test_acceptance_lane_lists_and_claims_only_exact_target_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = ScanStateStore(root / "state.sqlite3")
+            policy_revision = "a" * 64
+            targets: list[AcceptanceQueueTarget] = []
+            try:
+                for ordinal in range(100):
+                    path = root / f"target-{ordinal:03d}.mkv"
+                    media_size = ordinal + 1
+                    media_mtime_ns = 10_000 + ordinal
+                    identity = ai_delivery_identity(
+                        path,
+                        media_size=media_size,
+                        media_mtime_ns=media_mtime_ns,
+                        policy_revision=policy_revision,
+                    )
+                    targets.append(
+                        AcceptanceQueueTarget(
+                            ordinal=ordinal,
+                            canonical_path=str(identity["canonical_path"]),
+                            media_size=media_size,
+                            media_mtime_ns=media_mtime_ns,
+                            media_fingerprint=str(identity["media_fingerprint"]),
+                            policy_revision=policy_revision,
+                            obligation_id=str(identity["obligation_id"]),
+                            source_sha256=f"{ordinal:064x}",
+                        )
+                    )
+
+                allowed = targets[0]
+                allowed_path = Path(allowed.canonical_path)
+                store.upsert_ai_queue_candidate(
+                    allowed_path,
+                    allowed.media_mtime_ns,
+                    source="fs_event",
+                )
+                store.ensure_ai_delivery_obligation(
+                    allowed_path,
+                    media_size=allowed.media_size,
+                    media_mtime_ns=allowed.media_mtime_ns,
+                    policy_revision=allowed.policy_revision,
+                    obligation_id=allowed.obligation_id,
+                )
+                backlog = root / "historical-backlog.mkv"
+                store.upsert_ai_queue_candidate(backlog, 999, source="scan")
+                store.commit()
+
+                self.assertEqual(
+                    store.iter_ai_queue_candidates(acceptance_targets=targets),
+                    [allowed_path.resolve()],
+                )
+                store.mark_ai_queue_running(
+                    allowed_path,
+                    acceptance_target=allowed,
+                )
+                store.commit()
+                statuses = dict(
+                    store._conn.execute(
+                        "SELECT path, status FROM ai_candidate_queue"
+                    ).fetchall()
+                )
+                self.assertEqual(statuses[str(allowed_path.resolve())], "running")
+                self.assertEqual(statuses[str(backlog.resolve())], "queued")
+
+                with self.assertRaisesRegex(ValueError, "exact, open, claimable"):
+                    store.mark_ai_queue_running(
+                        backlog,
+                        acceptance_target=allowed,
+                    )
+
+                store.mark_ai_queue_running(backlog)
+                store.commit()
+                self.assertEqual(
+                    store.requeue_acceptance_running_targets(targets),
+                    1,
+                )
+                store.commit()
+                statuses = dict(
+                    store._conn.execute(
+                        "SELECT path, status FROM ai_candidate_queue"
+                    ).fetchall()
+                )
+                self.assertEqual(statuses[str(allowed_path.resolve())], "queued")
+                self.assertEqual(statuses[str(backlog.resolve())], "running")
+            finally:
+                store.close()
+
     def test_connection_does_not_reapply_wal_when_already_enabled(self) -> None:
         conn = unittest.mock.Mock()
         conn.execute.side_effect = [None, unittest.mock.Mock(fetchone=lambda: ("wal",)), None, None, None]

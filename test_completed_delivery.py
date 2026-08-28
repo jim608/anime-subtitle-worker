@@ -105,6 +105,50 @@ class CompletedDeliveryTests(unittest.TestCase):
             self.assertEqual(destination.read_bytes(), b"unrelated")
             self.assertTrue(source.is_file())
 
+    def test_acceptance_run_id_flows_into_completed_receipt_and_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "input" / "Episode.mkv"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"source-media")
+            manifest = root / "manifest.json"
+            manifest.write_text("{}", encoding="utf-8")
+            config = _config(root)
+            publication = {
+                "semantics": {
+                    "contract": "ai-publication-semantics-v2",
+                    "kind": "adopted_zh_tw",
+                    "output_languages": ["zh-TW"],
+                },
+                "tracks": [],
+            }
+            identity = {
+                "obligation_id": "obligation-1",
+                "policy_revision": "policy-1",
+                "media": {"media_fingerprint": "media-1"},
+            }
+            run_id = "accrun_" + "3" * 48
+
+            def copy_mux(source_path: Path, output_path: Path, *_: object, **__: object) -> None:
+                shutil.copyfile(source_path, output_path)
+
+            with (
+                patch.object(delivery, "_strict_publication", return_value=publication),
+                patch.object(delivery, "delivery_identity", return_value=identity),
+                patch.object(delivery, "output_manifest_path", return_value=manifest),
+                patch.object(delivery, "acceptance_run_id_for_video", return_value=run_id),
+                patch.object(delivery, "_run_mux", side_effect=copy_mux),
+                patch.object(delivery, "_verify_muxed_output"),
+            ):
+                result = delivery.deliver_completed_mkv(source, config)
+                self.assertTrue(
+                    delivery.validate_completed_delivery(source, config, verify_streams=False)
+                )
+
+            receipt = json.loads(Path(result.receipt).read_text(encoding="utf-8"))
+            self.assertEqual(receipt["acceptance_run_id"], run_id)
+            self.assertTrue(source.is_file())
+
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg tools unavailable")
     def test_real_ffmpeg_mux_preserves_av_and_embeds_verified_tracks(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
