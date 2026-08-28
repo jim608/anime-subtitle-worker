@@ -10,6 +10,10 @@ import unittest
 from unittest.mock import ANY, Mock, call, patch
 
 import main as main_module
+from acceptance_runtime import (
+    ACCEPTANCE_ATTEMPT_CONTEXT_ENV,
+    AcceptanceAttemptContext,
+)
 from scan_state import ScanStateStore
 
 
@@ -1858,6 +1862,7 @@ class MainQueueResultTest(unittest.TestCase):
             self.assertIn(str(video), command)
             self.assertIn(str(config_path), command)
             self.assertEqual(run.call_args.kwargs["timeout"], 123)
+            self.assertIsNone(run.call_args.kwargs["env"])
 
     def test_process_video_with_policy_treats_killed_subprocess_as_job_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1911,6 +1916,49 @@ class MainQueueResultTest(unittest.TestCase):
                 )
             environment = run.call_args.kwargs["env"]
             self.assertEqual(environment["ANIME_RESOURCE_LAUNCH_PLAN"], "signed-plan")
+
+    def test_isolated_subprocess_receives_acceptance_attempt_context_only_when_supplied(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_path = root / "config.yaml"
+            video = (root / "episode.mkv").resolve()
+            config_path.write_text("config", encoding="utf-8")
+            video.write_bytes(b"media")
+            config = SimpleNamespace(
+                ai_subprocess_timeout_seconds=123,
+                config_path=config_path,
+            )
+            context = AcceptanceAttemptContext(
+                contract="anime-acceptance-attempt-context-v1",
+                schema_version=1,
+                run_id="accrun_" + "1" * 48,
+                plan_sha256="2" * 64,
+                case_id="case-001",
+                fault_id="fault-001-worker-crash",
+                fault_scenario="worker_kill",
+                canonical_path=str(video),
+                obligation_id="aiobl_" + "3" * 64,
+                delivery_attempt_id="aiatt_" + "4" * 64,
+                attempt_number=1,
+                started_at=1001.0,
+            )
+            with patch.object(
+                main_module.subprocess,
+                "run",
+                return_value=SimpleNamespace(returncode=0),
+            ) as run:
+                self.assertTrue(
+                    main_module._process_video_subprocess(
+                        config,
+                        video,
+                        Mock(),
+                        acceptance_attempt_context=context,
+                    )
+                )
+
+            serialized = run.call_args.kwargs["env"][ACCEPTANCE_ATTEMPT_CONTEXT_ENV]
+            self.assertEqual(json.loads(serialized)["delivery_attempt_id"], context.delivery_attempt_id)
+            self.assertEqual(json.loads(serialized)["plan_sha256"], context.plan_sha256)
 
     def test_auto_run_drains_existing_ai_queue_between_watch_cycles(self) -> None:
         videos = [Path("queued-1.mkv"), Path("queued-2.mkv")]

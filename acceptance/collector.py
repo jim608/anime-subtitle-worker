@@ -390,6 +390,8 @@ def _collect_case(
                 observation=fault_observation,
                 plan_schema_version=plan_schema_version,
                 acceptance_run_id=acceptance_run_id,
+                plan_sha256=str(plan_reference.get("sha256") or ""),
+                attempts=attempts,
             )
             if structured_error:
                 fault_errors.append(structured_error)

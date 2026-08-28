@@ -191,6 +191,7 @@ from translator import (
     SubtitleTranslator,
 )
 from whisper_runtime import clear_whisper_model_cache
+from acceptance_runtime import AcceptanceAttemptContext
 
 
 LEADING_GAP_CACHE_POLICY_VERSION = 1
@@ -213,7 +214,13 @@ class AsrRouteOutcome:
 
 
 class VideoWorker:
-    def __init__(self, config: AppConfig, logger: logging.Logger) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        logger: logging.Logger,
+        *,
+        acceptance_attempt_context: AcceptanceAttemptContext | None = None,
+    ) -> None:
         self.config = config
         self.logger = logger
         self._translator: SubtitleTranslator | None = None
@@ -229,6 +236,13 @@ class VideoWorker:
         self._subtitle_source_decision: SubtitleSourceDecision | None = None
         self._translation_memory_manual_run = False
         self._resource_launch_plan: dict[str, object] | None = None
+        self._acceptance_attempt_context = acceptance_attempt_context
+
+    @property
+    def acceptance_attempt_context(self) -> AcceptanceAttemptContext | None:
+        """Immutable child-verified acceptance identity, absent in production."""
+
+        return self._acceptance_attempt_context
 
     def process(self, video_path: str | Path) -> bool:
         video = Path(video_path)

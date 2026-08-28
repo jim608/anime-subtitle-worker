@@ -14,6 +14,7 @@ ACCEPTANCE_QUEUE_TARGET_COUNT = 100
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _RUN_ID = re.compile(r"accrun_[0-9a-f]{48}")
 _OBLIGATION_ID = re.compile(r"aiobl_[0-9a-f]{64}")
+_SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
 class AcceptanceQueueLaneError(ValueError):
@@ -30,6 +31,9 @@ class AcceptanceQueueTarget:
     policy_revision: str
     obligation_id: str
     source_sha256: str
+    case_id: str = ""
+    fault_id: str = ""
+    fault_scenario: str = ""
 
 
 @dataclass(frozen=True)
@@ -119,7 +123,12 @@ def load_acceptance_queue_lane(config: Any) -> AcceptanceQueueLane | None:
         media = case.get("media") if isinstance(case, dict) else None
         if not isinstance(media, dict):
             raise AcceptanceQueueLaneError(f"acceptance case {ordinal + 1} has no media identity")
-        target = _parse_target(media, ordinal=ordinal, input_root=input_root)
+        target = _parse_target(
+            media,
+            ordinal=ordinal,
+            input_root=input_root,
+            case=case,
+        )
         targets.append(target)
     _validate_unique_targets(targets)
     return AcceptanceQueueLane(
@@ -169,7 +178,13 @@ def verify_acceptance_queue_target_source(
         )
 
 
-def _parse_target(media: dict[str, Any], *, ordinal: int, input_root: Path) -> AcceptanceQueueTarget:
+def _parse_target(
+    media: dict[str, Any],
+    *,
+    ordinal: int,
+    input_root: Path,
+    case: dict[str, Any],
+) -> AcceptanceQueueTarget:
     raw_path = str(media.get("canonical_path") or "").strip()
     path = Path(raw_path)
     if not path.is_absolute():
@@ -192,6 +207,30 @@ def _parse_target(media: dict[str, Any], *, ordinal: int, input_root: Path) -> A
     policy_revision = str(media.get("policy_revision") or "")
     obligation_id = str(media.get("obligation_id") or "")
     source_sha256 = str(media.get("source_sha256") or "")
+    case_id = str(case.get("case_id") or "")
+    if not _SAFE_ID.fullmatch(case_id):
+        raise AcceptanceQueueLaneError(
+            f"acceptance case {ordinal + 1} has an invalid case_id"
+        )
+    faults = case.get("faults", [])
+    if not isinstance(faults, list) or len(faults) > 1:
+        raise AcceptanceQueueLaneError(
+            f"acceptance case {ordinal + 1} must have zero or one planned fault"
+        )
+    fault_id = ""
+    fault_scenario = ""
+    if faults:
+        fault = faults[0]
+        if not isinstance(fault, dict):
+            raise AcceptanceQueueLaneError(
+                f"acceptance case {ordinal + 1} has an invalid planned fault"
+            )
+        fault_id = str(fault.get("fault_id") or "")
+        fault_scenario = str(fault.get("scenario") or "")
+        if not _SAFE_ID.fullmatch(fault_id) or not _SAFE_ID.fullmatch(fault_scenario):
+            raise AcceptanceQueueLaneError(
+                f"acceptance case {ordinal + 1} has invalid fault identity"
+            )
     if media_size <= 0 or media_mtime_ns <= 0:
         raise AcceptanceQueueLaneError(
             f"acceptance case {ordinal + 1} has non-positive media identity fields"
@@ -217,11 +256,15 @@ def _parse_target(media: dict[str, Any], *, ordinal: int, input_root: Path) -> A
         policy_revision=policy_revision,
         obligation_id=obligation_id,
         source_sha256=source_sha256,
+        case_id=case_id,
+        fault_id=fault_id,
+        fault_scenario=fault_scenario,
     )
 
 
 def _validate_unique_targets(targets: list[AcceptanceQueueTarget]) -> None:
     for label, values in (
+        ("case_id", [target.case_id for target in targets]),
         ("canonical_path", [target.canonical_path.casefold() for target in targets]),
         ("media_fingerprint", [target.media_fingerprint for target in targets]),
         ("obligation_id", [target.obligation_id for target in targets]),
@@ -229,3 +272,6 @@ def _validate_unique_targets(targets: list[AcceptanceQueueTarget]) -> None:
     ):
         if len(set(values)) != ACCEPTANCE_QUEUE_TARGET_COUNT:
             raise AcceptanceQueueLaneError(f"acceptance lane {label} values must be unique")
+    fault_ids = [target.fault_id for target in targets if target.fault_id]
+    if len(fault_ids) != len(set(fault_ids)):
+        raise AcceptanceQueueLaneError("acceptance lane fault_id values must be unique")

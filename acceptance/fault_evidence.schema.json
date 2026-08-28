@@ -4,6 +4,17 @@
   "title": "Automatic fault injection and recovery evidence",
   "type": "object",
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {"schema_version": {"const": 3}},
+        "required": ["schema_version"]
+      },
+      "then": {
+        "required": ["acceptance_run_id", "attempt_binding"]
+      }
+    }
+  ],
   "required": [
     "contract",
     "schema_version",
@@ -63,6 +74,40 @@
         "checkpoint": {"type": "string", "minLength": 1}
       }
     },
+    "attempt_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "plan_sha256",
+        "claim_sha256",
+        "failed_attempt",
+        "recovery_attempt"
+      ],
+      "properties": {
+        "plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "claim_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "failed_attempt": {
+          "$ref": "#/$defs/terminalAttemptBinding"
+        },
+        "recovery_attempt": {
+          "$ref": "#/$defs/terminalAttemptBinding"
+        }
+      }
+    },
     "manual_interventions": {"type": "array", "maxItems": 0}
+  },
+  "$defs": {
+    "terminalAttemptBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempt_id", "row_sha256"],
+      "properties": {
+        "attempt_id": {
+          "type": "string",
+          "pattern": "^aiatt_[0-9a-f]{64}$"
+        },
+        "row_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    }
   }
 }

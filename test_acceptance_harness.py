@@ -24,6 +24,7 @@ from acceptance.harness import (
     validate_plan,
     validate_plan_structure,
 )
+from acceptance_fault_executor import attempt_binding_digest, terminal_attempt_row_sha256
 import completed_delivery as completed_delivery_module
 from output_manifest import (
     ADOPTED_ZH_TW_PUBLICATION_KIND,
@@ -833,8 +834,61 @@ class AcceptanceHarnessTests(unittest.TestCase):
             "",
         )
         fresh_run_id = "accrun_" + "3" * 48
+        plan_sha256 = sha256_file(self.plan_path)
+        obligation_id = self.plan["cases"][0]["media"]["obligation_id"]
+        failed_attempt = {
+            "attempt_id": "aiatt_" + "a" * 64,
+            "obligation_id": obligation_id,
+            "acceptance_run_id": fresh_run_id,
+            "attempt_number": 1,
+            "status": "retryable_failure",
+            "stage": "completed_delivery",
+            "error_code": "process_killed",
+            "detail": "planned mux crash",
+            "started_at": SUITE_STARTED + 0.1,
+            "finished_at": SUITE_STARTED + 0.35,
+        }
+        recovery_attempt = {
+            "attempt_id": "aiatt_" + "b" * 64,
+            "obligation_id": obligation_id,
+            "acceptance_run_id": fresh_run_id,
+            "attempt_number": 2,
+            "status": "succeeded",
+            "stage": "delivery_verification",
+            "error_code": "",
+            "detail": "",
+            "started_at": SUITE_STARTED + 0.5,
+            "finished_at": observation["recovered_at"],
+        }
         payload["schema_version"] = 3
         payload["acceptance_run_id"] = fresh_run_id
+        payload["attempt_binding"] = {
+            "plan_sha256": plan_sha256,
+            "claim_sha256": attempt_binding_digest(
+                plan_sha256=plan_sha256,
+                acceptance_run_id=fresh_run_id,
+                case_id=self.plan["cases"][0]["case_id"],
+                fault_id=fault["fault_id"],
+                obligation_id=obligation_id,
+                attempt=failed_attempt,
+            ),
+            "failed_attempt": {
+                "attempt_id": failed_attempt["attempt_id"],
+                "row_sha256": terminal_attempt_row_sha256(
+                    failed_attempt,
+                    obligation_id=obligation_id,
+                    acceptance_run_id=fresh_run_id,
+                ),
+            },
+            "recovery_attempt": {
+                "attempt_id": recovery_attempt["attempt_id"],
+                "row_sha256": terminal_attempt_row_sha256(
+                    recovery_attempt,
+                    obligation_id=obligation_id,
+                    acceptance_run_id=fresh_run_id,
+                ),
+            },
+        }
         self._write_json(path, payload)
         self.assertEqual(
             _verify_structured_fault_evidence(
@@ -846,11 +900,14 @@ class AcceptanceHarnessTests(unittest.TestCase):
                 observation=observation,
                 plan_schema_version=3,
                 acceptance_run_id=fresh_run_id,
+                plan_sha256=plan_sha256,
+                attempts=[failed_attempt, recovery_attempt],
             ),
             "",
         )
         payload["schema_version"] = 2
         payload.pop("acceptance_run_id")
+        payload.pop("attempt_binding")
         payload["observed_failure"]["stage"] = "translation"
         self._write_json(path, payload)
         self.assertIn(

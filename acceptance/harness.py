@@ -12,6 +12,11 @@ import subprocess
 import time
 from typing import Any, Callable
 
+from acceptance_fault_executor import (
+    AcceptanceFaultExecutorError,
+    attempt_binding_digest,
+    terminal_attempt_row_sha256,
+)
 from completed_delivery import (
     COMPLETED_DELIVERY_CONTRACT,
     COMPLETED_DELIVERY_SCHEMA_VERSION,
@@ -1053,6 +1058,7 @@ def evaluate_acceptance(
                 ),
                 control_snapshot=control_snapshot,
                 plan_schema_version=plan_schema_version,
+                plan_sha256=plan_digest,
             )
         )
 
@@ -1195,6 +1201,7 @@ def _evaluate_case(
     plan_created_at: float | None,
     control_snapshot: dict[str, Any],
     plan_schema_version: int,
+    plan_sha256: str,
 ) -> dict[str, Any]:
     case_id = str(planned.get("case_id") or "")
     media = planned.get("media") if isinstance(planned.get("media"), dict) else {}
@@ -1515,6 +1522,8 @@ def _evaluate_case(
                         observation=actual,
                         plan_schema_version=plan_schema_version,
                         acceptance_run_id=acceptance_run_id,
+                        plan_sha256=plan_sha256,
+                        attempts=attempts,
                     )
                     if structured_error:
                         structured_evidence_errors.append(structured_error)
@@ -2199,6 +2208,8 @@ def _verify_structured_fault_evidence(
     observation: dict[str, Any],
     plan_schema_version: int,
     acceptance_run_id: str = "",
+    plan_sha256: str = "",
+    attempts: list[dict[str, Any]] | None = None,
 ) -> str:
     try:
         payload = read_json_object(path)
@@ -2218,6 +2229,7 @@ def _verify_structured_fault_evidence(
         "recovery",
         "manual_interventions",
         "acceptance_run_id",
+        "attempt_binding",
     }
     unknown = sorted(str(key) for key in payload if str(key) not in allowed)
     if unknown:
@@ -2298,6 +2310,131 @@ def _verify_structured_fault_evidence(
         return "completed-delivery recovery checkpoint must be completed_delivery_committed"
     if payload.get("manual_interventions") != []:
         return "fault evidence contains a manual intervention"
+    if plan_schema_version == FRESH_PLAN_SCHEMA_VERSION:
+        binding_error = _fault_attempt_binding_error(
+            payload,
+            attempts or [],
+            plan_sha256=plan_sha256,
+            acceptance_run_id=acceptance_run_id,
+            case_id=case_id,
+            fault_id=str(fault.get("fault_id") or ""),
+            obligation_id=obligation_id,
+        )
+        if binding_error:
+            return binding_error
+    return ""
+
+
+def _fault_attempt_binding_error(
+    evidence: dict[str, Any],
+    attempts: list[dict[str, Any]],
+    *,
+    plan_sha256: str,
+    acceptance_run_id: str,
+    case_id: str,
+    fault_id: str,
+    obligation_id: str,
+) -> str:
+    binding = evidence.get("attempt_binding")
+    if not isinstance(binding, dict) or set(binding) != {
+        "plan_sha256",
+        "claim_sha256",
+        "failed_attempt",
+        "recovery_attempt",
+    }:
+        return "attempt_binding fields are missing or not exact"
+    if not _HEX64.fullmatch(str(plan_sha256 or "")):
+        return "exact plan SHA-256 is unavailable for attempt binding"
+    if binding.get("plan_sha256") != plan_sha256:
+        return "attempt_binding plan_sha256 does not match the exact plan"
+    claim_sha256 = str(binding.get("claim_sha256") or "")
+    if not _HEX64.fullmatch(claim_sha256):
+        return "attempt_binding claim_sha256 is invalid"
+    references: dict[str, dict[str, Any]] = {}
+    for label in ("failed_attempt", "recovery_attempt"):
+        reference = binding.get(label)
+        if not isinstance(reference, dict) or set(reference) != {
+            "attempt_id",
+            "row_sha256",
+        }:
+            return f"attempt_binding {label} fields are not exact"
+        attempt_id = str(reference.get("attempt_id") or "")
+        row_sha256 = str(reference.get("row_sha256") or "")
+        if not re.fullmatch(r"aiatt_[0-9a-f]{64}", attempt_id):
+            return f"attempt_binding {label} attempt_id is invalid"
+        if not _HEX64.fullmatch(row_sha256):
+            return f"attempt_binding {label} row_sha256 is invalid"
+        matched = [
+            attempt
+            for attempt in attempts
+            if str(attempt.get("attempt_id") or "") == attempt_id
+        ]
+        if len(matched) != 1:
+            return f"attempt_binding {label} does not select exactly one ledger row"
+        references[label] = matched[0]
+    failed = references["failed_attempt"]
+    recovered = references["recovery_attempt"]
+    if str(failed.get("attempt_id") or "") == str(recovered.get("attempt_id") or ""):
+        return "attempt_binding failed and recovery attempts must be distinct"
+    if str(failed.get("status") or "") not in {
+        "retryable_failure",
+        "deferred",
+        "failed",
+    }:
+        return "attempt_binding failed attempt is not a terminal failure"
+    if str(recovered.get("status") or "") != "succeeded":
+        return "attempt_binding recovery attempt did not succeed"
+    if any(
+        str(attempt.get("acceptance_run_id") or "") != acceptance_run_id
+        for attempt in (failed, recovered)
+    ):
+        return "attempt_binding attempt acceptance_run_id mismatch"
+    try:
+        expected_claim = attempt_binding_digest(
+            plan_sha256=plan_sha256,
+            acceptance_run_id=acceptance_run_id,
+            case_id=case_id,
+            fault_id=fault_id,
+            obligation_id=obligation_id,
+            attempt=failed,
+        )
+        failed_row_sha256 = terminal_attempt_row_sha256(
+            failed,
+            obligation_id=obligation_id,
+            acceptance_run_id=acceptance_run_id,
+        )
+        recovery_row_sha256 = terminal_attempt_row_sha256(
+            recovered,
+            obligation_id=obligation_id,
+            acceptance_run_id=acceptance_run_id,
+        )
+    except AcceptanceFaultExecutorError as exc:
+        return f"attempt_binding ledger row is invalid: {exc}"
+    if claim_sha256 != expected_claim:
+        return "attempt_binding claim_sha256 does not match the failed attempt"
+    if binding["failed_attempt"].get("row_sha256") != failed_row_sha256:
+        return "attempt_binding failed attempt row SHA-256 mismatch"
+    if binding["recovery_attempt"].get("row_sha256") != recovery_row_sha256:
+        return "attempt_binding recovery attempt row SHA-256 mismatch"
+    failure = evidence.get("observed_failure")
+    recovery = evidence.get("recovery")
+    failed_finished = _positive_float(failed.get("finished_at"))
+    recovery_started = _positive_float(recovered.get("started_at"))
+    recovery_finished = _positive_float(recovered.get("finished_at"))
+    if (
+        not isinstance(failure, dict)
+        or failed_finished is None
+        or abs(float(failure.get("observed_at") or 0) - failed_finished) > 0.001
+    ):
+        return "observed_failure timestamp is not bound to the failed attempt"
+    if (
+        not isinstance(recovery, dict)
+        or recovery_started is None
+        or recovery_finished is None
+        or abs(float(recovery.get("started_at") or 0) - recovery_started) > 0.001
+        or abs(float(recovery.get("completed_at") or 0) - recovery_finished) > 0.001
+    ):
+        return "recovery timestamps are not bound to the succeeded attempt"
     return ""
 
 

@@ -124,6 +124,9 @@ class AppConfig:
     scanner_queue_enabled: bool = True
     acceptance_queue_lane_enabled: bool = False
     acceptance_queue_lane_plan_path: str = "acceptance/plan.json"
+    acceptance_fault_execution_enabled: bool = False
+    acceptance_fault_execution_run_id: str = ""
+    acceptance_fault_execution_plan_sha256: str = ""
     scanner_event_watch_enabled: bool = False
     scanner_event_stability_interval_seconds: float = 2.0
     scanner_event_watch_health_interval_seconds: float = 30.0
@@ -771,6 +774,21 @@ def load_config(config_path: str | Path) -> AppConfig:
             raw,
             "acceptance_queue_lane_plan_path",
             "acceptance/plan.json",
+        ),
+        acceptance_fault_execution_enabled=_optional_bool(
+            raw,
+            "acceptance_fault_execution_enabled",
+            False,
+        ),
+        acceptance_fault_execution_run_id=_optional_allow_empty_str(
+            raw,
+            "acceptance_fault_execution_run_id",
+            "",
+        ),
+        acceptance_fault_execution_plan_sha256=_optional_allow_empty_str(
+            raw,
+            "acceptance_fault_execution_plan_sha256",
+            "",
         ),
         scanner_event_watch_enabled=_optional_bool(raw, "scanner_event_watch_enabled", False),
         scanner_event_stability_interval_seconds=_optional_positive_float(
@@ -1912,6 +1930,25 @@ def _validate_config(config: AppConfig) -> None:
         raise ConfigError(
             "acceptance_queue_lane_enabled requires scanner_cache_enabled and scanner_queue_enabled."
         )
+    if config.acceptance_fault_execution_enabled:
+        if not config.acceptance_queue_lane_enabled:
+            raise ConfigError(
+                "acceptance_fault_execution_enabled requires acceptance_queue_lane_enabled."
+            )
+        if not re.fullmatch(
+            r"accrun_[0-9a-f]{48}",
+            config.acceptance_fault_execution_run_id,
+        ):
+            raise ConfigError(
+                "acceptance_fault_execution_run_id must be an explicit fresh run id."
+            )
+        if not re.fullmatch(
+            r"[0-9a-f]{64}",
+            config.acceptance_fault_execution_plan_sha256,
+        ):
+            raise ConfigError(
+                "acceptance_fault_execution_plan_sha256 must be explicit lowercase SHA-256."
+            )
 
     if not config.allowed_source_languages:
         raise ConfigError("allowed_source_languages must contain at least one language code.")

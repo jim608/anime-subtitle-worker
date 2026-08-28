@@ -27,6 +27,13 @@ from acceptance_queue_lane import (
     load_acceptance_queue_lane,
     verify_acceptance_queue_target_source,
 )
+from acceptance_runtime import (
+    ACCEPTANCE_ATTEMPT_CONTEXT_ENV,
+    AcceptanceRuntimeContextError,
+    build_acceptance_attempt_context,
+    load_and_verify_acceptance_attempt_context,
+    serialize_acceptance_attempt_context,
+)
 
 
 AI_SCHEDULER_WAKE_EVENT = threading.Event()
@@ -109,7 +116,24 @@ def main() -> int:
             return 2
         from worker import VideoWorker
 
-        ok = VideoWorker(config, logger).process(Path(args.video_path))
+        video = Path(args.video_path)
+        try:
+            acceptance_attempt_context = load_and_verify_acceptance_attempt_context(
+                config,
+                video,
+            )
+        except AcceptanceRuntimeContextError as exc:
+            logger.error(
+                "Isolated acceptance attempt context verification failed. video=%s error=%s",
+                video,
+                exc,
+            )
+            return 2
+        ok = VideoWorker(
+            config,
+            logger,
+            acceptance_attempt_context=acceptance_attempt_context,
+        ).process(video)
         return 0 if ok else 1
 
     if args.mikan_sync_once:
@@ -490,7 +514,19 @@ def _scan_and_process(
                         reserved_command.get("target"),
                     )
                     break
-                ok = _process_video_with_policy(worker, video, logger, resource_launch_plan=plan)
+                acceptance_attempt_context = build_acceptance_attempt_context(
+                    queue_state,
+                    worker.config,
+                    video,
+                    delivery_attempt_id,
+                )
+                ok = _process_video_with_policy(
+                    worker,
+                    video,
+                    logger,
+                    resource_launch_plan=plan,
+                    acceptance_attempt_context=acceptance_attempt_context,
+                )
                 _mark_queue_result(
                     queue_state,
                     video,
@@ -577,11 +613,18 @@ def _scan_and_process(
                             video,
                             worker.config,
                         )
+                        acceptance_attempt_context = build_acceptance_attempt_context(
+                            queue_state,
+                            worker.config,
+                            video,
+                            delivery_attempt_id,
+                        )
                     future = executor.submit(
                         _process_video_with_policy,
                         VideoWorker(worker.config, logger),
                         video,
                         logger,
+                        acceptance_attempt_context=acceptance_attempt_context,
                     )
                     futures[future] = (video, delivery_attempt_id)
 
@@ -741,7 +784,14 @@ def _report_resource_admission_deferred(
     )
 
 
-def _process_video_with_policy(worker: VideoWorker, video, logger, *, resource_launch_plan=None) -> bool:
+def _process_video_with_policy(
+    worker: VideoWorker,
+    video,
+    logger,
+    *,
+    resource_launch_plan=None,
+    acceptance_attempt_context=None,
+) -> bool:
     config = worker.config
     resource_enabled = bool(getattr(config, "resource_admission_enabled", False))
     if resource_enabled and (
@@ -754,6 +804,12 @@ def _process_video_with_policy(worker: VideoWorker, video, logger, *, resource_l
         logger.error("Resource-enabled AI launch requires process isolation; refusing worker start. video=%s", video)
         return False
     if not bool(getattr(config, "ai_process_isolation_enabled", False)):
+        if acceptance_attempt_context is not None:
+            logger.error(
+                "Acceptance attempt context requires process isolation; refusing worker start. video=%s",
+                video,
+            )
+            return False
         try:
             return bool(worker.process(video))
         except Exception as exc:  # noqa: BLE001 - one bad AI job must not stop the scheduler.
@@ -765,12 +821,26 @@ def _process_video_with_policy(worker: VideoWorker, video, logger, *, resource_l
         video,
         logger,
         resource_launch_plan=resource_launch_plan,
+        acceptance_attempt_context=acceptance_attempt_context,
     )
 
 
-def _process_video_subprocess(config, video, logger, *, resource_launch_plan=None) -> bool:
+def _process_video_subprocess(
+    config,
+    video,
+    logger,
+    *,
+    resource_launch_plan=None,
+    acceptance_attempt_context=None,
+) -> bool:
     config_path = getattr(config, "config_path", None)
     if not config_path:
+        if acceptance_attempt_context is not None:
+            logger.error(
+                "Isolated acceptance launch has no config_path; refusing in-process fallback. video=%s",
+                video,
+            )
+            return False
         if bool(getattr(config, "resource_admission_enabled", False)):
             logger.error(
                 "Resource-enabled isolated AI launch has no config_path; refusing in-process fallback. video=%s",
@@ -802,11 +872,18 @@ def _process_video_subprocess(config, video, logger, *, resource_launch_plan=Non
         timeout if timeout > 0 else "none",
     )
     environment = None
+    if resource_launch_plan is not None or acceptance_attempt_context is not None:
+        environment = os.environ.copy()
     if resource_launch_plan is not None:
         from resource_runtime import serialize_launch_plan
 
-        environment = os.environ.copy()
+        assert environment is not None
         environment["ANIME_RESOURCE_LAUNCH_PLAN"] = serialize_launch_plan(resource_launch_plan)
+    if acceptance_attempt_context is not None:
+        assert environment is not None
+        environment[ACCEPTANCE_ATTEMPT_CONTEXT_ENV] = (
+            serialize_acceptance_attempt_context(acceptance_attempt_context)
+        )
     try:
         completed = subprocess.run(
             command,
