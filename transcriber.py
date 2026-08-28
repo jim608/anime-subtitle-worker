@@ -87,6 +87,7 @@ DEFAULT_WHISPER_HALLUCINATION_PHRASES = (
     "ご清聴ありがとうございました",
     "ご視聴ありがとうございます",
     "チャンネル登録よろしくお願いします",
+    "この動画の字幕は視聴者によって作成されました",
 )
 DEFAULT_WHISPER_HALLUCINATION_CREDIT_NAMES = (
     "初音ミク",

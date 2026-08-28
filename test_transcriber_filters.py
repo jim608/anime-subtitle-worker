@@ -1464,7 +1464,9 @@ class TranscriberFilterTest(unittest.TestCase):
         self.assertTrue(_is_hallucination_text("字幕製作人 初音未來", CONFIG))
         self.assertTrue(_is_hallucination_text("字幕作成者 初音ミク", CONFIG))
         self.assertTrue(_is_hallucination_text("作詞・作曲・編曲 初音ミク", CONFIG))
+        self.assertTrue(_is_hallucination_text("この動画の字幕は視聴者によって作成されました。", CONFIG))
         self.assertEqual(_clean_transcribed_text("字幕製作人 初音未來", CONFIG), "")
+        self.assertEqual(_clean_transcribed_text("この動画の字幕は視聴者によって作成されました。", CONFIG), "")
 
     def test_real_dialogue_with_hatsune_miku_name_is_kept(self) -> None:
         text = "初音ミクの曲が好きです"
