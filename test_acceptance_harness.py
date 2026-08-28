@@ -74,6 +74,19 @@ Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,これは日本語の字幕で
 
 
 class AcceptanceHarnessTests(unittest.TestCase):
+    FAULT_SCENARIOS_BY_INDEX = {
+        0: "output_publish_interrupt",
+        1: "temporary_io_error",
+        2: "translation_timeout",
+        3: "worker_kill",
+        4: "temporary_database_busy",
+        5: "output_publish_interrupt",
+        6: "model_unavailable",
+        7: "asr_process_crash",
+        8: "temporary_io_error",
+        15: "gpu_oom",
+    }
+
     @classmethod
     def setUpClass(cls) -> None:
         cls._temporary = tempfile.TemporaryDirectory()
@@ -181,16 +194,9 @@ class AcceptanceHarnessTests(unittest.TestCase):
 
     @classmethod
     def _create_corpus(cls) -> dict:
-        fault_scenarios = [
-            "worker_kill",
-            "translation_timeout",
-            "asr_process_crash",
-            "gpu_oom",
-            "model_unavailable",
-            "output_publish_interrupt",
-            "temporary_io_error",
-            "temporary_database_busy",
-        ]
+        # Keep every fixture fault on a route that reaches its trigger stage.
+        # Ten distinct cases are still faulted, while all eight v1 scenarios
+        # remain covered.
         routes = [
             "existing_zh_tw",
             "zh_cn_opencc",
@@ -207,11 +213,12 @@ class AcceptanceHarnessTests(unittest.TestCase):
             cls._publish_route(index, video=video, route=route)
             identity = delivery_identity(video, cls.config)
             fault = []
-            if index < 10:
+            scenario = cls.FAULT_SCENARIOS_BY_INDEX.get(index)
+            if scenario is not None:
                 fault = [
                     {
                         "fault_id": f"fault-{index:03d}",
-                        "scenario": fault_scenarios[index % len(fault_scenarios)],
+                        "scenario": scenario,
                         "trigger": f"deterministic checkpoint {index}",
                     }
                 ]
@@ -432,7 +439,8 @@ class AcceptanceHarnessTests(unittest.TestCase):
         connection = sqlite3.connect(cls.work / "scanner_state.sqlite3")
         connection.execute("DELETE FROM ai_delivery_obligations WHERE obligation_id=?", (identity["obligation_id"],))
         connection.execute("DELETE FROM ai_delivery_attempts WHERE obligation_id=?", (identity["obligation_id"],))
-        attempt_count = 2 if index < 10 else 1
+        has_fault = index in cls.FAULT_SCENARIOS_BY_INDEX
+        attempt_count = 2 if has_fault else 1
         connection.execute(
             """
             INSERT INTO ai_delivery_obligations(
@@ -459,7 +467,7 @@ class AcceptanceHarnessTests(unittest.TestCase):
             ),
         )
         case_started = SUITE_STARTED + index * 10
-        if index < 10:
+        if has_fault:
             connection.execute(
                 """
                 INSERT INTO ai_delivery_attempts(

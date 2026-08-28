@@ -8,7 +8,11 @@ from types import SimpleNamespace
 import tempfile
 import unittest
 
-from acceptance.harness import AcceptanceInputError, validate_plan_structure
+from acceptance.harness import (
+    FAULT_ROUTE_COMPATIBILITY,
+    AcceptanceInputError,
+    validate_plan_structure,
+)
 from acceptance.planner import (
     FAULT_ORDER,
     ROUTE_ORDER,
@@ -117,11 +121,61 @@ class AcceptancePlannerTests(unittest.TestCase):
             set(FAULT_ORDER),
             {fault["scenario"] for case in faulted for fault in case["faults"]},
         )
+        for case in faulted:
+            for fault in case["faults"]:
+                self.assertIn(
+                    case["expected_route"],
+                    FAULT_ROUTE_COMPATIBILITY[fault["scenario"]],
+                )
         for case in plan["cases"]:
             path = Path(case["media"]["canonical_path"])
             self.assertEqual(sha256_file(path), case["completed_delivery"]["source_sha256"])
             self.assertEqual(path.stat().st_mtime_ns, case["media"]["media_mtime_ns"])
             self.assertTrue(case["media"]["policy_revision"])
+
+    def test_validator_rejects_fault_on_route_that_skips_trigger_stage(self) -> None:
+        plan = self._prepare()["plan"]
+        faulted = next(
+            case
+            for case in plan["cases"]
+            if case["faults"] and case["faults"][0]["scenario"] == "asr_process_crash"
+        )
+        faulted["expected_route"] = "existing_zh_tw"
+        errors = validate_plan_structure(plan)
+        self.assertTrue(
+            any("cannot reach its trigger stage" in error for error in errors),
+            errors,
+        )
+
+    def test_duplicate_source_sha256_fails_closed(self) -> None:
+        first = Path(self.rows[0].path)
+        duplicate = Path(self.rows[1].path)
+        duplicate.write_bytes(first.read_bytes())
+        self.rows[1] = QueueCandidate(
+            path=str(duplicate.resolve()),
+            mtime_ns=duplicate.stat().st_mtime_ns,
+            status="done",
+            source="existing-library",
+        )
+
+        result = self._prepare()
+
+        self.assertFalse(result["ready"])
+        self.assertNotIn("plan", result)
+        self.assertEqual(1, result["rejections"]["duplicate_source_sha256"])
+
+    def test_validator_rejects_duplicate_source_sha256(self) -> None:
+        plan = self._prepare()["plan"]
+        plan["cases"][1]["completed_delivery"]["source_sha256"] = plan["cases"][0][
+            "completed_delivery"
+        ]["source_sha256"]
+
+        errors = validate_plan_structure(plan)
+
+        self.assertTrue(
+            any("duplicate completed delivery source SHA-256" in error for error in errors),
+            errors,
+        )
 
     def test_unproven_routes_fail_closed_without_a_partial_plan(self) -> None:
         def unresolved(path: Path, _config, _identity) -> str:

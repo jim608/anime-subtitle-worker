@@ -88,6 +88,26 @@ COMPLETED_DELIVERY_FAULT_SCENARIOS = frozenset(
     }
 )
 FAULT_SCENARIOS = BASE_FAULT_SCENARIOS | COMPLETED_DELIVERY_FAULT_SCENARIOS
+# A planned fault is valid only when the selected route actually reaches the
+# stage named by its trigger.  Keeping this contract next to the executable
+# validator prevents a planner (or hand-authored manifest) from assigning an
+# ASR failure to a route that adopts an existing subtitle without running ASR.
+FAULT_ROUTE_COMPATIBILITY = {
+    "worker_kill": frozenset({"japanese_audio_asr"}),
+    "translation_timeout": frozenset(
+        {"japanese_subtitle_translation", "japanese_audio_asr"}
+    ),
+    "asr_process_crash": frozenset({"japanese_audio_asr"}),
+    "gpu_oom": frozenset({"japanese_audio_asr"}),
+    "model_unavailable": frozenset(
+        {"japanese_subtitle_translation", "japanese_audio_asr"}
+    ),
+    "output_publish_interrupt": ROUTES,
+    "temporary_io_error": ROUTES,
+    "temporary_database_busy": ROUTES,
+    "mux_process_crash": ROUTES,
+    "completed_publish_interrupt": ROUTES,
+}
 _COMPLETED_FAULT_STAGE = {
     "mux_process_crash": "mux",
     "completed_publish_interrupt": "completed_publish",
@@ -219,6 +239,7 @@ def validate_plan_structure(plan: dict[str, Any]) -> list[str]:
     fault_scenarios: list[str] = []
     completed_destinations: list[str] = []
     completed_receipts: list[str] = []
+    completed_source_sha256s: list[str] = []
     required_fault_scenarios = (
         FAULT_SCENARIOS if schema_version == PLAN_SCHEMA_VERSION else BASE_FAULT_SCENARIOS
     )
@@ -343,6 +364,8 @@ def validate_plan_structure(plan: dict[str, Any]) -> list[str]:
                     errors.append(
                         f"{prefix}.completed_delivery.source_sha256 must be lowercase SHA-256"
                     )
+                else:
+                    completed_source_sha256s.append(source_digest)
                 for field, values in (
                     ("receipt_path", completed_receipts),
                     ("destination", completed_destinations),
@@ -391,6 +414,12 @@ def validate_plan_structure(plan: dict[str, Any]) -> list[str]:
                 errors.append(f"{fault_prefix}.scenario must be one of {sorted(FAULT_SCENARIOS)}")
             else:
                 fault_scenarios.append(str(scenario))
+                compatible_routes = FAULT_ROUTE_COMPATIBILITY.get(str(scenario), frozenset())
+                if route in ROUTES and route not in compatible_routes:
+                    errors.append(
+                        f"{fault_prefix}.scenario {scenario} cannot reach its trigger stage "
+                        f"on source route {route}"
+                    )
             trigger = fault.get("trigger")
             if not isinstance(trigger, str) or not trigger.strip():
                 errors.append(f"{fault_prefix}.trigger is required")
@@ -402,6 +431,11 @@ def validate_plan_structure(plan: dict[str, Any]) -> list[str]:
     _append_duplicate_errors(fault_ids, "fault id", errors)
     _append_duplicate_errors(completed_destinations, "completed destination", errors)
     _append_duplicate_errors(completed_receipts, "completed receipt path", errors)
+    _append_duplicate_errors(
+        completed_source_sha256s,
+        "completed delivery source SHA-256",
+        errors,
+    )
     missing_routes = sorted(ROUTES - set(routes))
     if missing_routes:
         errors.append(f"corpus must cover every source route; missing {missing_routes}")

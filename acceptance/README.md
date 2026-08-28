@@ -33,7 +33,8 @@ declared by the plan. A version 1 plan does not silently acquire this new
 requirement.
 
 The executable validator also enforces constraints that JSON Schema alone
-cannot express: exactly 100 unique paths/fingerprints/obligations, at least ten
+cannot express: exactly 100 unique paths/fingerprints/obligations (and, for v2,
+unique source SHA-256 values), at least ten
 cases for each of the four source routes, at least 10 series, at least ten cases
 in each of two containers and in every duration bucket, 10 faulted cases, and
 every defined fault type. Duration buckets are `<10 min`, `10-35 min`, and
@@ -123,9 +124,11 @@ route evidence is listed under `unresolved_expected_routes` and is never
 coerced to an ASR route.
 
 Exactly ten cases receive one deterministic `planned-only` fault declaration
-covering every v2 scenario. Preparation never starts Worker, enqueues media,
-injects those faults, creates observations, or changes SQLite. Explicit plan
-output uses exclusive creation and has no overwrite switch.
+covering every v2 scenario. Each fault is assigned only to a source route that
+reaches the trigger stage (for example, an ASR crash can only be assigned to an
+ASR case). Preparation never starts Worker, enqueues media, injects those
+faults, creates observations, or changes SQLite. Explicit plan output uses
+exclusive creation and has no overwrite switch.
 
 Collection reads source identity, output manifests, processing provenance, the
 scanner ledger through SQLite `mode=ro` plus `query_only`, completed-delivery

@@ -31,6 +31,7 @@ from series_metadata import canonical_local_path, series_root_for_video, stable_
 from acceptance.harness import (
     ACCEPTANCE_CONTRACT,
     DURATION_BUCKETS,
+    FAULT_ROUTE_COMPATIBILITY,
     MINIMUM_CASES_PER_CONTAINER,
     MINIMUM_CASES_PER_DURATION_BUCKET,
     MINIMUM_CASES_PER_ROUTE,
@@ -179,12 +180,27 @@ def prepare_corpus_plan(
                 rejections=rejections,
                 unresolved_routes=unresolved_routes,
             )
+        fault_assignments, unassigned_faults = _assign_planned_faults(selected)
+        if unassigned_faults:
+            return _preview_payload(
+                ready=False,
+                gaps=[
+                    {
+                        "code": "fault_assignment_unavailable",
+                        "scenarios": unassigned_faults,
+                    }
+                ],
+                candidates=remaining,
+                rejections=rejections,
+                unresolved_routes=unresolved_routes,
+            )
         try:
             plan = _materialize_plan(
                 selected,
                 config,
                 source_hasher=source_hasher,
                 hash_cache=hash_cache,
+                fault_assignments=fault_assignments,
             )
             break
         except CorpusCandidateError as exc:
@@ -635,8 +651,10 @@ def _materialize_plan(
     *,
     source_hasher: Callable[[Path], str],
     hash_cache: dict[str, str],
+    fault_assignments: dict[str, str],
 ) -> dict[str, Any]:
     materialized: list[tuple[CorpusCandidate, str]] = []
+    digest_owners: dict[str, str] = {}
     for candidate in selected:
         path_key = str(candidate.path)
         before = candidate.path.stat()
@@ -647,6 +665,9 @@ def _materialize_plan(
         after = candidate.path.stat()
         if not _HEX64.fullmatch(digest):
             raise CorpusCandidateError("source_sha256_failed", path_key)
+        prior_owner = digest_owners.get(digest)
+        if prior_owner is not None and prior_owner != path_key:
+            raise CorpusCandidateError("duplicate_source_sha256", path_key)
         if (
             int(before.st_size) != int(after.st_size)
             or int(before.st_mtime_ns) != int(after.st_mtime_ns)
@@ -655,6 +676,7 @@ def _materialize_plan(
         ):
             raise CorpusCandidateError("media_changed_during_hash", path_key)
         hash_cache[path_key] = digest
+        digest_owners[digest] = path_key
         materialized.append((candidate, digest))
 
     suite_seed = [
@@ -680,8 +702,8 @@ def _materialize_plan(
         except (CompletedDeliveryError, OSError, TypeError, ValueError) as exc:
             raise CorpusCandidateError("completed_delivery_path_failed", str(candidate.path)) from exc
         faults: list[dict[str, str]] = []
-        if index <= len(FAULT_ORDER):
-            scenario = FAULT_ORDER[index - 1]
+        scenario = fault_assignments.get(str(candidate.path))
+        if scenario is not None:
             faults.append(
                 {
                     "fault_id": f"fault-{index:02d}-{scenario}",
@@ -727,6 +749,32 @@ def _materialize_plan(
         "created_at": created_at,
         "cases": cases,
     }
+
+
+def _assign_planned_faults(
+    selected: list[CorpusCandidate],
+) -> tuple[dict[str, str], list[str]]:
+    """Bind each fault to one deterministic route that reaches its trigger."""
+
+    assignments: dict[str, str] = {}
+    used_paths: set[str] = set()
+    missing: list[str] = []
+    for scenario in FAULT_ORDER:
+        compatible_routes = FAULT_ROUTE_COMPATIBILITY.get(scenario, frozenset())
+        matched: CorpusCandidate | None = None
+        for candidate in selected:
+            path_key = str(candidate.path)
+            if path_key in used_paths or candidate.expected_route not in compatible_routes:
+                continue
+            matched = candidate
+            break
+        if matched is None:
+            missing.append(scenario)
+            continue
+        path_key = str(matched.path)
+        assignments[path_key] = scenario
+        used_paths.add(path_key)
+    return assignments, missing
 
 
 def _configuration_gaps(config: Any) -> list[dict[str, Any]]:
