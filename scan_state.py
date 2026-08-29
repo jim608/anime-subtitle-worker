@@ -602,9 +602,87 @@ class ScanStateStore:
         path: Path,
         *,
         acceptance_target: AcceptanceQueueTarget | None = None,
+        expected_failure_revision: str | None = None,
+        expected_failure_code: str | None = None,
+        expected_media_mtime_ns: int | None = None,
     ) -> None:
+        """Claim queued work, optionally with an exact durable canary identity.
+
+        Ordinary queue claims retain their compatibility behavior.  A caller
+        that supplies any canary precondition must supply all three; the
+        compare-and-set then refuses a row whose status or persisted failure
+        identity changed after selection.
+        """
+
         now = time.time()
-        if acceptance_target is None:
+        exact_identity_requested = any(
+            value is not None
+            for value in (
+                expected_failure_revision,
+                expected_failure_code,
+                expected_media_mtime_ns,
+            )
+        )
+        if acceptance_target is not None and exact_identity_requested:
+            raise ValueError(
+                "acceptance and exact canary queue identities cannot be combined"
+            )
+        if exact_identity_requested:
+            if (
+                expected_failure_revision is None
+                or expected_failure_code is None
+                or expected_media_mtime_ns is None
+            ):
+                raise ValueError("exact canary queue claim requires every expected identity field")
+            normalized_revision = str(expected_failure_revision).strip()
+            normalized_code = str(expected_failure_code).strip().casefold()
+            if not re.fullmatch(r"[0-9a-f]{24}", normalized_revision):
+                raise ValueError("exact canary queue claim has an invalid failure revision")
+            if not normalized_code:
+                raise ValueError("exact canary queue claim has an invalid failure code")
+            if isinstance(expected_media_mtime_ns, bool):
+                raise ValueError("exact canary queue claim has an invalid media mtime")
+            normalized_mtime_ns = int(expected_media_mtime_ns)
+            normalized_path = _queue_path(path)
+            try:
+                current_mtime_ns = int(Path(normalized_path).stat().st_mtime_ns)
+            except OSError as exc:
+                raise ValueError("exact canary queue claim media is unavailable") from exc
+            if normalized_mtime_ns <= 0 or current_mtime_ns != normalized_mtime_ns:
+                raise ValueError("exact canary queue claim media identity changed")
+            changed = self._conn.execute(
+                """
+                UPDATE ai_candidate_queue
+                SET status = 'running',
+                    running_at = ?,
+                    next_retry_at = 0,
+                    updated_at = ?
+                WHERE path = ?
+                  AND status = 'queued'
+                  AND mtime_ns = ?
+                  AND failure_revision = ?
+                  AND last_error_code = ?
+                """,
+                (
+                    now,
+                    now,
+                    normalized_path,
+                    normalized_mtime_ns,
+                    normalized_revision,
+                    normalized_code,
+                ),
+            ).rowcount
+            try:
+                post_claim_mtime_ns = int(Path(normalized_path).stat().st_mtime_ns)
+            except OSError as exc:
+                raise ValueError("exact canary queue claim media is unavailable") from exc
+            if post_claim_mtime_ns != normalized_mtime_ns:
+                raise ValueError("exact canary queue claim media identity changed")
+            if int(changed or 0) != 1:
+                raise ValueError(
+                    "exact canary queue target is not the expected queued failure identity"
+                )
+        elif acceptance_target is None:
             self._conn.execute(
                 """
                 UPDATE ai_candidate_queue
@@ -1230,13 +1308,34 @@ class ScanStateStore:
         path: Path,
         *,
         expected_failure_revision: str,
+        expected_failure_code: str,
+        expected_media_mtime_ns: int,
     ) -> bool:
-        """Queue one failure without resetting attempts, error evidence, or budget."""
+        """Atomically queue one exact failure without resetting its budget."""
 
         normalized_path = _queue_path(path)
+        normalized_expected_revision = str(expected_failure_revision or "").strip()
+        normalized_expected_code = str(expected_failure_code or "").strip().casefold()
+        if isinstance(expected_media_mtime_ns, bool):
+            return False
+        try:
+            normalized_expected_mtime_ns = int(expected_media_mtime_ns)
+        except (TypeError, ValueError):
+            return False
+        if (
+            not normalized_expected_revision
+            or not normalized_expected_code
+            or normalized_expected_mtime_ns <= 0
+        ):
+            return False
+        try:
+            if Path(normalized_path).stat().st_mtime_ns != normalized_expected_mtime_ns:
+                return False
+        except OSError:
+            return False
         cursor = self._conn.execute(
             """
-            SELECT q.path, q.status, q.last_error, q.last_error_code,
+            SELECT q.path, q.mtime_ns, q.status, q.last_error, q.last_error_code,
                    q.failure_revision, j.stage AS job_stage, j.message AS job_message
             FROM ai_candidate_queue q
             LEFT JOIN ai_job_state j ON j.path=q.path
@@ -1258,8 +1357,15 @@ class ScanStateStore:
             code,
             str(payload["last_error"] or payload["job_message"] or ""),
         )
-        if revision != str(expected_failure_revision):
+        if (
+            int(payload["mtime_ns"] or 0) != normalized_expected_mtime_ns
+            or code != normalized_expected_code
+            or revision != normalized_expected_revision
+        ):
             return False
+        observed_last_error = str(payload["last_error"] or "")
+        observed_last_error_code = str(payload["last_error_code"] or "")
+        observed_failure_revision = str(payload["failure_revision"] or "")
         now = time.time()
         changed = self._conn.execute(
             """
@@ -1272,10 +1378,29 @@ class ScanStateStore:
                 last_error_code=?,
                 retry_strategy='auto_same_pipeline',
                 failure_revision=?
-            WHERE path=? AND status='failed_retry'
+            WHERE path=?
+              AND status='failed_retry'
+              AND mtime_ns=?
+              AND last_error=?
+              AND last_error_code=?
+              AND failure_revision=?
             """,
-            (now, code, revision, normalized_path),
+            (
+                now,
+                code,
+                revision,
+                normalized_path,
+                normalized_expected_mtime_ns,
+                observed_last_error,
+                observed_last_error_code,
+                observed_failure_revision,
+            ),
         ).rowcount
+        try:
+            if Path(normalized_path).stat().st_mtime_ns != normalized_expected_mtime_ns:
+                raise ValueError("exact retry media identity changed during queue transition")
+        except OSError as exc:
+            raise ValueError("exact retry media disappeared during queue transition") from exc
         if changed:
             self.update_ai_job_stage(
                 path,
@@ -1423,6 +1548,47 @@ class ScanStateStore:
             (now, _queue_path(path)),
         )
         self.update_ai_job_stage(path, "paused", "paused", "Manual pause")
+
+    def pause_exact_queued_ai_queue_candidate(
+        self,
+        path: Path,
+        *,
+        expected_failure_revision: str,
+        expected_failure_code: str,
+        expected_media_mtime_ns: int,
+    ) -> bool:
+        """Contain one stale canary row only while its persisted identity is exact."""
+
+        revision = str(expected_failure_revision or "").strip()
+        code = str(expected_failure_code or "").strip().casefold()
+        if isinstance(expected_media_mtime_ns, bool):
+            return False
+        try:
+            mtime_ns = int(expected_media_mtime_ns)
+        except (TypeError, ValueError):
+            return False
+        if not re.fullmatch(r"[0-9a-f]{24}", revision) or not code or mtime_ns <= 0:
+            return False
+        now = time.time()
+        changed = self._conn.execute(
+            """
+            UPDATE ai_candidate_queue
+            SET status='paused', source='canary_binding_changed',
+                running_at=0, next_retry_at=0, updated_at=?
+            WHERE path=? AND status='queued' AND mtime_ns=?
+              AND failure_revision=? AND last_error_code=?
+            """,
+            (now, _queue_path(path), mtime_ns, revision, code),
+        ).rowcount
+        if int(changed or 0) == 1:
+            self.update_ai_job_stage(
+                path,
+                "paused",
+                "paused",
+                "Exact canary target binding changed before claim",
+            )
+            return True
+        return False
 
     def skip_ai_queue_candidate(self, path: Path) -> None:
         now = time.time()
@@ -1903,6 +2069,7 @@ class ScanStateStore:
         oldest_first: bool = False,
         now: float | None = None,
         acceptance_targets: Sequence[AcceptanceQueueTarget] | None = None,
+        exact_target: Path | None = None,
     ) -> list[Path]:
         """Return queued work plus only provenance-backed due retries.
 
@@ -1922,11 +2089,25 @@ class ScanStateStore:
             return self._iter_acceptance_queue_candidates(
                 acceptance_targets,
                 observed_at=observed_at,
+                exact_target=exact_target,
             )
 
         added_direction = "ASC" if oldest_first else "DESC"
         retry_strategies = tuple(sorted(AI_QUEUE_AUTOMATIC_RETRY_STRATEGIES))
         retry_placeholders = ", ".join("?" for _item in retry_strategies)
+        normalized_exact_target = (
+            _queue_path(exact_target) if exact_target is not None else None
+        )
+        exact_target_sql = (
+            " AND q.path = ?" if normalized_exact_target is not None else ""
+        )
+        parameters: list[Any] = [
+            observed_at,
+            *retry_strategies,
+            AI_QUEUE_RETRY_ATTEMPT_LINK_MAX_SKEW_SECONDS,
+        ]
+        if normalized_exact_target is not None:
+            parameters.append(normalized_exact_target)
         rows = self._conn.execute(
             f"""
             SELECT q.path
@@ -1939,8 +2120,9 @@ class ScanStateStore:
             ) deadline
               ON deadline.canonical_path = q.path
              AND deadline.media_mtime_ns = q.mtime_ns
-            WHERE q.status = 'queued'
-               OR (
+            WHERE (
+                    q.status = 'queued'
+                 OR (
                     q.status = 'failed_retry'
                     AND q.next_retry_at <= ?
                     AND q.last_error_at > 0
@@ -1959,7 +2141,9 @@ class ScanStateStore:
                           AND a.finished_at >= q.last_error_at
                           AND a.finished_at <= q.last_error_at + ?
                     )
-               )
+                 )
+            )
+            {exact_target_sql}
             ORDER BY
                 CASE WHEN q.source = 'manual_priority' THEN 1 ELSE 0 END DESC,
                 COALESCE(q.force_ai, 0) DESC,
@@ -1971,11 +2155,7 @@ class ScanStateStore:
                 q.mtime_ns {added_direction},
                 q.path COLLATE NOCASE ASC
             """,
-            (
-                observed_at,
-                *retry_strategies,
-                AI_QUEUE_RETRY_ATTEMPT_LINK_MAX_SKEW_SECONDS,
-            ),
+            parameters,
         ).fetchall()
         return [Path(str(row[0])) for row in rows]
 
@@ -1984,6 +2164,7 @@ class ScanStateStore:
         targets: Sequence[AcceptanceQueueTarget],
         *,
         observed_at: float,
+        exact_target: Path | None = None,
     ) -> list[Path]:
         """Return only exact open identities from the fixed 100-case lane."""
 
@@ -2007,6 +2188,20 @@ class ScanStateStore:
             )
         retry_strategies = tuple(sorted(AI_QUEUE_AUTOMATIC_RETRY_STRATEGIES))
         retry_placeholders = ", ".join("?" for _item in retry_strategies)
+        normalized_exact_target = (
+            _queue_path(exact_target) if exact_target is not None else None
+        )
+        exact_target_sql = (
+            " AND q.path = ?" if normalized_exact_target is not None else ""
+        )
+        parameters: list[Any] = [
+            *target_parameters,
+            observed_at,
+            *retry_strategies,
+            AI_QUEUE_RETRY_ATTEMPT_LINK_MAX_SKEW_SECONDS,
+        ]
+        if normalized_exact_target is not None:
+            parameters.append(normalized_exact_target)
         rows = self._conn.execute(
             f"""
             WITH acceptance_targets(
@@ -2026,8 +2221,9 @@ class ScanStateStore:
              AND o.media_fingerprint = t.media_fingerprint
              AND o.policy_revision = t.policy_revision
              AND o.state = 'open'
-            WHERE q.status = 'queued'
-               OR (
+            WHERE (
+                    q.status = 'queued'
+                 OR (
                     q.status = 'failed_retry'
                     AND q.next_retry_at <= ?
                     AND q.last_error_at > 0
@@ -2043,15 +2239,12 @@ class ScanStateStore:
                           AND a.finished_at >= q.last_error_at
                           AND a.finished_at <= q.last_error_at + ?
                     )
-               )
+                 )
+            )
+            {exact_target_sql}
             ORDER BY t.ordinal ASC
             """,
-            (
-                *target_parameters,
-                observed_at,
-                *retry_strategies,
-                AI_QUEUE_RETRY_ATTEMPT_LINK_MAX_SKEW_SECONDS,
-            ),
+            parameters,
         ).fetchall()
         return [Path(str(row[0])) for row in rows]
 
@@ -2351,6 +2544,17 @@ class ScanStateStore:
             f"SELECT {', '.join(_AI_DELIVERY_ATTEMPT_FIELDS)} "
             "FROM ai_delivery_attempts WHERE attempt_id=?",
             (str(attempt_id),),
+        ).fetchone()
+        return _ai_delivery_attempt_dict(row) if row is not None else None
+
+    def latest_ai_delivery_attempt(self, obligation_id: str) -> dict[str, Any] | None:
+        """Return the newest durable attempt for one delivery obligation."""
+
+        row = self._conn.execute(
+            f"SELECT {', '.join(_AI_DELIVERY_ATTEMPT_FIELDS)} "
+            "FROM ai_delivery_attempts WHERE obligation_id=? "
+            "ORDER BY attempt_number DESC LIMIT 1",
+            (str(obligation_id),),
         ).fetchone()
         return _ai_delivery_attempt_dict(row) if row is not None else None
 

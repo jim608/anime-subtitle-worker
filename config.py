@@ -122,6 +122,7 @@ class AppConfig:
     scanner_state_path: str = "scanner_state.sqlite3"
     scanner_recent_first: bool = True
     scanner_queue_enabled: bool = True
+    ai_canary_once_enabled: bool = False
     acceptance_queue_lane_enabled: bool = False
     acceptance_queue_lane_plan_path: str = "acceptance/plan.json"
     acceptance_fault_execution_enabled: bool = False
@@ -765,6 +766,7 @@ def load_config(config_path: str | Path) -> AppConfig:
         scanner_state_path=_as_optional_str(raw, "scanner_state_path", "scanner_state.sqlite3"),
         scanner_recent_first=_optional_bool(raw, "scanner_recent_first", True),
         scanner_queue_enabled=_optional_bool(raw, "scanner_queue_enabled", True),
+        ai_canary_once_enabled=_optional_bool(raw, "ai_canary_once_enabled", False),
         acceptance_queue_lane_enabled=_optional_bool(
             raw,
             "acceptance_queue_lane_enabled",
@@ -1929,6 +1931,14 @@ def _validate_config(config: AppConfig) -> None:
     ):
         raise ConfigError(
             "acceptance_queue_lane_enabled requires scanner_cache_enabled and scanner_queue_enabled."
+        )
+    if config.ai_canary_once_enabled and (
+        not config.scanner_cache_enabled
+        or not config.scanner_queue_enabled
+        or config.max_concurrent_videos != 1
+    ):
+        raise ConfigError(
+            "ai_canary_once_enabled requires scanner cache/queue and exactly one video lane."
         )
     if config.acceptance_fault_execution_enabled:
         if not config.acceptance_queue_lane_enabled:

@@ -659,6 +659,7 @@ class VideoScanner:
         self,
         max_candidates: int | None = None,
         *,
+        exact_target: Path | None = None,
         _corruption_recovery_attempted: bool = False,
         _transient_recovery_attempted: bool = False,
     ) -> list[Path]:
@@ -667,7 +668,10 @@ class VideoScanner:
         database_error: sqlite3.DatabaseError | None = None
         videos: list[Path] = []
         try:
-            videos = self._queued_ai_candidates(max_candidates=max_candidates)
+            videos = self._queued_ai_candidates(
+                max_candidates=max_candidates,
+                exact_target=exact_target,
+            )
         except sqlite3.DatabaseError as exc:
             database_error = exc
         finally:
@@ -706,6 +710,7 @@ class VideoScanner:
                     time.sleep(0.25)
                     return self.queued_candidates(
                         max_candidates=max_candidates,
+                        exact_target=exact_target,
                         _corruption_recovery_attempted=_corruption_recovery_attempted,
                         _transient_recovery_attempted=True,
                     )
@@ -1189,7 +1194,12 @@ class VideoScanner:
             self._last_ledger_backfill_warning_signature = ""
         return dict(result)
 
-    def _queued_ai_candidates(self, max_candidates: int | None = None) -> list[Path]:
+    def _queued_ai_candidates(
+        self,
+        max_candidates: int | None = None,
+        *,
+        exact_target: Path | None = None,
+    ) -> list[Path]:
         state = self._state_store()
         if state is None:
             return []
@@ -1240,6 +1250,7 @@ class VideoScanner:
             acceptance_targets=(
                 acceptance_lane.targets if acceptance_lane is not None else None
             ),
+            exact_target=exact_target,
         ):
             if not video.exists() or video.suffix.lower() not in set(self.config.video_extensions):
                 if state.remove_ai_queue_candidate(video, mark_inventory_dirty=True):

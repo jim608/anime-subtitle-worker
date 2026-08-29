@@ -1323,6 +1323,52 @@ class VideoScannerTest(unittest.TestCase):
             with patch.object(scanner, "scan_all", side_effect=AssertionError("library scan must not run")):
                 self.assertEqual(scanner.queued_candidates(max_candidates=1), [video.resolve()])
 
+    def test_queued_candidates_exact_target_never_returns_neighbor(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            neighbor = root / "Neighbor S01E01.mkv"
+            target = root / "Target S01E01.mkv"
+            missing = root / "Missing S01E01.mkv"
+            neighbor.write_bytes(b"neighbor")
+            target.write_bytes(b"target")
+            config = _config(root, scanner_queue_enabled=True)
+            state = ScanStateStore.from_config(config)
+            try:
+                state.upsert_ai_queue_candidate(
+                    neighbor,
+                    neighbor.stat().st_mtime_ns,
+                    added_at=2000.0,
+                )
+                state.upsert_ai_queue_candidate(
+                    target,
+                    target.stat().st_mtime_ns,
+                    added_at=1000.0,
+                )
+                state.commit()
+            finally:
+                state.close()
+
+            scanner = VideoScanner(config, _logger())
+            self.assertEqual(
+                scanner.queued_candidates(max_candidates=1, exact_target=target),
+                [target.resolve()],
+            )
+            self.assertEqual(
+                scanner.queued_candidates(max_candidates=1, exact_target=missing),
+                [],
+            )
+
+            state = ScanStateStore.from_config(config)
+            try:
+                state.mark_ai_queue_done(target)
+                state.commit()
+            finally:
+                state.close()
+            self.assertEqual(
+                scanner.queued_candidates(max_candidates=1, exact_target=target),
+                [],
+            )
+
     def test_queue_fairness_periodically_selects_oldest_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

@@ -48,10 +48,12 @@ class ScanStateStoreQueueTest(unittest.TestCase):
                             obligation_id=str(identity["obligation_id"]),
                             source_sha256=f"{ordinal:064x}",
                         )
-                    )
+                )
 
                 allowed = targets[0]
                 allowed_path = Path(allowed.canonical_path)
+                alternate = targets[1]
+                alternate_path = Path(alternate.canonical_path)
                 store.upsert_ai_queue_candidate(
                     allowed_path,
                     allowed.media_mtime_ns,
@@ -64,13 +66,39 @@ class ScanStateStoreQueueTest(unittest.TestCase):
                     policy_revision=allowed.policy_revision,
                     obligation_id=allowed.obligation_id,
                 )
+                store.upsert_ai_queue_candidate(
+                    alternate_path,
+                    alternate.media_mtime_ns,
+                    source="fs_event",
+                )
+                store.ensure_ai_delivery_obligation(
+                    alternate_path,
+                    media_size=alternate.media_size,
+                    media_mtime_ns=alternate.media_mtime_ns,
+                    policy_revision=alternate.policy_revision,
+                    obligation_id=alternate.obligation_id,
+                )
                 backlog = root / "historical-backlog.mkv"
                 store.upsert_ai_queue_candidate(backlog, 999, source="scan")
                 store.commit()
 
                 self.assertEqual(
                     store.iter_ai_queue_candidates(acceptance_targets=targets),
-                    [allowed_path.resolve()],
+                    [allowed_path.resolve(), alternate_path.resolve()],
+                )
+                self.assertEqual(
+                    store.iter_ai_queue_candidates(
+                        acceptance_targets=targets,
+                        exact_target=alternate_path,
+                    ),
+                    [alternate_path.resolve()],
+                )
+                self.assertEqual(
+                    store.iter_ai_queue_candidates(
+                        acceptance_targets=targets,
+                        exact_target=backlog,
+                    ),
+                    [],
                 )
                 store.mark_ai_queue_running(
                     allowed_path,
@@ -83,6 +111,7 @@ class ScanStateStoreQueueTest(unittest.TestCase):
                     ).fetchall()
                 )
                 self.assertEqual(statuses[str(allowed_path.resolve())], "running")
+                self.assertEqual(statuses[str(alternate_path.resolve())], "queued")
                 self.assertEqual(statuses[str(backlog.resolve())], "queued")
 
                 with self.assertRaisesRegex(ValueError, "exact, open, claimable"):
@@ -105,6 +134,31 @@ class ScanStateStoreQueueTest(unittest.TestCase):
                 )
                 self.assertEqual(statuses[str(allowed_path.resolve())], "queued")
                 self.assertEqual(statuses[str(backlog.resolve())], "running")
+            finally:
+                store.close()
+
+    def test_exact_target_queue_selection_never_falls_back(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = ScanStateStore(root / "state.sqlite3")
+            neighbor = root / "neighbor.mkv"
+            target = root / "target.mkv"
+            missing = root / "missing.mkv"
+            try:
+                store.upsert_ai_queue_candidate(neighbor, 1, added_at=2000.0)
+                store.upsert_ai_queue_candidate(target, 2, added_at=1000.0)
+                store.commit()
+
+                self.assertEqual(
+                    store.iter_ai_queue_candidates(exact_target=target),
+                    [target.resolve()],
+                )
+                self.assertEqual(store.iter_ai_queue_candidates(exact_target=missing), [])
+
+                store.mark_ai_queue_done(target)
+                store.commit()
+                self.assertEqual(store.iter_ai_queue_candidates(exact_target=target), [])
+                self.assertEqual(store.iter_ai_queue_candidates(), [neighbor.resolve()])
             finally:
                 store.close()
 
@@ -529,8 +583,10 @@ class ScanStateStoreQueueTest(unittest.TestCase):
             root = Path(temp_dir)
             store = ScanStateStore(root / "state.sqlite3")
             video = root / "Anime S01E01.mkv"
+            video.write_bytes(b"media")
+            media_mtime_ns = video.stat().st_mtime_ns
             try:
-                store.upsert_ai_queue_candidate(video, 123, source="scan")
+                store.upsert_ai_queue_candidate(video, media_mtime_ns, source="scan")
                 store.mark_ai_queue_failed(
                     video,
                     "CUDA out of memory",
@@ -545,12 +601,32 @@ class ScanStateStoreQueueTest(unittest.TestCase):
                     store.queue_failed_retry_preserving_budget(
                         video,
                         expected_failure_revision="stale-revision",
+                        expected_failure_code=candidate["last_error_code"],
+                        expected_media_mtime_ns=media_mtime_ns,
+                    )
+                )
+                self.assertFalse(
+                    store.queue_failed_retry_preserving_budget(
+                        video,
+                        expected_failure_revision=candidate["failure_revision"],
+                        expected_failure_code="transient_timeout",
+                        expected_media_mtime_ns=media_mtime_ns,
+                    )
+                )
+                self.assertFalse(
+                    store.queue_failed_retry_preserving_budget(
+                        video,
+                        expected_failure_revision=candidate["failure_revision"],
+                        expected_failure_code=candidate["last_error_code"],
+                        expected_media_mtime_ns=media_mtime_ns + 1,
                     )
                 )
                 self.assertTrue(
                     store.queue_failed_retry_preserving_budget(
                         video,
                         expected_failure_revision=candidate["failure_revision"],
+                        expected_failure_code=candidate["last_error_code"],
+                        expected_media_mtime_ns=media_mtime_ns,
                     )
                 )
                 store.commit()
@@ -575,6 +651,200 @@ class ScanStateStoreQueueTest(unittest.TestCase):
                         candidate["failure_revision"],
                     ),
                 )
+            finally:
+                store.close()
+
+    def test_safe_sweep_queue_cas_does_not_overwrite_concurrent_failure_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            database = root / "state.sqlite3"
+            store = ScanStateStore(database)
+            video = root / "Anime S01E01.mkv"
+            video.write_bytes(b"media")
+            media_mtime_ns = video.stat().st_mtime_ns
+            original_connection = store._conn
+            interloper = sqlite3.connect(database)
+            try:
+                store.upsert_ai_queue_candidate(video, media_mtime_ns, source="scan")
+                store.mark_ai_queue_failed(
+                    video,
+                    "CUDA out of memory",
+                    retry_after_seconds=60,
+                    error_code="transient_oom",
+                    retry_strategy="same_pipeline",
+                )
+                store.commit()
+                candidate = store.failed_retry_candidates(limit=1)[0]
+
+                class InterleavingConnection:
+                    def __init__(self) -> None:
+                        self.mutated = False
+
+                    def execute(self, sql, parameters=()):
+                        if not self.mutated and "SET status='queued'" in str(sql):
+                            self.mutated = True
+                            interloper.execute(
+                                """
+                                UPDATE ai_candidate_queue
+                                SET last_error='new timeout',
+                                    last_error_code='transient_timeout',
+                                    failure_revision=?
+                                WHERE path=?
+                                """,
+                                ("f" * 24, str(video.resolve())),
+                            )
+                            interloper.commit()
+                        return original_connection.execute(sql, parameters)
+
+                    def __getattr__(self, name):
+                        return getattr(original_connection, name)
+
+                store._conn = InterleavingConnection()
+                self.assertFalse(
+                    store.queue_failed_retry_preserving_budget(
+                        video,
+                        expected_failure_revision=candidate["failure_revision"],
+                        expected_failure_code=candidate["last_error_code"],
+                        expected_media_mtime_ns=media_mtime_ns,
+                    )
+                )
+                store.rollback()
+                store._conn = original_connection
+
+                snapshot = store.ai_queue_candidate_snapshot(video)
+                self.assertEqual(snapshot["status"], "failed_retry")
+                self.assertEqual(snapshot["last_error_code"], "transient_timeout")
+                self.assertEqual(snapshot["failure_revision"], "f" * 24)
+            finally:
+                store._conn = original_connection
+                interloper.close()
+                store.close()
+
+    def test_exact_canary_claim_requires_queued_failure_and_current_media_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = ScanStateStore(root / "state.sqlite3")
+            video = root / "Anime S01E01.mkv"
+            video.write_bytes(b"media")
+            media_mtime_ns = video.stat().st_mtime_ns
+            try:
+                store.upsert_ai_queue_candidate(video, media_mtime_ns, source="scan")
+                store.mark_ai_queue_failed(
+                    video,
+                    "CUDA out of memory",
+                    retry_after_seconds=60,
+                    error_code="transient_oom",
+                    retry_strategy="same_pipeline",
+                )
+                store.commit()
+                candidate = store.failed_retry_candidates(limit=1)[0]
+                self.assertTrue(
+                    store.queue_failed_retry_preserving_budget(
+                        video,
+                        expected_failure_revision=candidate["failure_revision"],
+                        expected_failure_code=candidate["last_error_code"],
+                        expected_media_mtime_ns=media_mtime_ns,
+                    )
+                )
+                store.commit()
+
+                stale_claims = (
+                    {
+                        "expected_failure_revision": "f" * 24,
+                        "expected_failure_code": candidate["last_error_code"],
+                        "expected_media_mtime_ns": media_mtime_ns,
+                    },
+                    {
+                        "expected_failure_revision": candidate["failure_revision"],
+                        "expected_failure_code": "transient_timeout",
+                        "expected_media_mtime_ns": media_mtime_ns,
+                    },
+                    {
+                        "expected_failure_revision": candidate["failure_revision"],
+                        "expected_failure_code": candidate["last_error_code"],
+                        "expected_media_mtime_ns": media_mtime_ns + 1,
+                    },
+                )
+                for expected in stale_claims:
+                    with self.subTest(expected=expected), self.assertRaises(ValueError):
+                        store.mark_ai_queue_running(video, **expected)
+                    store.rollback()
+                    self.assertEqual(
+                        store.ai_queue_candidate_snapshot(video)["status"],
+                        "queued",
+                    )
+
+                changed_mtime_ns = media_mtime_ns + 2_000_000_000
+                os.utime(video, ns=(changed_mtime_ns, changed_mtime_ns))
+                with self.assertRaisesRegex(ValueError, "media identity changed"):
+                    store.mark_ai_queue_running(
+                        video,
+                        expected_failure_revision=candidate["failure_revision"],
+                        expected_failure_code=candidate["last_error_code"],
+                        expected_media_mtime_ns=media_mtime_ns,
+                    )
+                os.utime(video, ns=(media_mtime_ns, media_mtime_ns))
+
+                store.mark_ai_queue_running(
+                    video,
+                    expected_failure_revision=candidate["failure_revision"],
+                    expected_failure_code=candidate["last_error_code"],
+                    expected_media_mtime_ns=media_mtime_ns,
+                )
+                store.commit()
+                snapshot = store.ai_queue_candidate_snapshot(video)
+                self.assertEqual(snapshot["status"], "running")
+                self.assertEqual(snapshot["attempts"], 1)
+            finally:
+                store.close()
+
+    def test_exact_canary_containment_pauses_only_the_matching_queued_row(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = ScanStateStore(root / "state.sqlite3")
+            video = root / "Anime S01E01.mkv"
+            video.write_bytes(b"media")
+            media_mtime_ns = video.stat().st_mtime_ns
+            try:
+                store.upsert_ai_queue_candidate(video, media_mtime_ns, source="scan")
+                store.mark_ai_queue_failed(
+                    video,
+                    "CUDA out of memory",
+                    retry_after_seconds=60,
+                    error_code="transient_oom",
+                    retry_strategy="same_pipeline",
+                )
+                store.commit()
+                candidate = store.failed_retry_candidates(limit=1)[0]
+                self.assertTrue(
+                    store.queue_failed_retry_preserving_budget(
+                        video,
+                        expected_failure_revision=candidate["failure_revision"],
+                        expected_failure_code=candidate["last_error_code"],
+                        expected_media_mtime_ns=media_mtime_ns,
+                    )
+                )
+                store.commit()
+
+                self.assertFalse(
+                    store.pause_exact_queued_ai_queue_candidate(
+                        video,
+                        expected_failure_revision="f" * 24,
+                        expected_failure_code=candidate["last_error_code"],
+                        expected_media_mtime_ns=media_mtime_ns,
+                    )
+                )
+                self.assertEqual(store.ai_queue_candidate_snapshot(video)["status"], "queued")
+                self.assertTrue(
+                    store.pause_exact_queued_ai_queue_candidate(
+                        video,
+                        expected_failure_revision=candidate["failure_revision"],
+                        expected_failure_code=candidate["last_error_code"],
+                        expected_media_mtime_ns=media_mtime_ns,
+                    )
+                )
+                store.commit()
+                self.assertEqual(store.ai_queue_candidate_snapshot(video)["status"], "paused")
             finally:
                 store.close()
 
@@ -1182,6 +1452,42 @@ class ScanStateStoreQueueTest(unittest.TestCase):
                 )
                 self.assertEqual(rows[str(completed.resolve())], "queued")
                 self.assertEqual(rows[str(interrupted.resolve())], "queued")
+            finally:
+                store.close()
+
+    def test_latest_ai_delivery_attempt_returns_highest_attempt_number(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = ScanStateStore(root / "state.sqlite3")
+            video = root / "Attempted S01E01.mkv"
+            video.write_bytes(b"media")
+            try:
+                stat = video.stat()
+                obligation = store.ensure_ai_delivery_obligation(
+                    video,
+                    media_size=stat.st_size,
+                    media_mtime_ns=stat.st_mtime_ns,
+                    policy_revision="policy-v1",
+                )
+                first = store.begin_ai_delivery_attempt(
+                    obligation["obligation_id"],
+                    started_at=1000.0,
+                )
+                store.finish_ai_delivery_attempt(
+                    first["attempt_id"],
+                    status="retryable_failure",
+                    finished_at=1100.0,
+                )
+                second = store.begin_ai_delivery_attempt(
+                    obligation["obligation_id"],
+                    started_at=1200.0,
+                )
+
+                latest = store.latest_ai_delivery_attempt(obligation["obligation_id"])
+                self.assertEqual(latest["attempt_id"], second["attempt_id"])
+                self.assertEqual(latest["attempt_number"], 2)
+                self.assertEqual(latest["status"], "running")
+                self.assertIsNone(store.latest_ai_delivery_attempt("missing-obligation"))
             finally:
                 store.close()
 

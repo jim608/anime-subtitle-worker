@@ -40,6 +40,7 @@ AI_SCHEDULER_WAKE_EVENT = threading.Event()
 _AI_REVIEW_REMEDIATION_HANDOFF_LOCK = threading.RLock()
 _AI_REVIEW_REMEDIATION_LOGGED_RESERVATION: tuple[str, str] | None = None
 _CONTROL_COMMAND_RECONCILE_INTERVAL_SECONDS = 60.0
+_AI_CANARY_ONCE_STRATEGY_VERSION = "canary-once-v1"
 
 
 def main() -> int:
@@ -325,7 +326,28 @@ def _scan_and_process(
     queue_only: bool = False,
     shutdown_event: threading.Event | None = None,
 ) -> int:
+    from control_state import auto_remediation_claim_guard
+
     acceptance_lane = load_acceptance_queue_lane(worker.config)
+    canary_campaign = _active_ai_canary_campaign(
+        worker.config,
+        running_only=True,
+    )
+    canary_binding = None
+    if canary_campaign is not None:
+        try:
+            canary_binding = _validated_active_ai_canary_binding(
+                worker.config,
+                canary_campaign,
+            )
+        except RuntimeError as exc:
+            # The control loop owns terminalization/containment.  Until it has
+            # recorded that result, remain isolated and claim nothing without
+            # turning an expected fail-closed drift into a watch-loop storm.
+            logger.error("Active ai.canary_once binding is not claimable: %s", exc)
+            return 0
+    if acceptance_lane is not None and canary_binding is not None:
+        raise RuntimeError("acceptance queue lane and ai.canary_once cannot run together")
     if _shutdown_requested(shutdown_event):
         update_ai_scheduler_state(
             worker.config,
@@ -348,7 +370,11 @@ def _scan_and_process(
         )
         logger.info("Deployment hold is active; no AI work will be claimed.")
         return 0
-    if _ai_queue_paused(worker.config) and acceptance_lane is None:
+    if (
+        _ai_queue_paused(worker.config)
+        and acceptance_lane is None
+        and canary_binding is None
+    ):
         update_ai_scheduler_state(
             worker.config,
             state="paused",
@@ -374,7 +400,18 @@ def _scan_and_process(
         logger=logger,
     )
     try:
-        if queue_only or acceptance_lane is not None:
+        if canary_binding is not None and bool(canary_binding.get("_claim_ready")):
+            videos = scanner.queued_candidates(
+                max_candidates=1,
+                exact_target=Path(str(canary_binding["target_path"])),
+            )
+        elif canary_binding is not None:
+            # The campaign is durable, but the control loop has not yet
+            # created its remediation item and queued the exact target (or it
+            # has already moved past the claimable state).  Never let the
+            # normal failed-retry scan race ahead of that durable handoff.
+            videos = []
+        elif queue_only or acceptance_lane is not None:
             videos = scanner.queued_candidates(max_candidates=scan_limit)
         else:
             videos = scanner.scan(max_candidates=scan_limit)
@@ -410,6 +447,12 @@ def _scan_and_process(
         if skipped:
             logger.info("Skipped %s video(s) from AI fallback because Mikan official subtitle downloads are pending.", skipped)
 
+    if canary_binding is not None:
+        exact_target = Path(str(canary_binding["target_path"])).resolve()
+        videos = [video for video in videos if Path(video).resolve() == exact_target]
+        if len(videos) > 1:
+            raise RuntimeError("ai.canary_once produced more than one exact target")
+
     if max_videos is not None and max_videos > 0 and len(videos) > max_videos:
         logger.info("Limiting AI fallback batch from %s to %s video(s).", len(videos), max_videos)
         videos = videos[:max_videos]
@@ -437,6 +480,8 @@ def _scan_and_process(
         return 0
 
     max_workers = worker.config.max_concurrent_videos
+    if canary_binding is not None and max_workers != 1:
+        raise RuntimeError("ai.canary_once requires exactly one video lane")
     if bool(getattr(worker.config, "resource_admission_enabled", False)) and max_workers != 1:
         raise RuntimeError(
             "resource admission requires exactly one video lane; refusing an unplanned parallel launch"
@@ -473,7 +518,24 @@ def _scan_and_process(
                 if _shutdown_requested(shutdown_event):
                     logger.info("Shutdown requested; stopping before next queued video.")
                     break
-                if _ai_queue_paused(worker.config) and acceptance_lane is None:
+                if (
+                    canary_binding is None
+                    and _active_ai_canary_campaign(
+                        worker.config,
+                        running_only=True,
+                    )
+                    is not None
+                ):
+                    logger.info(
+                        "A durable ai.canary_once campaign started after this scan; "
+                        "leaving every previously scanned normal item unclaimed."
+                    )
+                    break
+                if (
+                    _ai_queue_paused(worker.config)
+                    and acceptance_lane is None
+                    and canary_binding is None
+                ):
                     logger.info("AI queue pause requested; current video is complete and no additional video will start.")
                     break
                 # Every candidate gets a fresh decision before either the
@@ -486,26 +548,59 @@ def _scan_and_process(
                 if plan is not None and not bool(plan.get("admitted")):
                     deferred = (Path(video), plan)
                     break
+                claim_blocked_by_control = False
                 with _AI_REVIEW_REMEDIATION_HANDOFF_LOCK:
-                    reserved_command = _active_translation_omission_line_command(
-                        worker.config
+                    expected_campaign_id = (
+                        str(canary_binding.get("_campaign_id") or "")
+                        if canary_binding is not None
+                        else ""
                     )
-                    if reserved_command is None:
-                        update_ai_scheduler_state(
-                            worker.config,
-                            state="processing",
-                            reason_code="",
-                            message="AI subtitle processing is active.",
-                            current_video=video,
-                            mark_claim=True,
-                            reset_errors=True,
-                            logger=logger,
+                    with auto_remediation_claim_guard(
+                        worker.config,
+                        expected_campaign_id=expected_campaign_id,
+                    ) as guarded_campaign:
+                        guarded_canary = _is_active_ai_canary_campaign_snapshot(
+                            guarded_campaign
                         )
-                        delivery_attempt_id = _mark_queue_running(
-                            queue_state,
-                            video,
-                            worker.config,
-                        )
+                        if canary_binding is None and (
+                            (
+                                _ai_queue_paused(worker.config)
+                                and acceptance_lane is None
+                            )
+                            or guarded_canary
+                        ):
+                            claim_blocked_by_control = True
+                            reserved_command = None
+                        elif canary_binding is not None and not guarded_canary:
+                            raise RuntimeError(
+                                "ai.canary_once campaign changed before exact queue claim"
+                            )
+                        else:
+                            reserved_command = _active_translation_omission_line_command(
+                                worker.config
+                            )
+                            if reserved_command is None:
+                                update_ai_scheduler_state(
+                                    worker.config,
+                                    state="processing",
+                                    reason_code="",
+                                    message="AI subtitle processing is active.",
+                                    current_video=video,
+                                    mark_claim=True,
+                                    reset_errors=True,
+                                    logger=logger,
+                                )
+                                delivery_attempt_id = _mark_queue_running(
+                                    queue_state,
+                                    video,
+                                    worker.config,
+                                    canary_binding=canary_binding,
+                                )
+                if claim_blocked_by_control:
+                    logger.info(
+                        "AI queue control changed before claim; leaving the scanned item untouched."
+                    )
+                    break
                 if reserved_command is not None:
                     logger.info(
                         "Yielding normal AI queue claim to automatic line remediation. "
@@ -585,42 +680,55 @@ def _scan_and_process(
                         logger.info("AI queue pause requested; running videos may finish but no additional video will start.")
                         return
                     with _AI_REVIEW_REMEDIATION_HANDOFF_LOCK:
-                        reserved_command = _active_translation_omission_line_command(
-                            worker.config
-                        )
-                        if reserved_command is not None:
-                            logger.info(
-                                "Yielding concurrent AI queue claim to automatic line remediation. "
-                                "command=%s path=%s",
-                                reserved_command.get("command_id"),
-                                reserved_command.get("target"),
+                        with auto_remediation_claim_guard(worker.config) as guarded_campaign:
+                            if (
+                                (
+                                    _ai_queue_paused(worker.config)
+                                    and acceptance_lane is None
+                                )
+                                or _is_active_ai_canary_campaign_snapshot(guarded_campaign)
+                            ):
+                                logger.info(
+                                    "AI queue control changed before concurrent claim; "
+                                    "leaving scanned items untouched."
+                                )
+                                return
+                            reserved_command = _active_translation_omission_line_command(
+                                worker.config
                             )
-                            return
-                        try:
-                            video = next(pending_videos)
-                        except StopIteration:
-                            return
-                        update_ai_scheduler_state(
-                            worker.config,
-                            state="processing",
-                            reason_code="",
-                            message="AI subtitle processing is active.",
-                            current_video=video,
-                            mark_claim=True,
-                            reset_errors=True,
-                            logger=logger,
-                        )
-                        delivery_attempt_id = _mark_queue_running(
-                            queue_state,
-                            video,
-                            worker.config,
-                        )
-                        acceptance_attempt_context = build_acceptance_attempt_context(
-                            queue_state,
-                            worker.config,
-                            video,
-                            delivery_attempt_id,
-                        )
+                            if reserved_command is not None:
+                                logger.info(
+                                    "Yielding concurrent AI queue claim to automatic line remediation. "
+                                    "command=%s path=%s",
+                                    reserved_command.get("command_id"),
+                                    reserved_command.get("target"),
+                                )
+                                return
+                            try:
+                                video = next(pending_videos)
+                            except StopIteration:
+                                return
+                            update_ai_scheduler_state(
+                                worker.config,
+                                state="processing",
+                                reason_code="",
+                                message="AI subtitle processing is active.",
+                                current_video=video,
+                                mark_claim=True,
+                                reset_errors=True,
+                                logger=logger,
+                            )
+                            delivery_attempt_id = _mark_queue_running(
+                                queue_state,
+                                video,
+                                worker.config,
+                            )
+                            acceptance_attempt_context = build_acceptance_attempt_context(
+                                queue_state,
+                                worker.config,
+                                video,
+                                delivery_attempt_id,
+                            )
                     submit_kwargs = {}
                     if acceptance_attempt_context is not None:
                         submit_kwargs["acceptance_attempt_context"] = acceptance_attempt_context
@@ -1540,10 +1648,13 @@ def _background_control_command_loop(config, logger, shutdown_event: threading.E
             )
             if command is None:
                 if not hold_active:
-                    _ensure_configured_ai_failed_retry_sweep(config, logger)
+                    active_canary = _active_ai_canary_campaign(config)
+                    if active_canary is None:
+                        _ensure_configured_ai_failed_retry_sweep(config, logger)
                     _advance_ai_failed_retry_sweep(config, logger)
-                    _advance_ai_quality_review_autopilot(config, logger)
-                    _advance_target_review_autopilot(config, logger)
+                    if active_canary is None:
+                        _advance_ai_quality_review_autopilot(config, logger)
+                        _advance_target_review_autopilot(config, logger)
                 if shutdown_event.wait(1.0):
                     break
                 continue
@@ -1600,6 +1711,85 @@ def _execute_control_command(config, logger, action: str, target: str, parameter
             "worker_pid": os.getpid(),
             "deployment_hold": _deployment_hold_active(config),
             "databases": checks,
+        }
+    if normalized == "ai.canary_once":
+        sweep_parameters = _validated_ai_canary_once_parameters(
+            config,
+            target,
+            parameters,
+        )
+        preview = _preview_ai_failed_retry_sweep(config, sweep_parameters)
+        eligible = list(preview.get("eligible_items") or [])
+        if len(eligible) != 1:
+            raise ValueError(
+                "ai.canary_once target is no longer exactly eligible: "
+                f"preview={preview.get('counters') or {}}"
+            )
+        selected = dict(eligible[0])
+        if (
+            str(Path(str(selected.get("path") or "")).resolve())
+            != str(sweep_parameters["target_path"])
+            or str(selected.get("failure_revision") or "")
+            != str(sweep_parameters["expected_failure_revision"])
+            or str(selected.get("failure_code") or "")
+            != str(sweep_parameters["expected_failure_code"])
+            or str(selected.get("strategy") or "") != "retry_preserve_budget"
+        ):
+            raise ValueError("ai.canary_once preview did not preserve the exact target binding")
+
+        from control_state import (
+            active_auto_remediation_campaign,
+            create_auto_remediation_campaign,
+        )
+        from safe_files import atomic_write_text
+
+        campaign_key = str(sweep_parameters["campaign_key"])
+        now = time.time()
+        pause_payload = json.dumps(
+            {
+                "paused": True,
+                "requested_at": time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)
+                ),
+                "updated_at": now,
+                "requested_by": "ai.canary_once",
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ) + "\n"
+
+        def publish_canary_pause() -> None:
+            atomic_write_text(_ai_control_path(config), pause_payload)
+
+        with _AI_REVIEW_REMEDIATION_HANDOFF_LOCK:
+            active_campaign = active_auto_remediation_campaign(config)
+            expected_campaign_id = "sweep_" + hashlib.sha256(
+                campaign_key.encode("utf-8")
+            ).hexdigest()[:24]
+            if active_campaign is not None and (
+                str(active_campaign.get("campaign_id") or "") != expected_campaign_id
+                or active_campaign.get("parameters") != sweep_parameters
+            ):
+                raise ValueError(
+                    "ai.canary_once requires every earlier remediation campaign to settle first"
+                )
+            campaign = create_auto_remediation_campaign(
+                config,
+                campaign_key=campaign_key,
+                parameters=sweep_parameters,
+                on_running=publish_canary_pause,
+            )
+            if str(campaign.get("state") or "") != "running":
+                raise ValueError(
+                    "ai.canary_once evidence already belongs to a terminal campaign"
+                )
+        AI_SCHEDULER_WAKE_EVENT.set()
+        return {
+            "action": normalized,
+            "target": str(sweep_parameters["target_path"]),
+            "queue_paused": True,
+            "campaign": campaign,
+            "preview": preview,
         }
     if normalized in {"ai.retry", "ai.force", "ai.pause", "ai.skip", "ai.prioritize", "ai.recover"}:
         from scan_state import ScanStateStore
@@ -1714,17 +1904,34 @@ def _execute_control_command(config, logger, action: str, target: str, parameter
                 **_preview_ai_failed_retry_sweep(config, sweep_parameters),
             }
         from control_state import (
+            active_auto_remediation_campaign,
             create_auto_remediation_campaign,
             get_auto_remediation_campaign,
+            resume_auto_remediation_campaign,
             update_auto_remediation_campaign,
         )
 
         if operation == "start":
-            campaign = create_auto_remediation_campaign(
-                config,
-                campaign_key=str(sweep_parameters["campaign_key"]),
-                parameters=sweep_parameters,
-            )
+            campaign_key = str(sweep_parameters["campaign_key"])
+            expected_campaign_id = "sweep_" + hashlib.sha256(
+                campaign_key.encode("utf-8")
+            ).hexdigest()[:24]
+            with _AI_REVIEW_REMEDIATION_HANDOFF_LOCK:
+                active_campaign = active_auto_remediation_campaign(config)
+                if active_campaign is not None and (
+                    str(active_campaign.get("campaign_id") or "") != expected_campaign_id
+                    or active_campaign.get("parameters") != sweep_parameters
+                ):
+                    raise ValueError(
+                        "only one running or paused AI remediation campaign is allowed"
+                    )
+                campaign = create_auto_remediation_campaign(
+                    config,
+                    campaign_key=campaign_key,
+                    parameters=sweep_parameters,
+                )
+                if str(campaign.get("state") or "") != "running":
+                    raise ValueError("AI remediation campaign identity is already terminal")
             return {"action": normalized, "operation": operation, "campaign": campaign}
         campaign_id = str(sweep_parameters.get("campaign_id") or "")
         campaign = get_auto_remediation_campaign(config, campaign_id)
@@ -1735,12 +1942,19 @@ def _execute_control_command(config, logger, action: str, target: str, parameter
             "resume": "running",
             "cancel": "cancelled",
         }[operation]
-        campaign = update_auto_remediation_campaign(
-            config,
-            campaign_id,
-            state=target_state,
-            next_run_at=time.time() if target_state == "running" else None,
-        )
+        if target_state == "running":
+            with _AI_REVIEW_REMEDIATION_HANDOFF_LOCK:
+                campaign = resume_auto_remediation_campaign(
+                    config,
+                    campaign_id,
+                    next_run_at=time.time(),
+                )
+        else:
+            campaign = update_auto_remediation_campaign(
+                config,
+                campaign_id,
+                state=target_state,
+            )
         return {"action": normalized, "operation": operation, "campaign": campaign}
 
     if normalized == "system.ai_retry_all_failures":
@@ -3622,6 +3836,177 @@ def _advance_target_review_autopilot(config, logger) -> bool:
     return True
 
 
+def _active_ai_canary_campaign(
+    config,
+    *,
+    running_only: bool = False,
+) -> dict[str, object] | None:
+    if not bool(getattr(config, "ai_canary_once_enabled", False)):
+        return None
+    from control_state import active_auto_remediation_campaign
+
+    campaign = active_auto_remediation_campaign(
+        config,
+        strategy_version=_AI_CANARY_ONCE_STRATEGY_VERSION,
+    )
+    if running_only and campaign is not None and str(campaign.get("state") or "") != "running":
+        return None
+    return campaign
+
+
+def _is_active_ai_canary_campaign_snapshot(
+    campaign: dict[str, object] | None,
+) -> bool:
+    if campaign is None or str(campaign.get("state") or "") not in {"running", "paused"}:
+        return False
+    parameters = campaign.get("parameters")
+    return isinstance(parameters, dict) and str(
+        parameters.get("strategy_version") or ""
+    ) == _AI_CANARY_ONCE_STRATEGY_VERSION
+
+
+def _validated_active_ai_canary_binding(
+    config,
+    campaign: dict[str, object],
+) -> dict[str, object]:
+    campaign_id = str(campaign.get("campaign_id") or "").strip()
+    if not re.fullmatch(r"sweep_[0-9a-f]{24}", campaign_id):
+        raise RuntimeError("active ai.canary_once campaign identity is invalid")
+    parameters = campaign.get("parameters")
+    if not isinstance(parameters, dict):
+        raise RuntimeError("active ai.canary_once campaign has no durable parameters")
+    if str(parameters.get("strategy_version") or "") != _AI_CANARY_ONCE_STRATEGY_VERSION:
+        raise RuntimeError("active ai.canary_once campaign has the wrong strategy")
+    target = _validated_control_target_path(
+        config,
+        str(parameters.get("target_path") or ""),
+        require_file=True,
+    )
+    revision = str(parameters.get("expected_failure_revision") or "").strip()
+    failure_code = str(parameters.get("expected_failure_code") or "").strip()
+    try:
+        expected_mtime_ns = int(parameters.get("expected_media_mtime_ns") or 0)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("active ai.canary_once media identity is invalid") from exc
+    if (
+        not re.fullmatch(r"[0-9a-f]{24}", revision)
+        or failure_code not in _AI_SWEEP_ALLOWED_FAILURE_CODES
+        or expected_mtime_ns <= 0
+    ):
+        raise RuntimeError("active ai.canary_once binding is invalid")
+    if target.stat().st_mtime_ns != expected_mtime_ns:
+        raise RuntimeError("active ai.canary_once target media identity changed")
+
+    from scan_state import ScanStateStore
+
+    state = ScanStateStore.from_config(config)
+    try:
+        snapshot = state.ai_queue_candidate_snapshot(target)
+    finally:
+        state.close()
+    if snapshot is None:
+        raise RuntimeError("active ai.canary_once target queue row disappeared")
+    queue_status = str(snapshot.get("status") or "")
+    if int(snapshot.get("mtime_ns") or 0) != expected_mtime_ns:
+        raise RuntimeError("active ai.canary_once queue binding changed")
+    # A successful delivery intentionally clears failure evidence when the
+    # row becomes done.  Continue isolating the scheduler to this campaign
+    # until the control loop records completion, without treating that
+    # expected cleanup as binding drift.
+    if queue_status != "done" and (
+        str(snapshot.get("failure_revision") or "") != revision
+        or str(snapshot.get("last_error_code") or "") != failure_code
+    ):
+        raise RuntimeError("active ai.canary_once queue binding changed")
+    binding = dict(parameters)
+    binding["_campaign_id"] = campaign_id
+    binding["_queue_status"] = queue_status
+    binding["_claim_ready"] = bool(campaign.get("current_item_id")) and queue_status == "queued"
+    return binding
+
+
+def _validated_ai_canary_once_parameters(
+    config,
+    target: str,
+    parameters: dict,
+) -> dict[str, object]:
+    if not bool(getattr(config, "ai_canary_once_enabled", False)):
+        raise ValueError("ai.canary_once is disabled")
+    if str(parameters.get("strategy_version") or "") != _AI_CANARY_ONCE_STRATEGY_VERSION:
+        raise ValueError("ai.canary_once requires the fixed canary strategy")
+    for field in ("max_items", "max_in_flight", "max_consecutive_failures"):
+        try:
+            value = int(parameters.get(field, 0))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"ai.canary_once {field} must be 1") from exc
+        if value != 1:
+            raise ValueError(f"ai.canary_once {field} must be 1")
+
+    video = _validated_control_target_path(config, target, require_file=True)
+    revision = str(parameters.get("expected_failure_revision") or "").strip()
+    if not re.fullmatch(r"[0-9a-f]{24}", revision):
+        raise ValueError("ai.canary_once requires a 24-character failure revision")
+    failure_code = str(parameters.get("expected_failure_code") or "").strip().casefold()
+    if failure_code not in _AI_SWEEP_ALLOWED_FAILURE_CODES:
+        raise ValueError("ai.canary_once failure code is not safely retryable")
+    raw_mtime_ns = parameters.get("expected_media_mtime_ns")
+    if isinstance(raw_mtime_ns, bool):
+        raise ValueError("ai.canary_once requires an exact media mtime")
+    try:
+        expected_mtime_ns = int(raw_mtime_ns or 0)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("ai.canary_once requires an exact media mtime") from exc
+    if expected_mtime_ns <= 0 or video.stat().st_mtime_ns != expected_mtime_ns:
+        raise ValueError("ai.canary_once target media identity changed")
+
+    from scan_state import ScanStateStore
+
+    state = ScanStateStore.from_config(config)
+    try:
+        snapshot = state.ai_queue_candidate_snapshot(video)
+    finally:
+        state.close()
+    max_attempts = max(1, int(getattr(config, "auto_ai_max_attempts", 3) or 3))
+    if snapshot is None or str(snapshot.get("status") or "") != "failed_retry":
+        raise ValueError("ai.canary_once target is not in failed_retry")
+    if (
+        int(snapshot.get("mtime_ns") or 0) != expected_mtime_ns
+        or str(snapshot.get("failure_revision") or "") != revision
+        or str(snapshot.get("last_error_code") or "") != failure_code
+    ):
+        raise ValueError("ai.canary_once target evidence changed")
+    if int(snapshot.get("attempts") or 0) >= max_attempts:
+        raise ValueError("ai.canary_once target exhausted its retry budget")
+
+    identity = "\x1f".join(
+        (str(video), revision, failure_code, str(expected_mtime_ns))
+    )
+    campaign_key = "canary-once:" + hashlib.sha256(
+        identity.encode("utf-8")
+    ).hexdigest()
+    _operation, normalized = _validated_ai_failed_retry_sweep_parameters(
+        {
+            "operation": "start",
+            "campaign_key": campaign_key,
+            "max_items": 1,
+            "interval_seconds": 300,
+            "min_age_seconds": 0,
+            "max_attempts": max_attempts,
+            "allowed_failure_codes": [failure_code],
+        }
+    )
+    normalized.update(
+        {
+            "target_path": str(video),
+            "expected_failure_revision": revision,
+            "expected_failure_code": failure_code,
+            "expected_media_mtime_ns": expected_mtime_ns,
+            "strategy_version": _AI_CANARY_ONCE_STRATEGY_VERSION,
+        }
+    )
+    return normalized
+
+
 def _ensure_configured_ai_failed_retry_sweep(config, logger) -> None:
     """Create the next bounded campaign only after the previous one settled."""
 
@@ -3749,6 +4134,19 @@ def _preview_ai_failed_retry_sweep(
         for value in parameters.get("allowed_failure_codes", [])
         if str(value)
     }
+    target_path = str(parameters.get("target_path") or "").strip()
+    expected_failure_revision = str(
+        parameters.get("expected_failure_revision") or ""
+    ).strip()
+    expected_failure_code = str(
+        parameters.get("expected_failure_code") or ""
+    ).strip()
+    try:
+        expected_media_mtime_ns = int(
+            parameters.get("expected_media_mtime_ns") or 0
+        )
+    except (TypeError, ValueError):
+        expected_media_mtime_ns = 0
     counters = {
         "total": 0,
         "eligible": 0,
@@ -3760,6 +4158,7 @@ def _preview_ai_failed_retry_sweep(
         "unsupported": 0,
         "missing_media": 0,
         "already_processed": 0,
+        "target_binding_changed": 0,
     }
     eligible: list[dict[str, object]] = []
     review_required_items: list[dict[str, object]] = []
@@ -3770,8 +4169,19 @@ def _preview_ai_failed_retry_sweep(
     finally:
         state.close()
     for candidate in candidates:
-        counters["total"] += 1
         path = str(candidate.get("path") or "")
+        if target_path and str(Path(path).resolve()) != target_path:
+            continue
+        counters["total"] += 1
+        if target_path and (
+            str(candidate.get("failure_revision") or "")
+            != expected_failure_revision
+            or str(candidate.get("last_error_code") or "")
+            != expected_failure_code
+            or int(candidate.get("mtime_ns") or 0) != expected_media_mtime_ns
+        ):
+            counters["target_binding_changed"] += 1
+            continue
         review = open_ai_quality_review_for_target(config, path)
         if review is not None:
             counters["review_blocked"] += 1
@@ -3923,9 +4333,270 @@ def _preview_ai_failed_retry_sweep(
     }
 
 
+def _ai_canary_runtime_binding_error(
+    parameters: dict[str, object],
+    item: dict[str, object],
+    snapshot: dict[str, object],
+) -> str:
+    """Return a fail-closed reason when an active canary identity drifts."""
+
+    try:
+        expected_mtime_ns = int(parameters.get("expected_media_mtime_ns") or 0)
+    except (TypeError, ValueError):
+        return "canary expected media identity is invalid"
+    expected_path = str(parameters.get("target_path") or "")
+    expected_revision = str(parameters.get("expected_failure_revision") or "")
+    expected_code = str(parameters.get("expected_failure_code") or "")
+    item_path = Path(str(item.get("path") or ""))
+    try:
+        snapshot_mtime_ns = int(snapshot.get("mtime_ns") or 0)
+    except (TypeError, ValueError):
+        return "canary queue media identity is invalid"
+    if (
+        not expected_path
+        or str(item_path.resolve()) != expected_path
+        or str(item.get("failure_revision") or "") != expected_revision
+    ):
+        return "canary control item identity changed"
+    if (
+        str(Path(str(snapshot.get("path") or "")).resolve()) != expected_path
+        or snapshot_mtime_ns != expected_mtime_ns
+        or str(snapshot.get("failure_revision") or "") != expected_revision
+        or str(snapshot.get("last_error_code") or "") != expected_code
+    ):
+        return "canary queue identity changed"
+    try:
+        if item_path.stat().st_mtime_ns != expected_mtime_ns:
+            return "canary media identity changed"
+    except OSError:
+        return "canary media disappeared before claim"
+    return ""
+
+
+def _verified_ai_canary_campaign_delivery(
+    config,
+    item: dict[str, object],
+    parameters: dict[str, object],
+) -> dict[str, object] | None:
+    """Prove that this canary created a new strictly verified delivery."""
+
+    if str(parameters.get("strategy_version") or "") != _AI_CANARY_ONCE_STRATEGY_VERSION:
+        return None
+    before = item.get("before")
+    if not isinstance(before, dict):
+        return None
+    path = Path(str(item.get("path") or ""))
+    try:
+        expected_mtime_ns = int(parameters.get("expected_media_mtime_ns") or 0)
+        baseline_attempt_count = int(before.get("delivery_attempt_count") or 0)
+        item_created_at = float(item.get("created_at") or 0)
+        current_mtime_ns = path.stat().st_mtime_ns
+    except (OSError, TypeError, ValueError):
+        return None
+    if (
+        expected_mtime_ns <= 0
+        or item_created_at <= 0
+        or str(path.resolve()) != str(parameters.get("target_path") or "")
+        or current_mtime_ns != expected_mtime_ns
+    ):
+        return None
+
+    from output_manifest import delivery_identity
+    from scan_state import ScanStateStore
+
+    try:
+        identity = delivery_identity(path, config)
+    except (OSError, TypeError, ValueError):
+        return None
+    media = identity.get("media")
+    if not isinstance(media, dict):
+        return None
+    obligation_id = str(identity.get("obligation_id") or "")
+    policy_revision = str(identity.get("policy_revision") or "")
+    if (
+        not obligation_id
+        or obligation_id != str(before.get("delivery_obligation_id") or "")
+        or policy_revision != str(before.get("delivery_policy_revision") or "")
+        or int(media.get("media_mtime_ns") or 0) != expected_mtime_ns
+    ):
+        return None
+
+    state = ScanStateStore.from_config(config)
+    try:
+        obligation = state.get_ai_delivery_obligation(obligation_id)
+        attempt = state.latest_ai_delivery_attempt(obligation_id)
+    finally:
+        state.close()
+    if obligation is None or attempt is None:
+        return None
+    verification = obligation.get("verification")
+    required_verification_flags = (
+        "required_outputs_complete",
+        "hashes_verified",
+        "quality_gates_passed",
+        "publication_marker_absent",
+        "media_identity_matched",
+        "policy_revision_matched",
+        "publication_semantics_verified",
+    )
+    manifest_path = str(obligation.get("manifest_path") or "")
+    if (
+        str(obligation.get("state") or "") != "succeeded"
+        or str(obligation.get("canonical_path") or "") != str(path.resolve())
+        or int(obligation.get("media_mtime_ns") or 0) != expected_mtime_ns
+        or str(obligation.get("policy_revision") or "") != policy_revision
+        or int(obligation.get("attempt_count") or 0) <= baseline_attempt_count
+        or int(attempt.get("attempt_number") or 0) != int(obligation.get("attempt_count") or 0)
+        or int(attempt.get("attempt_number") or 0) <= baseline_attempt_count
+        or str(attempt.get("status") or "") != "succeeded"
+        or float(attempt.get("started_at") or 0) < item_created_at
+        or float(attempt.get("finished_at") or 0) < float(attempt.get("started_at") or 0)
+        or float(obligation.get("verified_at") or 0) < float(attempt.get("started_at") or 0)
+        or not manifest_path
+        or not re.fullmatch(r"[0-9a-f]{64}", str(obligation.get("manifest_sha256") or ""))
+        or not isinstance(verification, dict)
+        or int(verification.get("manifest_schema_version") or 0) < 2
+        or any(verification.get(flag) is not True for flag in required_verification_flags)
+    ):
+        return None
+    evidence = _verified_ai_delivery_evidence(
+        path,
+        config,
+        obligation_id=obligation_id,
+        expected_policy_revision=policy_revision,
+        attempt_started_at=float(attempt["started_at"]),
+    )
+    if (
+        evidence is None
+        or str(evidence.get("manifest_sha256") or "")
+        != str(obligation.get("manifest_sha256") or "")
+        or str(Path(str(evidence.get("manifest_path") or "")).resolve())
+        != str(Path(manifest_path).resolve())
+    ):
+        return None
+    return {
+        "queue_status": "done",
+        "attempt_id": str(attempt.get("attempt_id") or ""),
+        "obligation_id": obligation_id,
+        "manifest_sha256": str(obligation.get("manifest_sha256") or ""),
+        "verified_at": float(obligation.get("verified_at") or 0),
+    }
+
+
+def _apply_preparing_auto_remediation_item(
+    config,
+    logger,
+    campaign: dict[str, object],
+    item: dict[str, object],
+    counters: dict[str, object],
+) -> None:
+    """Complete the scanner-DB half of a durably bound remediation item."""
+
+    from control_state import (
+        update_auto_remediation_campaign,
+        update_auto_remediation_item,
+    )
+    from scan_state import ScanStateStore
+
+    campaign_id = str(campaign.get("campaign_id") or "")
+    parameters = campaign.get("parameters") if isinstance(campaign.get("parameters"), dict) else {}
+    item_id = str(item.get("item_id") or "")
+    path = Path(str(item.get("path") or ""))
+    before = item.get("before") if isinstance(item.get("before"), dict) else {}
+    strategy = str(item.get("strategy") or "")
+    transition_error = ""
+    state = ScanStateStore.from_config(config)
+    try:
+        try:
+            if strategy == "pause_existing_review":
+                applied = state.pause_failed_retry_for_review(
+                    path,
+                    expected_failure_revision=str(item.get("failure_revision") or ""),
+                    message="Open review blocks automatic retry",
+                )
+            elif strategy == "retry_preserve_budget":
+                applied = state.queue_failed_retry_preserving_budget(
+                    path,
+                    expected_failure_revision=str(item.get("failure_revision") or ""),
+                    expected_failure_code=str(before.get("last_error_code") or ""),
+                    expected_media_mtime_ns=int(before.get("mtime_ns") or 0),
+                )
+            else:
+                raise ValueError(f"unsupported remediation strategy: {strategy}")
+            if applied:
+                state.commit()
+            else:
+                state.rollback()
+        except ValueError as exc:
+            state.rollback()
+            applied = False
+            transition_error = str(exc)
+    finally:
+        state.close()
+    if not applied:
+        error = transition_error or "failure identity or queue state changed before mutation"
+        update_auto_remediation_item(
+            config,
+            item_id,
+            status="failed",
+            error=error,
+        )
+        counters["processed"] = int(counters.get("processed") or 0) + 1
+        counters["failed"] = int(counters.get("failed") or 0) + 1
+        update_auto_remediation_campaign(
+            config,
+            campaign_id,
+            state="paused",
+            counters=counters,
+            current_item_id="",
+            last_error=error,
+        )
+        return
+    if strategy == "pause_existing_review":
+        update_auto_remediation_item(
+            config,
+            item_id,
+            status="blocked_review",
+            result={"queue_status": "paused"},
+        )
+        counters["processed"] = int(counters.get("processed") or 0) + 1
+        counters["blocked_review"] = int(counters.get("blocked_review") or 0) + 1
+        max_items = int(parameters.get("max_items") or 1)
+        finished = int(counters["processed"]) >= max_items
+        update_auto_remediation_campaign(
+            config,
+            campaign_id,
+            state="completed" if finished else "running",
+            counters=counters,
+            current_item_id="",
+            next_run_at=time.time() + int(parameters.get("interval_seconds") or 300),
+        )
+        return
+    update_auto_remediation_item(
+        config,
+        item_id,
+        status="running",
+        result={"queue_status": "queued"},
+    )
+    update_auto_remediation_campaign(
+        config,
+        campaign_id,
+        counters=counters,
+        current_item_id=item_id,
+        next_run_at=time.time() + 5,
+    )
+    logger.warning(
+        "Safety-gated AI retry sweep queued one exact item without resetting attempts. "
+        "campaign=%s item=%s path=%s",
+        campaign_id,
+        item_id,
+        path,
+    )
+
+
 def _advance_ai_failed_retry_sweep(config, logger) -> None:
     from control_state import (
-        create_auto_remediation_item,
+        create_and_bind_auto_remediation_item,
         due_auto_remediation_campaign,
         get_auto_remediation_item,
         update_auto_remediation_campaign,
@@ -3959,6 +4630,10 @@ def _advance_ai_failed_retry_sweep(config, logger) -> None:
                 last_error="current remediation item is missing",
             )
             return
+        counters["selected"] = max(
+            int(counters.get("selected") or 0),
+            int(counters.get("processed") or 0) + 1,
+        )
         state = ScanStateStore.from_config(config)
         try:
             snapshot = state.ai_queue_candidate_snapshot(Path(str(item.get("path") or "")))
@@ -3983,6 +4658,69 @@ def _advance_ai_failed_retry_sweep(config, logger) -> None:
             )
             return
         queue_status = str(snapshot.get("status") or "")
+        if (
+            queue_status in {"queued", "running"}
+            and str(parameters.get("strategy_version") or "")
+            == _AI_CANARY_ONCE_STRATEGY_VERSION
+        ):
+            binding_error = _ai_canary_runtime_binding_error(
+                parameters,
+                item,
+                snapshot,
+            )
+            if binding_error:
+                contained = False
+                if queue_status == "queued":
+                    state = ScanStateStore.from_config(config)
+                    try:
+                        contained = state.pause_exact_queued_ai_queue_candidate(
+                            Path(str(item.get("path") or "")),
+                            expected_failure_revision=str(
+                                parameters.get("expected_failure_revision") or ""
+                            ),
+                            expected_failure_code=str(
+                                parameters.get("expected_failure_code") or ""
+                            ),
+                            expected_media_mtime_ns=int(
+                                parameters.get("expected_media_mtime_ns") or 0
+                            ),
+                        )
+                        if contained:
+                            state.commit()
+                        else:
+                            state.rollback()
+                    finally:
+                        state.close()
+                error = (
+                    f"{binding_error}; queued_target_contained={str(contained).lower()}"
+                )
+                update_auto_remediation_item(
+                    config,
+                    current_item_id,
+                    status="failed",
+                    result={"queue_status": queue_status, "contained": contained},
+                    error=error,
+                )
+                counters["processed"] += 1
+                counters["failed"] += 1
+                update_auto_remediation_campaign(
+                    config,
+                    campaign_id,
+                    state="failed",
+                    counters=counters,
+                    current_item_id="",
+                    last_error=error,
+                )
+                return
+        if queue_status == "failed_retry" and str(item.get("status") or "") == "preparing":
+            _apply_preparing_auto_remediation_item(
+                config,
+                logger,
+                campaign,
+                item,
+                counters,
+            )
+            return
         if queue_status in {"queued", "running"}:
             update_auto_remediation_item(
                 config,
@@ -3998,11 +4736,42 @@ def _advance_ai_failed_retry_sweep(config, logger) -> None:
             )
             return
         if queue_status == "done":
+            result: dict[str, object] = {"queue_status": queue_status}
+            if str(parameters.get("strategy_version") or "") == _AI_CANARY_ONCE_STRATEGY_VERSION:
+                strict_result = _verified_ai_canary_campaign_delivery(
+                    config,
+                    item,
+                    parameters,
+                )
+                if strict_result is None:
+                    error = (
+                        "target reached done without a new canary-attributable "
+                        "strict manifest-v2 delivery"
+                    )
+                    update_auto_remediation_item(
+                        config,
+                        current_item_id,
+                        status="failed",
+                        result={"queue_status": queue_status},
+                        error=error,
+                    )
+                    counters["processed"] += 1
+                    counters["failed"] += 1
+                    update_auto_remediation_campaign(
+                        config,
+                        campaign_id,
+                        state="failed",
+                        counters=counters,
+                        current_item_id="",
+                        last_error=error,
+                    )
+                    return
+                result = strict_result
             update_auto_remediation_item(
                 config,
                 current_item_id,
                 status="succeeded",
-                result={"queue_status": queue_status},
+                result=result,
             )
             counters["processed"] += 1
             counters["succeeded"] += 1
@@ -4046,13 +4815,36 @@ def _advance_ai_failed_retry_sweep(config, logger) -> None:
 
     preview = _preview_ai_failed_retry_sweep(config, parameters)
     eligible = list(preview.get("eligible_items") or [])
+    target_path = str(parameters.get("target_path") or "").strip()
     if not eligible:
         update_auto_remediation_campaign(
             config,
             campaign_id,
-            state="completed",
+            state="failed" if target_path else "completed",
             counters={**counters, "last_preview": preview.get("counters") or {}},
             current_item_id="",
+            last_error=(
+                "target-bound canary is no longer exactly eligible"
+                if target_path
+                else None
+            ),
+        )
+        return
+    if target_path and (
+        len(eligible) != 1
+        or str(Path(str(eligible[0].get("path") or "")).resolve()) != target_path
+        or str(eligible[0].get("failure_revision") or "")
+        != str(parameters.get("expected_failure_revision") or "")
+        or str(eligible[0].get("failure_code") or "")
+        != str(parameters.get("expected_failure_code") or "")
+    ):
+        update_auto_remediation_campaign(
+            config,
+            campaign_id,
+            state="failed",
+            counters={**counters, "last_preview": preview.get("counters") or {}},
+            current_item_id="",
+            last_error="target-bound canary preview changed before queue mutation",
         )
         return
     selected = dict(eligible[0])
@@ -4061,93 +4853,39 @@ def _advance_ai_failed_retry_sweep(config, logger) -> None:
     state = ScanStateStore.from_config(config)
     try:
         before = state.ai_queue_candidate_snapshot(path) or {}
+        if str(parameters.get("strategy_version") or "") == _AI_CANARY_ONCE_STRATEGY_VERSION:
+            from output_manifest import delivery_identity
+
+            identity = delivery_identity(path, config)
+            obligation_id = str(identity.get("obligation_id") or "")
+            obligation = state.get_ai_delivery_obligation(obligation_id)
+            before.update(
+                {
+                    "delivery_obligation_id": obligation_id,
+                    "delivery_policy_revision": str(identity.get("policy_revision") or ""),
+                    "delivery_attempt_count": int(
+                        obligation.get("attempt_count") if obligation is not None else 0
+                    ),
+                }
+            )
     finally:
         state.close()
-    item = create_auto_remediation_item(
+    item = create_and_bind_auto_remediation_item(
         config,
         campaign_id=campaign_id,
         path=str(path),
         failure_revision=str(selected["failure_revision"]),
         strategy=str(selected["strategy"]),
         before=before,
+        next_run_at=time.time(),
     )
-    item_id = str(item.get("item_id") or "")
     counters["selected"] += 1
-    state = ScanStateStore.from_config(config)
-    try:
-        if selected["strategy"] == "pause_existing_review":
-            applied = state.pause_failed_retry_for_review(
-                path,
-                expected_failure_revision=str(selected["failure_revision"]),
-                message=f"Open review {selected.get('review_id') or '-'} blocks automatic retry",
-            )
-        else:
-            applied = state.queue_failed_retry_preserving_budget(
-                path,
-                expected_failure_revision=str(selected["failure_revision"]),
-            )
-        if applied:
-            state.commit()
-        else:
-            state.rollback()
-    finally:
-        state.close()
-    if not applied:
-        update_auto_remediation_item(
-            config,
-            item_id,
-            status="failed",
-            error="failure revision or queue state changed before mutation",
-        )
-        counters["processed"] += 1
-        counters["failed"] += 1
-        update_auto_remediation_campaign(
-            config,
-            campaign_id,
-            state="paused",
-            counters=counters,
-            current_item_id="",
-            last_error="failure revision or queue state changed before mutation",
-        )
-        return
-    if selected["strategy"] == "pause_existing_review":
-        update_auto_remediation_item(
-            config,
-            item_id,
-            status="blocked_review",
-            result={"review_id": selected.get("review_id"), "queue_status": "paused"},
-        )
-        counters["processed"] += 1
-        counters["blocked_review"] += 1
-        finished = counters["processed"] >= max_items
-        update_auto_remediation_campaign(
-            config,
-            campaign_id,
-            state="completed" if finished else "running",
-            counters=counters,
-            current_item_id="",
-            next_run_at=time.time() + interval_seconds,
-        )
-        return
-    update_auto_remediation_item(
+    _apply_preparing_auto_remediation_item(
         config,
-        item_id,
-        status="running",
-        result={"queue_status": "queued"},
-    )
-    update_auto_remediation_campaign(
-        config,
-        campaign_id,
-        counters=counters,
-        current_item_id=item_id,
-        next_run_at=time.time() + 5,
-    )
-    logger.warning(
-        "Safety-gated AI retry sweep queued one item without resetting attempts. "
-        "campaign=%s item=%s path=%s",
-        campaign_id,
-        item_id,
-        path,
+        logger,
+        campaign,
+        item,
+        counters,
     )
 
 
@@ -5594,7 +6332,13 @@ def _requeue_previous_worker_running(config, logger) -> int:
         state.close()
 
 
-def _mark_queue_running(state, video, config=None) -> str:
+def _mark_queue_running(
+    state,
+    video,
+    config=None,
+    *,
+    canary_binding: dict[str, object] | None = None,
+) -> str:
     if state is None:
         return ""
     acceptance_target = None
@@ -5612,7 +6356,24 @@ def _mark_queue_running(state, video, config=None) -> str:
     claimed: dict[str, str] = {"attempt_id": ""}
 
     def claim() -> None:
-        state.mark_ai_queue_running(video, acceptance_target=acceptance_target)
+        exact_claim: dict[str, object] = {}
+        if canary_binding is not None:
+            exact_claim = {
+                "expected_failure_revision": str(
+                    canary_binding.get("expected_failure_revision") or ""
+                ),
+                "expected_failure_code": str(
+                    canary_binding.get("expected_failure_code") or ""
+                ),
+                "expected_media_mtime_ns": int(
+                    canary_binding.get("expected_media_mtime_ns") or 0
+                ),
+            }
+        state.mark_ai_queue_running(
+            video,
+            acceptance_target=acceptance_target,
+            **exact_claim,
+        )
         if config is None:
             return
         from output_manifest import delivery_identity

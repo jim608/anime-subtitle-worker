@@ -45,7 +45,7 @@ class ResourceMainIntegrationTest(unittest.TestCase):
                     "reason_codes": ["gpu_busy"],
                 }
 
-            def claim(_state, video, _config):
+            def claim(_state, video, _config, *, canary_binding=None):
                 events.append(("claim", Path(video)))
                 return "attempt"
 

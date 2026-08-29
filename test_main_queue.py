@@ -1,6 +1,8 @@
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 import json
+import os
 import sqlite3
 import sys
 import threading
@@ -18,6 +20,593 @@ from scan_state import ScanStateStore
 
 
 class MainQueueResultTest(unittest.TestCase):
+    def test_ai_canary_once_parameters_bind_exact_failure_and_media_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Anime.mkv"
+            video.write_bytes(b"media")
+            revision = "0123456789abcdef01234567"
+            snapshot = {
+                "path": str(video),
+                "status": "failed_retry",
+                "attempts": 1,
+                "mtime_ns": video.stat().st_mtime_ns,
+                "failure_revision": revision,
+                "last_error_code": "transient_oom",
+            }
+            state = Mock()
+            state.ai_queue_candidate_snapshot.return_value = snapshot
+            config = SimpleNamespace(
+                input_path=root,
+                video_extensions=(".mkv",),
+                ai_canary_once_enabled=True,
+                auto_ai_max_attempts=3,
+            )
+            request = {
+                "expected_failure_revision": revision,
+                "expected_failure_code": "transient_oom",
+                "expected_media_mtime_ns": video.stat().st_mtime_ns,
+                "campaign_key": "api-idempotency-is-not-the-budget-identity",
+                "max_items": 1,
+                "max_in_flight": 1,
+                "max_consecutive_failures": 1,
+                "strategy_version": "canary-once-v1",
+            }
+
+            with patch("scan_state.ScanStateStore.from_config", return_value=state):
+                normalized = main_module._validated_ai_canary_once_parameters(
+                    config,
+                    str(video),
+                    request,
+                )
+                with self.assertRaisesRegex(ValueError, "evidence changed"):
+                    state.ai_queue_candidate_snapshot.return_value = {
+                        **snapshot,
+                        "failure_revision": "f" * 24,
+                    }
+                    main_module._validated_ai_canary_once_parameters(
+                        config,
+                        str(video),
+                        request,
+                    )
+
+            self.assertEqual(normalized["target_path"], str(video.resolve()))
+            self.assertEqual(normalized["expected_failure_revision"], revision)
+            self.assertEqual(normalized["expected_failure_code"], "transient_oom")
+            self.assertEqual(normalized["max_items"], 1)
+            self.assertEqual(normalized["max_in_flight"], 1)
+            self.assertEqual(normalized["max_consecutive_failures"], 1)
+            self.assertEqual(normalized["strategy_version"], "canary-once-v1")
+            self.assertTrue(str(normalized["campaign_key"]).startswith("canary-once:"))
+
+    def test_ai_canary_preview_never_falls_back_to_a_neighbor(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target = root / "Target.mkv"
+            neighbor = root / "Neighbor.mkv"
+            target.write_bytes(b"target")
+            neighbor.write_bytes(b"neighbor")
+            revision = "0123456789abcdef01234567"
+            state = Mock()
+            state.failed_retry_candidates.return_value = [
+                {
+                    "path": str(neighbor),
+                    "status": "failed_retry",
+                    "attempts": 1,
+                    "mtime_ns": neighbor.stat().st_mtime_ns,
+                    "failure_revision": "f" * 24,
+                    "last_error_code": "transient_oom",
+                    "next_retry_at": 0,
+                    "updated_at": 1,
+                },
+                {
+                    "path": str(target),
+                    "status": "failed_retry",
+                    "attempts": 1,
+                    "mtime_ns": target.stat().st_mtime_ns,
+                    "failure_revision": revision,
+                    "last_error_code": "transient_oom",
+                    "next_retry_at": 0,
+                    "updated_at": 1,
+                },
+            ]
+            parameters = {
+                "target_path": str(target.resolve()),
+                "expected_failure_revision": revision,
+                "expected_failure_code": "transient_oom",
+                "expected_media_mtime_ns": target.stat().st_mtime_ns,
+                "max_attempts": 3,
+                "min_age_seconds": 0,
+                "allowed_failure_codes": ["transient_oom"],
+            }
+            with (
+                patch("scan_state.ScanStateStore.from_config", return_value=state),
+                patch("control_state.open_ai_quality_review_for_target", return_value=None),
+                patch("control_state.processed_auto_remediation_keys", return_value=set()),
+                patch.object(main_module.time, "time", return_value=1000.0),
+            ):
+                exact = main_module._preview_ai_failed_retry_sweep(
+                    SimpleNamespace(),
+                    parameters,
+                )
+                stale = main_module._preview_ai_failed_retry_sweep(
+                    SimpleNamespace(),
+                    {**parameters, "expected_failure_revision": "e" * 24},
+                )
+
+            self.assertEqual([item["path"] for item in exact["eligible_items"]], [str(target)])
+            self.assertEqual(stale["eligible_items"], [])
+            self.assertEqual(stale["counters"]["target_binding_changed"], 1)
+
+    def test_paused_queue_scans_only_the_active_canary_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target = root / "Anime.mkv"
+            target.write_bytes(b"media")
+            scanner = Mock()
+            scanner.queued_candidates.return_value = []
+            scanner.last_database_error = ""
+            worker = Mock()
+            worker.config = SimpleNamespace(
+                work_path=root,
+                max_concurrent_videos=1,
+                scanner_cache_enabled=True,
+                scanner_queue_enabled=True,
+                ai_canary_once_enabled=True,
+            )
+            campaign = {"campaign_id": "sweep_" + "a" * 24, "state": "running"}
+            binding = {
+                "target_path": str(target.resolve()),
+                "_claim_ready": True,
+            }
+
+            with (
+                patch.object(main_module, "_active_ai_canary_campaign", return_value=campaign),
+                patch.object(main_module, "_validated_active_ai_canary_binding", return_value=binding),
+                patch.object(main_module, "_ai_queue_paused", return_value=True),
+            ):
+                processed = main_module._scan_and_process(
+                    scanner,
+                    worker,
+                    Mock(),
+                    queue_only=True,
+                )
+
+            self.assertEqual(processed, 0)
+            scanner.queued_candidates.assert_called_once_with(
+                max_candidates=1,
+                exact_target=target.resolve(),
+            )
+            scanner.scan.assert_not_called()
+            worker.process.assert_not_called()
+
+    def test_canary_waits_for_durable_item_and_accepts_done_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target = root / "Anime.mkv"
+            target.write_bytes(b"media")
+            revision = "0123456789abcdef01234567"
+            parameters = {
+                "strategy_version": "canary-once-v1",
+                "target_path": str(target.resolve()),
+                "expected_failure_revision": revision,
+                "expected_failure_code": "transient_timeout",
+                "expected_media_mtime_ns": target.stat().st_mtime_ns,
+            }
+            campaign = {
+                "campaign_id": "sweep_" + "a" * 24,
+                "state": "running",
+                "current_item_id": "",
+                "parameters": parameters,
+            }
+            state = Mock()
+            state.ai_queue_candidate_snapshot.return_value = {
+                "status": "queued",
+                "mtime_ns": target.stat().st_mtime_ns,
+                "failure_revision": revision,
+                "last_error_code": "transient_timeout",
+            }
+            config = SimpleNamespace(
+                input_path=root,
+                video_extensions=(".mkv",),
+            )
+
+            with patch("scan_state.ScanStateStore.from_config", return_value=state):
+                before_item = main_module._validated_active_ai_canary_binding(
+                    config,
+                    campaign,
+                )
+                campaign["current_item_id"] = "item_1"
+                queued = main_module._validated_active_ai_canary_binding(config, campaign)
+                state.ai_queue_candidate_snapshot.return_value = {
+                    "status": "done",
+                    "mtime_ns": target.stat().st_mtime_ns,
+                    "failure_revision": "",
+                    "last_error_code": "",
+                }
+                done = main_module._validated_active_ai_canary_binding(config, campaign)
+
+            self.assertFalse(before_item["_claim_ready"])
+            self.assertTrue(queued["_claim_ready"])
+            self.assertFalse(done["_claim_ready"])
+            self.assertEqual(done["_queue_status"], "done")
+
+    def test_canary_queue_claim_uses_the_exact_failure_identity(self) -> None:
+        state = Mock()
+        state.ensure_ai_delivery_obligation.return_value = {"obligation_id": "obligation-1"}
+        state.begin_ai_delivery_attempt.return_value = {"attempt_id": "attempt-1"}
+        video = Path("/anime/Anime.mkv")
+        binding = {
+            "expected_failure_revision": "0123456789abcdef01234567",
+            "expected_failure_code": "transient_timeout",
+            "expected_media_mtime_ns": 123,
+        }
+        identity = {
+            "obligation_id": "obligation-1",
+            "policy_revision": "policy-1",
+            "media": {
+                "media_size": 10,
+                "media_mtime_ns": 123,
+                "media_fingerprint": "fingerprint-1",
+            },
+        }
+
+        with patch("output_manifest.delivery_identity", return_value=identity):
+            attempt_id = main_module._mark_queue_running(
+                state,
+                video,
+                SimpleNamespace(),
+                canary_binding=binding,
+            )
+
+        self.assertEqual(attempt_id, "attempt-1")
+        state.mark_ai_queue_running.assert_called_once_with(
+            video,
+            acceptance_target=None,
+            expected_failure_revision="0123456789abcdef01234567",
+            expected_failure_code="transient_timeout",
+            expected_media_mtime_ns=123,
+        )
+
+    def test_canary_success_requires_a_new_strict_delivery_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Anime.mkv"
+            video.write_bytes(b"media")
+            manifest = root / "manifest.json"
+            manifest.write_text("{}", encoding="utf-8")
+            obligation_id = "aiobl_" + "a" * 64
+            policy_revision = "policy-1"
+            sha256 = "b" * 64
+            verification = {
+                "manifest_schema_version": 2,
+                "required_outputs_complete": True,
+                "hashes_verified": True,
+                "quality_gates_passed": True,
+                "publication_marker_absent": True,
+                "media_identity_matched": True,
+                "policy_revision_matched": True,
+                "publication_semantics_verified": True,
+            }
+            obligation = {
+                "obligation_id": obligation_id,
+                "canonical_path": str(video.resolve()),
+                "media_mtime_ns": video.stat().st_mtime_ns,
+                "policy_revision": policy_revision,
+                "state": "succeeded",
+                "attempt_count": 2,
+                "verified_at": 103.0,
+                "manifest_path": str(manifest),
+                "manifest_sha256": sha256,
+                "verification": verification,
+            }
+            attempt = {
+                "attempt_id": "aiatt_2",
+                "attempt_number": 2,
+                "status": "succeeded",
+                "started_at": 101.0,
+                "finished_at": 102.0,
+            }
+            state = Mock()
+            state.get_ai_delivery_obligation.return_value = obligation
+            state.latest_ai_delivery_attempt.return_value = attempt
+            identity = {
+                "obligation_id": obligation_id,
+                "policy_revision": policy_revision,
+                "media": {"media_mtime_ns": video.stat().st_mtime_ns},
+            }
+            item = {
+                "path": str(video.resolve()),
+                "created_at": 100.0,
+                "before": {
+                    "delivery_obligation_id": obligation_id,
+                    "delivery_policy_revision": policy_revision,
+                    "delivery_attempt_count": 1,
+                },
+            }
+            parameters = {
+                "strategy_version": "canary-once-v1",
+                "target_path": str(video.resolve()),
+                "expected_media_mtime_ns": video.stat().st_mtime_ns,
+            }
+            evidence = {
+                "manifest_path": str(manifest),
+                "manifest_sha256": sha256,
+            }
+
+            with (
+                patch("output_manifest.delivery_identity", return_value=identity),
+                patch("scan_state.ScanStateStore.from_config", return_value=state),
+                patch.object(
+                    main_module,
+                    "_verified_ai_delivery_evidence",
+                    return_value=evidence,
+                ),
+            ):
+                result = main_module._verified_ai_canary_campaign_delivery(
+                    SimpleNamespace(),
+                    item,
+                    parameters,
+                )
+                attempt["started_at"] = 99.0
+                stale = main_module._verified_ai_canary_campaign_delivery(
+                    SimpleNamespace(),
+                    item,
+                    parameters,
+                )
+
+            self.assertEqual(result["attempt_id"], "aiatt_2")
+            self.assertEqual(result["manifest_sha256"], sha256)
+            self.assertIsNone(stale)
+
+    def test_preparing_remediation_replays_only_the_bound_scanner_cas(self) -> None:
+        state = Mock()
+        state.queue_failed_retry_preserving_budget.return_value = True
+        campaign = {
+            "campaign_id": "sweep_" + "a" * 24,
+            "parameters": {"max_items": 1, "interval_seconds": 300},
+        }
+        item = {
+            "item_id": "sweepitem_" + "b" * 24,
+            "path": "/anime/Anime.mkv",
+            "failure_revision": "0123456789abcdef01234567",
+            "strategy": "retry_preserve_budget",
+            "before": {
+                "last_error_code": "transient_timeout",
+                "mtime_ns": 123,
+            },
+        }
+        counters = {
+            "selected": 1,
+            "processed": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "blocked_review": 0,
+        }
+
+        with (
+            patch("scan_state.ScanStateStore.from_config", return_value=state),
+            patch("control_state.update_auto_remediation_item") as update_item,
+            patch("control_state.update_auto_remediation_campaign") as update_campaign,
+        ):
+            main_module._apply_preparing_auto_remediation_item(
+                SimpleNamespace(),
+                Mock(),
+                campaign,
+                item,
+                counters,
+            )
+
+        state.queue_failed_retry_preserving_budget.assert_called_once_with(
+            Path("/anime/Anime.mkv"),
+            expected_failure_revision="0123456789abcdef01234567",
+            expected_failure_code="transient_timeout",
+            expected_media_mtime_ns=123,
+        )
+        state.commit.assert_called_once_with()
+        update_item.assert_called_once_with(
+            ANY,
+            item["item_id"],
+            status="running",
+            result={"queue_status": "queued"},
+        )
+        self.assertEqual(update_campaign.call_args.kwargs["current_item_id"], item["item_id"])
+
+    def test_active_canary_drift_is_contained_and_terminalized(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Anime.mkv"
+            video.write_bytes(b"media")
+            expected_mtime_ns = video.stat().st_mtime_ns
+            revision = "0123456789abcdef01234567"
+            campaign_id = "sweep_" + "a" * 24
+            item_id = "sweepitem_" + "b" * 24
+            parameters = {
+                "strategy_version": "canary-once-v1",
+                "target_path": str(video.resolve()),
+                "expected_failure_revision": revision,
+                "expected_failure_code": "transient_timeout",
+                "expected_media_mtime_ns": expected_mtime_ns,
+                "max_items": 1,
+                "interval_seconds": 300,
+            }
+            campaign = {
+                "campaign_id": campaign_id,
+                "current_item_id": item_id,
+                "parameters": parameters,
+                "counters": {},
+            }
+            item = {
+                "item_id": item_id,
+                "path": str(video.resolve()),
+                "failure_revision": revision,
+                "status": "running",
+            }
+            snapshot = {
+                "path": str(video.resolve()),
+                "status": "queued",
+                "mtime_ns": expected_mtime_ns,
+                "failure_revision": revision,
+                "last_error_code": "transient_timeout",
+            }
+            changed_mtime_ns = expected_mtime_ns + 2_000_000_000
+            os.utime(video, ns=(changed_mtime_ns, changed_mtime_ns))
+            state = Mock()
+            state.ai_queue_candidate_snapshot.return_value = snapshot
+            state.pause_exact_queued_ai_queue_candidate.return_value = True
+
+            with (
+                patch("control_state.due_auto_remediation_campaign", return_value=campaign),
+                patch("control_state.get_auto_remediation_item", return_value=item),
+                patch("control_state.update_auto_remediation_item") as update_item,
+                patch("control_state.update_auto_remediation_campaign") as update_campaign,
+                patch("scan_state.ScanStateStore.from_config", return_value=state),
+            ):
+                main_module._advance_ai_failed_retry_sweep(SimpleNamespace(), Mock())
+
+            state.pause_exact_queued_ai_queue_candidate.assert_called_once_with(
+                video.resolve(),
+                expected_failure_revision=revision,
+                expected_failure_code="transient_timeout",
+                expected_media_mtime_ns=expected_mtime_ns,
+            )
+            state.commit.assert_called_once_with()
+            self.assertEqual(update_item.call_args.kwargs["status"], "failed")
+            self.assertEqual(update_campaign.call_args.kwargs["state"], "failed")
+            self.assertTrue(update_campaign.call_args.kwargs["last_error"].startswith(
+                "canary media identity changed"
+            ))
+
+    def test_ai_canary_once_refuses_an_overlapping_campaign_before_pausing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target = root / "Anime.mkv"
+            target.write_bytes(b"media")
+            revision = "0123456789abcdef01234567"
+            normalized = {
+                "operation": "start",
+                "campaign_key": "canary-once:" + "a" * 64,
+                "max_items": 1,
+                "max_in_flight": 1,
+                "max_consecutive_failures": 1,
+                "strategy_version": "canary-once-v1",
+                "target_path": str(target.resolve()),
+                "expected_failure_revision": revision,
+                "expected_failure_code": "transient_timeout",
+                "expected_media_mtime_ns": target.stat().st_mtime_ns,
+            }
+            preview = {
+                "counters": {"eligible": 1},
+                "eligible_items": [{
+                    "path": str(target.resolve()),
+                    "failure_revision": revision,
+                    "failure_code": "transient_timeout",
+                    "strategy": "retry_preserve_budget",
+                }],
+            }
+            config = SimpleNamespace(work_path=root)
+
+            with (
+                patch.object(main_module, "_validated_ai_canary_once_parameters", return_value=normalized),
+                patch.object(main_module, "_preview_ai_failed_retry_sweep", return_value=preview),
+                patch("control_state.active_auto_remediation_campaign", return_value={
+                    "campaign_id": "sweep_" + "b" * 24,
+                    "parameters": {"strategy_version": "safe-sweep-v1"},
+                }),
+            ):
+                with self.assertRaisesRegex(ValueError, "earlier remediation campaign"):
+                    main_module._execute_control_command(
+                        config,
+                        Mock(),
+                        "ai.canary_once",
+                        str(target),
+                        {},
+                    )
+
+            self.assertFalse((root / "ai_control.json").exists())
+
+    def test_ai_canary_once_terminal_identity_does_not_pause_without_a_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            target = root / "Anime.mkv"
+            target.write_bytes(b"media")
+            normalized = {
+                "campaign_key": "canary-once:" + "a" * 64,
+                "target_path": str(target.resolve()),
+                "expected_failure_revision": "0123456789abcdef01234567",
+                "expected_failure_code": "transient_timeout",
+                "expected_media_mtime_ns": target.stat().st_mtime_ns,
+                "max_items": 1,
+                "max_in_flight": 1,
+                "max_consecutive_failures": 1,
+                "strategy_version": "canary-once-v1",
+            }
+            preview = {
+                "counters": {"eligible": 1},
+                "eligible_items": [{
+                    "path": str(target.resolve()),
+                    "failure_revision": normalized["expected_failure_revision"],
+                    "failure_code": "transient_timeout",
+                    "strategy": "retry_preserve_budget",
+                }],
+            }
+
+            with (
+                patch.object(
+                    main_module,
+                    "_validated_ai_canary_once_parameters",
+                    return_value=normalized,
+                ),
+                patch.object(main_module, "_preview_ai_failed_retry_sweep", return_value=preview),
+                patch("control_state.active_auto_remediation_campaign", return_value=None),
+                patch(
+                    "control_state.create_auto_remediation_campaign",
+                    return_value={"state": "cancelled"},
+                ),
+                patch("safe_files.atomic_write_text") as write_pause,
+            ):
+                with self.assertRaisesRegex(ValueError, "terminal campaign"):
+                    main_module._execute_control_command(
+                        SimpleNamespace(work_path=root),
+                        Mock(),
+                        "ai.canary_once",
+                        str(target),
+                        {},
+                    )
+
+            write_pause.assert_not_called()
+
+    def test_generic_sweep_cannot_overlap_an_active_canary(self) -> None:
+        parameters = {
+            "operation": "start",
+            "campaign_key": "configured:test",
+            "strategy_version": "safe-sweep-v1",
+        }
+        active = {
+            "campaign_id": "sweep_" + "a" * 24,
+            "state": "running",
+            "parameters": {"strategy_version": "canary-once-v1"},
+        }
+        with (
+            patch.object(
+                main_module,
+                "_validated_ai_failed_retry_sweep_parameters",
+                return_value=("start", parameters),
+            ),
+            patch("control_state.active_auto_remediation_campaign", return_value=active),
+            patch("control_state.create_auto_remediation_campaign") as create,
+        ):
+            with self.assertRaisesRegex(ValueError, "only one"):
+                main_module._execute_control_command(
+                    SimpleNamespace(),
+                    Mock(),
+                    "system.ai_failed_retry_sweep",
+                    "",
+                    {},
+                )
+
+        create.assert_not_called()
+
     def test_scan_and_process_reports_scanner_database_failure_instead_of_idle(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             work = Path(temp_dir) / "work"
@@ -1760,6 +2349,7 @@ class MainQueueResultTest(unittest.TestCase):
             class FakeWorker:
                 def __init__(self) -> None:
                     self.config = SimpleNamespace(
+                        work_path=root,
                         max_concurrent_videos=1,
                         scanner_cache_enabled=False,
                         scanner_queue_enabled=False,
@@ -1782,10 +2372,12 @@ class MainQueueResultTest(unittest.TestCase):
 
     def test_scan_and_process_can_drain_queue_without_library_scan(self) -> None:
         video = Path("queued.mkv")
+        work_path = Path(self.enterContext(tempfile.TemporaryDirectory()))
         scanner = Mock()
         scanner.queued_candidates.return_value = [video]
         worker = Mock()
         worker.config = SimpleNamespace(
+            work_path=work_path,
             max_concurrent_videos=1,
             scanner_cache_enabled=False,
             scanner_queue_enabled=False,
@@ -1962,10 +2554,12 @@ class MainQueueResultTest(unittest.TestCase):
 
     def test_auto_run_drains_existing_ai_queue_between_watch_cycles(self) -> None:
         videos = [Path("queued-1.mkv"), Path("queued-2.mkv")]
+        work_path = Path(self.enterContext(tempfile.TemporaryDirectory()))
         scanner = Mock()
         scanner.queued_candidates.side_effect = [[videos[0]], [videos[1]], []]
         worker = Mock()
         worker.config = SimpleNamespace(
+            work_path=work_path,
             max_concurrent_videos=1,
             scanner_cache_enabled=False,
             scanner_queue_enabled=False,
@@ -1994,10 +2588,12 @@ class MainQueueResultTest(unittest.TestCase):
 
     def test_parallel_mikan_redownload_does_not_block_ai_queue(self) -> None:
         video = Path("queued-while-redownload.mkv")
+        work_path = Path(self.enterContext(tempfile.TemporaryDirectory()))
         scanner = Mock()
         scanner.queued_candidates.side_effect = [[video], []]
         worker = Mock()
         worker.config = SimpleNamespace(
+            work_path=work_path,
             max_concurrent_videos=1,
             scanner_cache_enabled=False,
             scanner_queue_enabled=False,
@@ -3406,6 +4002,57 @@ class MainQueueResultTest(unittest.TestCase):
 
             self.assertEqual(processed, 0)
             queue_state.mark_ai_queue_running.assert_not_called()
+            process.assert_not_called()
+            queue_state.close.assert_called_once()
+
+    def test_normal_queue_claim_rechecks_canary_inside_the_handoff_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Anime - S01E01.mkv"
+            video.write_bytes(b"media")
+            scanner = Mock()
+            scanner.queued_candidates.return_value = [video]
+            scanner.last_database_error = ""
+            scanner.last_database_error_code = ""
+            worker = Mock()
+            worker.config = SimpleNamespace(
+                work_path=root / "work",
+                max_concurrent_videos=1,
+                resource_admission_enabled=False,
+            )
+            queue_state = Mock()
+            active_canary = {
+                "campaign_id": "sweep_" + "a" * 24,
+                "state": "running",
+                "parameters": {"strategy_version": "canary-once-v1"},
+            }
+
+            with (
+                patch.object(main_module, "_deployment_hold_active", return_value=False),
+                patch.object(main_module, "_ai_queue_paused", return_value=False),
+                patch.object(main_module, "_open_ai_queue_state", return_value=queue_state),
+                patch.object(
+                    main_module,
+                    "_active_ai_canary_campaign",
+                    side_effect=[None, None],
+                ),
+                patch(
+                    "control_state.auto_remediation_claim_guard",
+                    return_value=nullcontext(active_canary),
+                ),
+                patch.object(main_module, "_active_translation_omission_line_command") as reserved,
+                patch.object(main_module, "_process_video_with_policy") as process,
+            ):
+                processed = main_module._scan_and_process(
+                    scanner,
+                    worker,
+                    Mock(),
+                    queue_only=True,
+                )
+
+            self.assertEqual(processed, 0)
+            queue_state.mark_ai_queue_running.assert_not_called()
+            reserved.assert_not_called()
             process.assert_not_called()
             queue_state.close.assert_called_once()
 

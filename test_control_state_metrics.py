@@ -1,16 +1,22 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 import json
 from pathlib import Path
 import sqlite3
+import threading
 from types import SimpleNamespace
 import tempfile
 import unittest
 from unittest.mock import patch
 
 from control_state import (
+    active_auto_remediation_campaign,
+    auto_remediation_claim_guard,
     claim_next_command,
+    create_and_bind_auto_remediation_item,
+    create_auto_remediation_campaign,
     enqueue_command,
     finish_command,
     increment_daily_metric,
@@ -22,12 +28,301 @@ from control_state import (
     record_daily_sample,
     resolve_review_item,
     resolve_sibling_target_reviews,
+    resume_auto_remediation_campaign,
     review_autopilot_revision_attempt_allowed,
     upsert_review_item,
+    update_auto_remediation_campaign,
 )
 
 
 class ControlStateMetricsTest(unittest.TestCase):
+    def test_create_and_bind_remediation_item_is_atomic_and_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = SimpleNamespace(work_path=root, control_state_path="control_state.sqlite3")
+            campaign = create_auto_remediation_campaign(
+                config,
+                campaign_key="atomic-bind",
+                parameters={"strategy_version": "canary-once-v1"},
+            )
+            arguments = {
+                "campaign_id": campaign["campaign_id"],
+                "path": str(root / "Show - S01E01.mkv"),
+                "failure_revision": "a" * 24,
+                "strategy": "retry_preserve_budget",
+                "before": {"status": "failed_retry", "attempts": 1},
+                "next_run_at": 123.5,
+            }
+
+            item = create_and_bind_auto_remediation_item(config, **arguments)
+            repeated = create_and_bind_auto_remediation_item(
+                config,
+                **{**arguments, "next_run_at": 999.0},
+            )
+
+            self.assertEqual(item["item_id"], repeated["item_id"])
+            self.assertEqual(item["status"], "preparing")
+            with closing(sqlite3.connect(root / "control_state.sqlite3")) as connection:
+                item_count = connection.execute(
+                    "SELECT COUNT(*) FROM auto_remediation_items"
+                ).fetchone()[0]
+                current_item_id, next_run_at = connection.execute(
+                    """
+                    SELECT current_item_id, next_run_at
+                    FROM auto_remediation_campaigns
+                    WHERE campaign_id=?
+                    """,
+                    (campaign["campaign_id"],),
+                ).fetchone()
+            self.assertEqual(item_count, 1)
+            self.assertEqual(current_item_id, item["item_id"])
+            self.assertEqual(next_run_at, 123.5)
+
+    def test_create_and_bind_remediation_item_rolls_back_on_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = SimpleNamespace(work_path=root, control_state_path="control_state.sqlite3")
+            campaign = create_auto_remediation_campaign(
+                config,
+                campaign_key="atomic-rollback",
+                parameters={},
+            )
+
+            with patch("control_state._audit", side_effect=RuntimeError("audit failed")):
+                with self.assertRaisesRegex(RuntimeError, "audit failed"):
+                    create_and_bind_auto_remediation_item(
+                        config,
+                        campaign_id=campaign["campaign_id"],
+                        path=str(root / "Show - S01E02.mkv"),
+                        failure_revision="b" * 24,
+                        strategy="retry_preserve_budget",
+                        before={"status": "failed_retry"},
+                        next_run_at=456.0,
+                    )
+
+            with closing(sqlite3.connect(root / "control_state.sqlite3")) as connection:
+                item_count = connection.execute(
+                    "SELECT COUNT(*) FROM auto_remediation_items"
+                ).fetchone()[0]
+                current_item_id, next_run_at = connection.execute(
+                    """
+                    SELECT current_item_id, next_run_at
+                    FROM auto_remediation_campaigns
+                    WHERE campaign_id=?
+                    """,
+                    (campaign["campaign_id"],),
+                ).fetchone()
+            self.assertEqual(item_count, 0)
+            self.assertEqual(current_item_id, "")
+            self.assertEqual(next_run_at, campaign["next_run_at"])
+
+    def test_create_and_bind_remediation_item_requires_free_running_campaign(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = SimpleNamespace(work_path=root, control_state_path="control_state.sqlite3")
+            campaign = create_auto_remediation_campaign(
+                config,
+                campaign_key="atomic-guards",
+                parameters={},
+            )
+            arguments = {
+                "campaign_id": campaign["campaign_id"],
+                "path": str(root / "Show - S01E03.mkv"),
+                "failure_revision": "c" * 24,
+                "strategy": "retry_preserve_budget",
+                "before": {"status": "failed_retry"},
+                "next_run_at": 789.0,
+            }
+
+            update_auto_remediation_campaign(
+                config,
+                campaign["campaign_id"],
+                state="paused",
+            )
+            with self.assertRaisesRegex(ValueError, "running campaign"):
+                create_and_bind_auto_remediation_item(config, **arguments)
+            resume_auto_remediation_campaign(
+                config,
+                campaign["campaign_id"],
+            )
+            update_auto_remediation_campaign(
+                config,
+                campaign["campaign_id"],
+                current_item_id="sweepitem_other",
+            )
+            with self.assertRaisesRegex(ValueError, "already has a current item"):
+                create_and_bind_auto_remediation_item(config, **arguments)
+
+            with closing(sqlite3.connect(root / "control_state.sqlite3")) as connection:
+                item_count = connection.execute(
+                    "SELECT COUNT(*) FROM auto_remediation_items"
+                ).fetchone()[0]
+            self.assertEqual(item_count, 0)
+
+    def test_active_remediation_campaign_is_strategy_bound_and_includes_paused(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = SimpleNamespace(work_path=root, control_state_path="control_state.sqlite3")
+            canary = create_auto_remediation_campaign(
+                config,
+                campaign_key="canary",
+                parameters={"strategy_version": "canary-once-v1"},
+            )
+
+            self.assertEqual(
+                active_auto_remediation_campaign(
+                    config,
+                    strategy_version="canary-once-v1",
+                )["campaign_id"],
+                canary["campaign_id"],
+            )
+            update_auto_remediation_campaign(
+                config,
+                canary["campaign_id"],
+                state="completed",
+            )
+            ordinary = create_auto_remediation_campaign(
+                config,
+                campaign_key="ordinary",
+                parameters={"strategy_version": "safe-sweep-v1"},
+            )
+            update_auto_remediation_campaign(
+                config,
+                ordinary["campaign_id"],
+                state="paused",
+            )
+
+            self.assertIsNone(
+                active_auto_remediation_campaign(
+                    config,
+                    strategy_version="canary-once-v1",
+                )
+            )
+            self.assertEqual(
+                active_auto_remediation_campaign(config)["campaign_id"],
+                ordinary["campaign_id"],
+            )
+
+    def test_concurrent_campaign_creates_admit_only_one_active_campaign(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = SimpleNamespace(work_path=root, control_state_path="control_state.sqlite3")
+            initialize_control_state(config)
+            barrier = threading.Barrier(2)
+
+            def create(key: str) -> dict[str, object]:
+                barrier.wait()
+                return create_auto_remediation_campaign(
+                    config,
+                    campaign_key=key,
+                    parameters={"strategy_version": key},
+                )
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = [executor.submit(create, key) for key in ("race-a", "race-b")]
+                successes = []
+                failures = []
+                for future in futures:
+                    try:
+                        successes.append(future.result())
+                    except ValueError as exc:
+                        failures.append(str(exc))
+
+            self.assertEqual(len(successes), 1)
+            self.assertEqual(len(failures), 1)
+            self.assertIn("only one running or paused", failures[0])
+            with closing(sqlite3.connect(root / "control_state.sqlite3")) as connection:
+                active_count = connection.execute(
+                    """
+                    SELECT COUNT(*) FROM auto_remediation_campaigns
+                    WHERE state IN ('running', 'paused')
+                    """
+                ).fetchone()[0]
+            self.assertEqual(active_count, 1)
+
+    def test_concurrent_resume_uses_paused_state_compare_and_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = SimpleNamespace(work_path=root, control_state_path="control_state.sqlite3")
+            campaign = create_auto_remediation_campaign(
+                config,
+                campaign_key="resume-race",
+                parameters={"strategy_version": "safe-sweep-v1"},
+            )
+            update_auto_remediation_campaign(
+                config,
+                campaign["campaign_id"],
+                state="paused",
+            )
+            barrier = threading.Barrier(2)
+
+            def resume() -> dict[str, object]:
+                barrier.wait()
+                return resume_auto_remediation_campaign(
+                    config,
+                    campaign["campaign_id"],
+                    next_run_at=123.0,
+                )
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = [executor.submit(resume) for _ in range(2)]
+                successes = []
+                failures = []
+                for future in futures:
+                    try:
+                        successes.append(future.result())
+                    except ValueError as exc:
+                        failures.append(str(exc))
+
+            self.assertEqual(len(successes), 1)
+            self.assertEqual(len(failures), 1)
+            self.assertIn("only a paused", failures[0])
+            self.assertEqual(
+                active_auto_remediation_campaign(config)["state"],
+                "running",
+            )
+
+    def test_claim_guard_waits_for_campaign_pause_handoff_transaction(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = SimpleNamespace(work_path=root, control_state_path="control_state.sqlite3")
+            initialize_control_state(config)
+            callback_entered = threading.Event()
+            allow_pause_write = threading.Event()
+            claim_started = threading.Event()
+            claim_acquired = threading.Event()
+
+            def publish_pause() -> None:
+                callback_entered.set()
+                self.assertTrue(allow_pause_write.wait(2.0))
+
+            def create() -> dict[str, object]:
+                return create_auto_remediation_campaign(
+                    config,
+                    campaign_key="create-claim-race",
+                    parameters={"strategy_version": "canary-once-v1"},
+                    on_running=publish_pause,
+                )
+
+            def claim_snapshot() -> dict[str, object] | None:
+                claim_started.set()
+                with auto_remediation_claim_guard(config) as campaign:
+                    claim_acquired.set()
+                    return campaign
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                create_future = executor.submit(create)
+                self.assertTrue(callback_entered.wait(2.0))
+                claim_future = executor.submit(claim_snapshot)
+                self.assertTrue(claim_started.wait(2.0))
+                self.assertFalse(claim_acquired.wait(0.1))
+                allow_pause_write.set()
+                created = create_future.result(timeout=2.0)
+                observed = claim_future.result(timeout=2.0)
+
+            self.assertIsNotNone(observed)
+            self.assertEqual(observed["campaign_id"], created["campaign_id"])
+
     def test_daily_counts_and_samples_are_aggregated(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

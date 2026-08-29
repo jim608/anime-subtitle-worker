@@ -9,7 +9,7 @@ import re
 import sqlite3
 import threading
 import time
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from file_times import file_time_metadata
 from sqlite_safety import online_backup_before_migration, quick_check_connection
@@ -763,12 +763,31 @@ def create_auto_remediation_campaign(
     *,
     campaign_key: str,
     parameters: dict[str, Any],
+    on_running: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     initialize_control_state(config)
     now = time.time()
     campaign_id = _stable_id("sweep", str(campaign_key))
     payload = json.dumps(parameters, ensure_ascii=False, sort_keys=True)
     with control_connection(config) as connection:
+        # Serialize the active-campaign check with creation across Worker
+        # processes.  The in-process handoff lock in main.py is intentionally
+        # only an optimization; this transaction is the durable invariant.
+        connection.execute("BEGIN IMMEDIATE")
+        conflicting = connection.execute(
+            """
+            SELECT campaign_id
+            FROM auto_remediation_campaigns
+            WHERE state IN ('running', 'paused') AND campaign_id<>?
+            ORDER BY created_at, campaign_id
+            LIMIT 1
+            """,
+            (campaign_id,),
+        ).fetchone()
+        if conflicting is not None:
+            raise ValueError(
+                "only one running or paused AI remediation campaign is allowed"
+            )
         connection.execute(
             """
             INSERT INTO auto_remediation_campaigns(
@@ -787,6 +806,13 @@ def create_auto_remediation_campaign(
             raise RuntimeError("auto remediation campaign could not be created")
         if str(row["parameters_json"] or "{}") != payload:
             raise ValueError("campaign key was already used with different parameters")
+        if str(row["state"] or "") != "running":
+            raise ValueError("auto remediation campaign identity is already paused or terminal")
+        if on_running is not None:
+            # Keep the database write lock while publishing the matching queue
+            # pause.  A second Worker therefore cannot terminalize the
+            # campaign between the state check and the atomic file write.
+            on_running()
         _audit(
             connection,
             "auto_remediation_campaign_started",
@@ -795,6 +821,69 @@ def create_auto_remediation_campaign(
             parameters,
         )
     return _public_auto_remediation_campaign(row)
+
+
+def resume_auto_remediation_campaign(
+    config: Any,
+    campaign_id: str,
+    *,
+    next_run_at: float | None = None,
+) -> dict[str, Any]:
+    """Atomically resume one paused campaign without admitting a second active one."""
+
+    initialize_control_state(config)
+    normalized_id = str(campaign_id)
+    now = time.time()
+    with control_connection(config) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            "SELECT * FROM auto_remediation_campaigns WHERE campaign_id=?",
+            (normalized_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"auto remediation campaign does not exist: {normalized_id}")
+        if str(row["state"] or "") != "paused":
+            raise ValueError("only a paused AI remediation campaign can resume")
+        conflicting = connection.execute(
+            """
+            SELECT campaign_id
+            FROM auto_remediation_campaigns
+            WHERE state IN ('running', 'paused') AND campaign_id<>?
+            ORDER BY created_at, campaign_id
+            LIMIT 1
+            """,
+            (normalized_id,),
+        ).fetchone()
+        if conflicting is not None:
+            raise ValueError(
+                "another AI remediation campaign must settle before resume"
+            )
+        changed = connection.execute(
+            """
+            UPDATE auto_remediation_campaigns
+            SET state='running', next_run_at=?, updated_at=?, finished_at=0
+            WHERE campaign_id=? AND state='paused'
+            """,
+            (
+                float(next_run_at if next_run_at is not None else now),
+                now,
+                normalized_id,
+            ),
+        ).rowcount
+        if int(changed or 0) != 1:
+            raise ValueError("only a paused AI remediation campaign can resume")
+        updated = connection.execute(
+            "SELECT * FROM auto_remediation_campaigns WHERE campaign_id=?",
+            (normalized_id,),
+        ).fetchone()
+        _audit(
+            connection,
+            "auto_remediation_campaign_updated",
+            "auto_remediation_campaign",
+            normalized_id,
+            {"state": "running", "current_item_id": str(row["current_item_id"] or "")},
+        )
+    return _public_auto_remediation_campaign(updated)
 
 
 def get_auto_remediation_campaign(
@@ -822,6 +911,77 @@ def latest_auto_remediation_campaign(config: Any) -> dict[str, Any] | None:
             """
         ).fetchone()
     return _public_auto_remediation_campaign(row) if row is not None else None
+
+
+def active_auto_remediation_campaign(
+    config: Any,
+    *,
+    strategy_version: str = "",
+) -> dict[str, Any] | None:
+    """Return the newest live campaign, optionally bound to one strategy.
+
+    Paused campaigns remain live because resuming one while another campaign is
+    active could spend a second retry budget.  The optional strategy filter is
+    evaluated after decoding the persisted parameters so this remains
+    compatible with control databases created before strategy-specific
+    campaigns existed.
+    """
+
+    initialize_control_state(config)
+    normalized_strategy = str(strategy_version or "").strip()
+    with control_connection(config, readonly=True) as connection:
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM auto_remediation_campaigns
+            WHERE state IN ('running', 'paused')
+            ORDER BY created_at DESC, campaign_id DESC
+            """
+        ).fetchall()
+    for row in rows:
+        campaign = _public_auto_remediation_campaign(row)
+        parameters = campaign.get("parameters")
+        if not normalized_strategy or (
+            isinstance(parameters, dict)
+            and str(parameters.get("strategy_version") or "") == normalized_strategy
+        ):
+            return campaign
+    return None
+
+
+@contextmanager
+def auto_remediation_claim_guard(
+    config: Any,
+    *,
+    expected_campaign_id: str = "",
+) -> Iterator[dict[str, Any] | None]:
+    """Serialize a queue claim with campaign create/resume/terminal transitions."""
+
+    initialize_control_state(config)
+    normalized_expected = str(expected_campaign_id or "").strip()
+    with control_connection(config) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM auto_remediation_campaigns
+            WHERE state IN ('running', 'paused')
+            ORDER BY created_at DESC, campaign_id DESC
+            LIMIT 2
+            """
+        ).fetchall()
+        if len(rows) > 1:
+            raise RuntimeError("multiple active AI remediation campaigns violate the claim invariant")
+        campaign = _public_auto_remediation_campaign(rows[0]) if rows else None
+        if normalized_expected and (
+            campaign is None
+            or str(campaign.get("campaign_id") or "") != normalized_expected
+            or str(campaign.get("state") or "") != "running"
+        ):
+            raise RuntimeError(
+                "the expected running AI remediation campaign changed before queue claim"
+            )
+        yield campaign
 
 
 def due_auto_remediation_campaign(config: Any, *, now: float | None = None) -> dict[str, Any] | None:
@@ -876,6 +1036,7 @@ def update_auto_remediation_campaign(
     normalized_id = str(campaign_id)
     now = time.time()
     with control_connection(config) as connection:
+        connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
             "SELECT * FROM auto_remediation_campaigns WHERE campaign_id=?",
             (normalized_id,),
@@ -885,6 +1046,26 @@ def update_auto_remediation_campaign(
         next_state = str(state if state is not None else row["state"])
         if next_state not in {"running", "paused", "completed", "cancelled", "failed"}:
             raise ValueError(f"invalid auto remediation campaign state: {next_state}")
+        current_state = str(row["state"] or "")
+        if next_state in {"running", "paused"}:
+            if current_state not in {"running", "paused"}:
+                raise ValueError("a terminal AI remediation campaign cannot become active")
+            if current_state == "paused" and next_state == "running":
+                raise ValueError("paused campaigns must use the atomic resume operation")
+            conflicting = connection.execute(
+                """
+                SELECT campaign_id
+                FROM auto_remediation_campaigns
+                WHERE state IN ('running', 'paused') AND campaign_id<>?
+                ORDER BY created_at, campaign_id
+                LIMIT 1
+                """,
+                (normalized_id,),
+            ).fetchone()
+            if conflicting is not None:
+                raise ValueError(
+                    "only one running or paused AI remediation campaign is allowed"
+                )
         next_counters = counters if counters is not None else _json_object(row["counters_json"])
         finished_at = (
             now
@@ -991,6 +1172,127 @@ def create_auto_remediation_item(
     return _public_auto_remediation_item(row)
 
 
+def create_and_bind_auto_remediation_item(
+    config: Any,
+    *,
+    campaign_id: str,
+    path: str,
+    failure_revision: str,
+    strategy: str,
+    before: dict[str, Any],
+    next_run_at: float,
+) -> dict[str, Any]:
+    """Create a preparing item and bind it to its running campaign atomically.
+
+    Repeating the exact call after commit returns the already-bound item.  A
+    different bound item, a non-running campaign, or conflicting semantic item
+    state fails without leaving a new item behind.
+    """
+
+    initialize_control_state(config)
+    normalized_campaign_id = str(campaign_id)
+    normalized_path = str(path)
+    normalized_failure_revision = str(failure_revision)
+    normalized_strategy = str(strategy)
+    effective_next_run_at = float(next_run_at)
+    now = time.time()
+    item_id = _stable_id(
+        "sweepitem",
+        normalized_campaign_id,
+        normalized_path,
+        normalized_failure_revision,
+        normalized_strategy,
+    )
+    before_json = json.dumps(before, ensure_ascii=False, sort_keys=True)
+    with control_connection(config) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        campaign = connection.execute(
+            "SELECT * FROM auto_remediation_campaigns WHERE campaign_id=?",
+            (normalized_campaign_id,),
+        ).fetchone()
+        if campaign is None:
+            raise ValueError(
+                f"auto remediation campaign does not exist: {normalized_campaign_id}"
+            )
+        if str(campaign["state"] or "") != "running":
+            raise ValueError("auto remediation item can only bind to a running campaign")
+        bound_item_id = str(campaign["current_item_id"] or "")
+        if bound_item_id and bound_item_id != item_id:
+            raise ValueError("auto remediation campaign already has a current item")
+
+        inserted = connection.execute(
+            """
+            INSERT INTO auto_remediation_items(
+                item_id, campaign_id, path, failure_revision, strategy,
+                status, before_json, claimed_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'preparing', ?, ?, ?, ?)
+            ON CONFLICT(path, failure_revision, strategy) DO NOTHING
+            """,
+            (
+                item_id,
+                normalized_campaign_id,
+                normalized_path,
+                normalized_failure_revision,
+                normalized_strategy,
+                before_json,
+                now,
+                now,
+                now,
+            ),
+        ).rowcount
+        row = connection.execute(
+            "SELECT * FROM auto_remediation_items WHERE item_id=?",
+            (item_id,),
+        ).fetchone()
+        if row is None:
+            row = connection.execute(
+                """
+                SELECT * FROM auto_remediation_items
+                WHERE path=? AND failure_revision=? AND strategy=?
+                """,
+                (normalized_path, normalized_failure_revision, normalized_strategy),
+            ).fetchone()
+        if (
+            row is None
+            or str(row["before_json"] or "{}") != before_json
+            or str(row["campaign_id"] or "") != normalized_campaign_id
+            or str(row["item_id"] or "") != item_id
+        ):
+            raise ValueError("auto remediation item semantic key conflicts with existing state")
+
+        if not bound_item_id:
+            changed = connection.execute(
+                """
+                UPDATE auto_remediation_campaigns
+                SET current_item_id=?, next_run_at=?, updated_at=?
+                WHERE campaign_id=? AND state='running' AND current_item_id=''
+                """,
+                (item_id, effective_next_run_at, now, normalized_campaign_id),
+            ).rowcount
+            if changed != 1:
+                raise RuntimeError("auto remediation item could not be bound atomically")
+            if inserted:
+                _audit(
+                    connection,
+                    "auto_remediation_item_created",
+                    "auto_remediation_item",
+                    item_id,
+                    {
+                        "campaign_id": normalized_campaign_id,
+                        "path": normalized_path,
+                        "strategy": normalized_strategy,
+                    },
+                )
+            _audit(
+                connection,
+                "auto_remediation_campaign_updated",
+                "auto_remediation_campaign",
+                normalized_campaign_id,
+                {"state": "running", "current_item_id": item_id},
+            )
+    return _public_auto_remediation_item(row)
+
+
 def get_auto_remediation_item(config: Any, item_id: str) -> dict[str, Any] | None:
     initialize_control_state(config)
     with control_connection(config, readonly=True) as connection:
@@ -1010,7 +1312,15 @@ def update_auto_remediation_item(
     error: str = "",
 ) -> dict[str, Any]:
     normalized_status = str(status)
-    if normalized_status not in {"queued", "running", "succeeded", "failed", "blocked_review", "skipped"}:
+    if normalized_status not in {
+        "preparing",
+        "queued",
+        "running",
+        "succeeded",
+        "failed",
+        "blocked_review",
+        "skipped",
+    }:
         raise ValueError(f"invalid auto remediation item status: {normalized_status}")
     initialize_control_state(config)
     now = time.time()
