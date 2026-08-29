@@ -1509,10 +1509,7 @@ class ScanStateStoreQueueTest(unittest.TestCase):
 
             self.assertEqual(store.iter_ai_queue_candidates(), [newer_video.resolve(), older_video.resolve()])
 
-            with (
-                patch("scan_state.time.time", return_value=3000.0),
-                patch("scan_state.time.time_ns", return_value=3000000000000),
-            ):
+            with patch("scan_state.time.time", return_value=3000.0):
                 store.prioritize_ai_queue_candidate(older_video)
             store.commit()
 
@@ -1523,10 +1520,11 @@ class ScanStateStoreQueueTest(unittest.TestCase):
             )
             self.assertEqual(store.ai_queue_candidate_policy(older_video), (False, True))
             row = store._conn.execute(
-                "SELECT added_at, force_ai, source FROM ai_candidate_queue WHERE path = ?",
+                "SELECT mtime_ns, filename_season, filename_episode, "
+                "added_at, force_ai, source FROM ai_candidate_queue WHERE path = ?",
                 (str(older_video.resolve()),),
             ).fetchone()
-            self.assertEqual(row, (3000.0, 0, "manual_priority"))
+            self.assertEqual(row, (1, 1, 1, 3000.0, 0, "manual_priority"))
             store.close()
 
     def test_requeue_running_from_previous_worker(self) -> None:

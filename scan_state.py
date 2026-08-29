@@ -1645,14 +1645,13 @@ class ScanStateStore:
             UPDATE ai_candidate_queue
             SET status = 'queued',
                 source = 'manual_priority',
-                mtime_ns = ?,
                 added_at = ?,
                 updated_at = ?,
                 next_retry_at = 0
             WHERE path = ?
               AND status NOT IN ('running', 'done')
             """,
-            (time.time_ns(), now, now, _queue_path(path)),
+            (now, now, _queue_path(path)),
         )
         if cursor.rowcount:
             self.update_ai_job_stage(path, "queued", "queued", "Manual priority boost")
