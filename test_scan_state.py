@@ -1066,28 +1066,149 @@ class ScanStateStoreQueueTest(unittest.TestCase):
             self.assertFalse(store.remove_ai_queue_candidate(video))
             store.close()
 
-    def test_newly_added_candidate_runs_before_older_backlog_even_with_older_mtime(self) -> None:
+    def test_same_sequence_prefers_newer_file_mtime_before_queue_arrival(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             store = ScanStateStore(root / "state.sqlite3")
-            old_backlog = root / "Old Backlog S01E01.mkv"
-            new_arrival = root / "New Arrival S01E01.mkv"
-            old_backlog.write_text("", encoding="utf-8")
-            new_arrival.write_text("", encoding="utf-8")
+            newer_file = root / "Newer File S01E01.mkv"
+            newer_arrival = root / "Newer Arrival S01E01.mkv"
+            newer_file.write_text("", encoding="utf-8")
+            newer_arrival.write_text("", encoding="utf-8")
 
             with patch("scan_state.time.time", return_value=1000.0):
-                store.upsert_ai_queue_candidate(old_backlog, 9_999)
+                store.upsert_ai_queue_candidate(newer_file, 9_999)
                 store.commit()
             with patch("scan_state.time.time", return_value=2000.0):
-                store.upsert_ai_queue_candidate(new_arrival, 1)
+                store.upsert_ai_queue_candidate(newer_arrival, 1)
                 store.commit()
 
-            self.assertEqual(store.iter_ai_queue_candidates(), [new_arrival.resolve(), old_backlog.resolve()])
+            self.assertEqual(
+                store.iter_ai_queue_candidates(),
+                [newer_file.resolve(), newer_arrival.resolve()],
+            )
             self.assertEqual(
                 store.iter_ai_queue_candidates(oldest_first=True),
-                [old_backlog.resolve(), new_arrival.resolve()],
+                [newer_file.resolve(), newer_arrival.resolve()],
             )
             store.close()
+
+    def test_recent_queue_orders_by_filename_sequence_then_file_dates(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = ScanStateStore(root / "state.sqlite3")
+            season_1_episode_99 = root / "Series S01E99.mkv"
+            season_2_episode_1 = root / "Series S02E01.mkv"
+            episode_2_older = root / "Older Variant S02E02.mkv"
+            episode_2_newer = root / "Newer Variant S02E02.mkv"
+            episode_only_11 = root / "Episode Only - 11 [WebRip].mkv"
+            episode_only_12 = root / "Episode Only - 12 [WebRip].mkv"
+            unparsed_older = root / "Unparsed Older.mkv"
+            unparsed_newer = root / "Unparsed Newer.mkv"
+            rows = (
+                (season_1_episode_99, 900, 900.0),
+                (season_2_episode_1, 100, 100.0),
+                (episode_2_older, 600, 900.0),
+                (episode_2_newer, 700, 100.0),
+                (episode_only_11, 999, 999.0),
+                (episode_only_12, 1, 1.0),
+                (unparsed_older, 10, 999.0),
+                (unparsed_newer, 20, 1.0),
+            )
+            try:
+                for video, mtime_ns, added_at in rows:
+                    video.write_text("", encoding="utf-8")
+                    store.upsert_ai_queue_candidate(
+                        video,
+                        mtime_ns,
+                        added_at=added_at,
+                    )
+                store.commit()
+
+                self.assertEqual(
+                    store.iter_ai_queue_candidates(),
+                    [
+                        episode_2_newer.resolve(),
+                        episode_2_older.resolve(),
+                        season_2_episode_1.resolve(),
+                        season_1_episode_99.resolve(),
+                        episode_only_12.resolve(),
+                        episode_only_11.resolve(),
+                        unparsed_newer.resolve(),
+                        unparsed_older.resolve(),
+                    ],
+                )
+            finally:
+                store.close()
+
+    def test_oldest_fairness_cycle_ignores_filename_sequence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = ScanStateStore(root / "state.sqlite3")
+            older_low_sequence = root / "Series S01E01.mkv"
+            newer_high_sequence = root / "Series S99E999.mkv"
+            try:
+                store.upsert_ai_queue_candidate(
+                    older_low_sequence,
+                    1,
+                    added_at=1000.0,
+                )
+                store.upsert_ai_queue_candidate(
+                    newer_high_sequence,
+                    2,
+                    added_at=2000.0,
+                )
+                store.commit()
+
+                self.assertEqual(
+                    store.iter_ai_queue_candidates(),
+                    [newer_high_sequence.resolve(), older_low_sequence.resolve()],
+                )
+                self.assertEqual(
+                    store.iter_ai_queue_candidates(oldest_first=True),
+                    [older_low_sequence.resolve(), newer_high_sequence.resolve()],
+                )
+            finally:
+                store.close()
+
+    def test_queue_sequence_columns_migrate_and_backfill_legacy_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            database = root / "state.sqlite3"
+            video = root / "Legacy Series S04E12.mkv"
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute(
+                    "CREATE TABLE ai_candidate_queue(path TEXT PRIMARY KEY, mtime_ns INTEGER NOT NULL)"
+                )
+                connection.execute(
+                    "INSERT INTO ai_candidate_queue(path, mtime_ns) VALUES (?, ?)",
+                    (str(video.resolve()), 123),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            for _reopen in range(2):
+                store = ScanStateStore(database)
+                try:
+                    columns = {
+                        str(row[1])
+                        for row in store._conn.execute(
+                            "PRAGMA table_info(ai_candidate_queue)"
+                        ).fetchall()
+                    }
+                    self.assertIn("filename_season", columns)
+                    self.assertIn("filename_episode", columns)
+                    self.assertEqual(
+                        store._conn.execute(
+                            "SELECT filename_season, filename_episode "
+                            "FROM ai_candidate_queue WHERE path=?",
+                            (str(video.resolve()),),
+                        ).fetchone(),
+                        (4, 12),
+                    )
+                finally:
+                    store.close()
 
     def test_tracked_queue_uses_earliest_deadline_even_on_recent_first_cycle(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1192,7 +1313,7 @@ class ScanStateStoreQueueTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             store = ScanStateStore(root / "state.sqlite3")
-            alpha = root / "Alpha S01E01.mkv"
+            alpha = root / "Alpha S01E02.mkv"
             zeta = root / "Zeta S01E02.mkv"
             alpha.write_bytes(b"media")
             zeta.write_bytes(b"media")

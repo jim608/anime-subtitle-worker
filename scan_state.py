@@ -16,7 +16,7 @@ from acceptance_queue_lane import (
     ACCEPTANCE_QUEUE_TARGET_COUNT,
     AcceptanceQueueTarget,
 )
-from mikan_source import extract_episode_number
+from mikan_source import extract_episode_number, release_season_number
 from subtitle_extract import SIDECAR_SUBTITLE_EXTENSIONS
 from subtitle_paths import finished_subtitle_paths
 
@@ -322,6 +322,7 @@ class ScanStateStore:
     ) -> bool:
         normalized_path = _queue_path(path)
         normalized_source = str(source or "scan")
+        filename_season, filename_episode = _filename_sequence(normalized_path)
         existing = self._conn.execute(
             "SELECT mtime_ns FROM ai_candidate_queue WHERE path = ?",
             (normalized_path,),
@@ -336,15 +337,19 @@ class ScanStateStore:
             INSERT INTO ai_candidate_queue (
                 path,
                 mtime_ns,
+                filename_season,
+                filename_episode,
                 status,
                 source,
                 added_at,
                 updated_at,
                 next_retry_at
             )
-            VALUES (?, ?, 'queued', ?, ?, ?, 0)
+            VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, 0)
             ON CONFLICT(path) DO UPDATE SET
                 mtime_ns = excluded.mtime_ns,
+                filename_season = excluded.filename_season,
+                filename_episode = excluded.filename_episode,
                 source = CASE
                     WHEN ai_candidate_queue.status IN ('running', 'paused', 'skipped') THEN ai_candidate_queue.source
                     WHEN ai_candidate_queue.status = 'done'
@@ -371,7 +376,15 @@ class ScanStateStore:
                 END
             WHERE ai_candidate_queue.mtime_ns != excluded.mtime_ns
             """,
-            (normalized_path, mtime_ns, source, queue_added_at, now),
+            (
+                normalized_path,
+                mtime_ns,
+                filename_season,
+                filename_episode,
+                source,
+                queue_added_at,
+                now,
+            ),
         )
         changed = int(cursor.rowcount or 0) > 0
         # Watchdog can report several closed/modified events for the same stable
@@ -420,12 +433,16 @@ class ScanStateStore:
         # makes the forced row impossible to match to a delivery obligation
         # until some later scan rewrites it.
         media_mtime_ns = int(Path(path).stat().st_mtime_ns)
+        normalized_path = _queue_path(path)
+        filename_season, filename_episode = _filename_sequence(normalized_path)
         self.mark_ai_inventory_dirty(observed_at=now)
         self._conn.execute(
             """
             INSERT INTO ai_candidate_queue (
                 path,
                 mtime_ns,
+                filename_season,
+                filename_episode,
                 status,
                 source,
                 attempts,
@@ -440,11 +457,19 @@ class ScanStateStore:
                 added_at,
                 updated_at
             )
-            VALUES (?, ?, 'queued', 'manual_force', 0, 0, '', 0, '', 'manual_force', '', 0, 1, ?, ?)
+            VALUES (?, ?, ?, ?, 'queued', 'manual_force', 0, 0, '', 0, '', 'manual_force', '', 0, 1, ?, ?)
             ON CONFLICT(path) DO UPDATE SET
                 mtime_ns = CASE
                     WHEN ai_candidate_queue.status = 'running' THEN ai_candidate_queue.mtime_ns
                     ELSE excluded.mtime_ns
+                END,
+                filename_season = CASE
+                    WHEN ai_candidate_queue.status = 'running' THEN ai_candidate_queue.filename_season
+                    ELSE excluded.filename_season
+                END,
+                filename_episode = CASE
+                    WHEN ai_candidate_queue.status = 'running' THEN ai_candidate_queue.filename_episode
+                    ELSE excluded.filename_episode
                 END,
                 status = CASE
                     WHEN ai_candidate_queue.status = 'running' THEN ai_candidate_queue.status
@@ -486,7 +511,14 @@ class ScanStateStore:
                 force_ai = 1,
                 updated_at = excluded.updated_at
             """,
-            (_queue_path(path), media_mtime_ns, now, now),
+            (
+                normalized_path,
+                media_mtime_ns,
+                filename_season,
+                filename_episode,
+                now,
+                now,
+            ),
         )
         self.update_ai_job_stage(path, "force_ai", "queued", "Manual force AI queued")
 
@@ -2092,7 +2124,20 @@ class ScanStateStore:
                 exact_target=exact_target,
             )
 
-        added_direction = "ASC" if oldest_first else "DESC"
+        if oldest_first:
+            queue_tail_order = """
+                COALESCE(q.added_at, 0) ASC,
+                q.mtime_ns ASC
+            """
+        else:
+            queue_tail_order = """
+                CASE WHEN q.filename_season IS NULL THEN 1 ELSE 0 END ASC,
+                q.filename_season DESC,
+                CASE WHEN q.filename_episode IS NULL THEN 1 ELSE 0 END ASC,
+                q.filename_episode DESC,
+                q.mtime_ns DESC,
+                COALESCE(q.added_at, 0) DESC
+            """
         retry_strategies = tuple(sorted(AI_QUEUE_AUTOMATIC_RETRY_STRATEGIES))
         retry_placeholders = ", ".join("?" for _item in retry_strategies)
         normalized_exact_target = (
@@ -2151,8 +2196,7 @@ class ScanStateStore:
                 deadline.earliest_due_at ASC,
                 CASE WHEN q.status = 'failed_retry' THEN 0 ELSE 1 END ASC,
                 CASE WHEN q.status = 'failed_retry' THEN q.next_retry_at ELSE 0 END ASC,
-                COALESCE(q.added_at, 0) {added_direction},
-                q.mtime_ns {added_direction},
+                {queue_tail_order},
                 q.path COLLATE NOCASE ASC
             """,
             parameters,
@@ -3834,6 +3878,8 @@ class ScanStateStore:
             CREATE TABLE IF NOT EXISTS ai_candidate_queue (
                 path TEXT PRIMARY KEY,
                 mtime_ns INTEGER NOT NULL,
+                filename_season INTEGER,
+                filename_episode INTEGER,
                 status TEXT NOT NULL DEFAULT 'queued',
                 source TEXT NOT NULL DEFAULT 'scan',
                 attempts INTEGER NOT NULL DEFAULT 0,
@@ -4126,6 +4172,8 @@ class ScanStateStore:
         rows = self._conn.execute("PRAGMA table_info(ai_candidate_queue)").fetchall()
         existing = {str(row[1]) for row in rows}
         column_sql = {
+            "filename_season": "ALTER TABLE ai_candidate_queue ADD COLUMN filename_season INTEGER",
+            "filename_episode": "ALTER TABLE ai_candidate_queue ADD COLUMN filename_episode INTEGER",
             "status": "ALTER TABLE ai_candidate_queue ADD COLUMN status TEXT NOT NULL DEFAULT 'queued'",
             "source": "ALTER TABLE ai_candidate_queue ADD COLUMN source TEXT NOT NULL DEFAULT 'scan'",
             "attempts": "ALTER TABLE ai_candidate_queue ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
@@ -4140,9 +4188,27 @@ class ScanStateStore:
             "added_at": "ALTER TABLE ai_candidate_queue ADD COLUMN added_at REAL NOT NULL DEFAULT 0",
             "updated_at": "ALTER TABLE ai_candidate_queue ADD COLUMN updated_at REAL NOT NULL DEFAULT 0",
         }
+        sequence_columns_added = False
         for column, statement in column_sql.items():
             if column not in existing:
                 self._conn.execute(statement)
+                if column in {"filename_season", "filename_episode"}:
+                    sequence_columns_added = True
+        if sequence_columns_added:
+            sequence_rows = self._conn.execute(
+                "SELECT path FROM ai_candidate_queue"
+            ).fetchall()
+            updates = []
+            for row in sequence_rows:
+                queue_path = str(row[0] or "")
+                filename_season, filename_episode = _filename_sequence(queue_path)
+                updates.append((filename_season, filename_episode, queue_path))
+            if updates:
+                self._conn.executemany(
+                    "UPDATE ai_candidate_queue "
+                    "SET filename_season=?, filename_episode=? WHERE path=?",
+                    updates,
+                )
 
     def _ensure_ai_inventory_epoch_columns(self) -> None:
         rows = self._conn.execute("PRAGMA table_info(ai_inventory_epochs)").fetchall()
@@ -4296,6 +4362,13 @@ def _sidecar_signature(video: Path, config: Any) -> str:
 
 def _queue_path(path: Path) -> str:
     return str(path.resolve())
+
+
+def _filename_sequence(path: str | Path) -> tuple[int | None, int | None]:
+    """Return conservative season/episode evidence from the filename only."""
+
+    filename = Path(str(path or "")).name
+    return release_season_number(filename), extract_episode_number(filename)
 
 
 _AI_DELIVERY_OBLIGATION_FIELDS = (
