@@ -1790,6 +1790,8 @@ class VideoWorker:
         self,
         video: Path,
         source_paths: SourceTranscriptPaths,
+        *,
+        _allow_source_asr_recovery: bool = True,
     ) -> ProcessOutcome:
         """Translate a verified non-Japanese ASR transcript into strict zh-TW delivery."""
 
@@ -1843,6 +1845,44 @@ class VideoWorker:
             for event in translation_events
             if str(event.get("severity") or "").lower() == "fail"
         ]
+        if hard_events and _allow_source_asr_recovery:
+            recovered = self._repair_cached_translation_safe_omissions(
+                video,
+                translated_paths,
+                allow_asr_escalation=True,
+                source_language=source_paths.language,
+                asr_fallback_config=self._prompt_free_source_fallback_asr_config(
+                    source_paths.language
+                ),
+            )
+            if recovered and not translated_paths.zh_cn_srt.exists():
+                self.logger.warning(
+                    "Source-language translation omissions escalated to same-language "
+                    "prompt-free ASR; retranslating once in the same job: "
+                    "video=%s language=%s",
+                    video,
+                    source_paths.language,
+                )
+                return self._translate_source_transcription(
+                    video,
+                    source_paths,
+                    _allow_source_asr_recovery=False,
+                )
+            translation_hold = read_translation_quality_hold_strict(
+                translated_paths.zh_cn_srt
+            )
+            translation_events = (
+                []
+                if translation_hold is not None
+                else read_translation_quality_events_strict(
+                    translated_paths.zh_cn_srt
+                )
+            )
+            hard_events = [
+                event
+                for event in translation_events
+                if str(event.get("severity") or "").lower() == "fail"
+            ]
         if hard_events:
             for repair_attempt in range(1, 3):
                 self.logger.warning(
@@ -2840,6 +2880,68 @@ class VideoWorker:
             asr_prompt_free_allow_recovered_primary_artifacts=True,
         )
 
+    def _prompt_free_source_fallback_asr_config(self, language: str) -> AppConfig:
+        """Build the bounded prompt-free ASR repair route for a non-Japanese source."""
+
+        normalized_language = str(language or "").strip().replace("_", "-").casefold()
+        primary_backend = _non_japanese_transcription_backend(self.config)
+        primary_model = str(
+            getattr(self.config, "non_japanese_transcription_model", None)
+            or getattr(self.config, "language_detect_model", None)
+            or self.config.whisper_model
+        )
+        primary_compute_type = str(
+            getattr(self.config, "whisper_compute_type", "") or ""
+        )
+        return _config_with_overrides(
+            self.config,
+            transcription_backend=(
+                getattr(
+                    self.config,
+                    "non_japanese_transcription_fallback_backend",
+                    None,
+                )
+                or getattr(
+                    self.config,
+                    "japanese_transcription_fallback_backend",
+                    None,
+                )
+                or primary_backend
+            ),
+            whisper_model=(
+                getattr(
+                    self.config,
+                    "non_japanese_transcription_fallback_model",
+                    None,
+                )
+                or getattr(
+                    self.config,
+                    "japanese_transcription_fallback_model",
+                    None,
+                )
+                or primary_model
+            ),
+            whisper_compute_type=(
+                getattr(
+                    self.config,
+                    "non_japanese_transcription_fallback_compute_type",
+                    None,
+                )
+                or getattr(
+                    self.config,
+                    "japanese_transcription_fallback_compute_type",
+                    None,
+                )
+                or primary_compute_type
+            ),
+            whisper_language=normalized_language,
+            whisper_initial_prompt=None,
+            op_ed_initial_prompt=None,
+            whisper_condition_on_previous_text=False,
+            asr_optional_rescue_rejection_is_fatal=False,
+            asr_prompt_free_allow_recovered_primary_artifacts=True,
+        )
+
     def _run_japanese_final_asr_fallback(
         self,
         audio_path: Path,
@@ -3370,6 +3472,7 @@ class VideoWorker:
         *,
         allow_asr_escalation: bool = True,
         source_language: str = "ja",
+        asr_fallback_config: AppConfig | None = None,
     ) -> bool:
         """Retranslate only lines rejected by the previous translation attempt."""
 
@@ -3600,7 +3703,9 @@ class VideoWorker:
                 self._set_stage(video, "audio", "running", "Extracting audio for translation-omission ASR escalation")
                 self._extract_preferred_audio(video, audio_path)
                 audio_ready = True
-            fallback_config = self._prompt_free_fallback_asr_config()
+            fallback_config = (
+                asr_fallback_config or self._prompt_free_fallback_asr_config()
+            )
             selective_ok = (
                 bool(getattr(self.config, "asr_selective_retry_enabled", True))
                 and fallback_config.transcription_backend == "faster-whisper"
@@ -3615,7 +3720,7 @@ class VideoWorker:
                     require_changed_transcript=True,
                 )
             )
-            if not selective_ok:
+            if not selective_ok and asr_fallback_config is None:
                 self._run_full_prompt_free_asr_fallback(
                     video,
                     audio_path,
@@ -3627,13 +3732,23 @@ class VideoWorker:
                     ),
                     fallback_config=fallback_config,
                 )
-            self.logger.warning(
-                "Escalated unresolved translation lines to prompt-free ASR recovery: "
-                "video=%s indexes=%s ranges=%s",
-                video,
-                unresolved_indexes,
-                asr_ranges,
-            )
+            elif not selective_ok:
+                self.logger.warning(
+                    "Same-language selective ASR repair was unavailable; preserving "
+                    "the source translation failure for bounded review: "
+                    "video=%s language=%s indexes=%s",
+                    video,
+                    source_language,
+                    unresolved_indexes,
+                )
+            if selective_ok or asr_fallback_config is None:
+                self.logger.warning(
+                    "Escalated unresolved translation lines to prompt-free ASR recovery: "
+                    "video=%s indexes=%s ranges=%s",
+                    video,
+                    unresolved_indexes,
+                    asr_ranges,
+                )
         elif unresolved_indexes:
             self.logger.warning(
                 "Final targeted translation retry remains unresolved; "

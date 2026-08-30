@@ -3960,6 +3960,151 @@ class VideoWorkerTest(unittest.TestCase):
             )
             self.assertEqual(outcome.status, "ok")
 
+    def test_source_translation_escalates_repeated_omission_to_same_language_asr(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "English Show S01E02.mkv"
+            video.write_bytes(b"video")
+            audio = root / "audio.wav"
+            audio.write_bytes(b"audio")
+            config = _config(
+                root,
+                translate_non_japanese_sources=True,
+                export_ai_ass=False,
+                scanner_cache_enabled=False,
+                asr_selective_retry_enabled=True,
+                non_japanese_transcription_fallback_backend="faster-whisper",
+                non_japanese_transcription_fallback_model="source-fallback-model",
+                non_japanese_transcription_fallback_compute_type="float16",
+                whisper_initial_prompt="unsafe source prompt",
+                op_ed_initial_prompt="unsafe source lyrics prompt",
+            )
+            worker = VideoWorker(config, _logger())
+            source_paths = source_transcript_paths_for_video(video, config, "en")
+            original = SrtBlock(
+                1,
+                "00:00:10,000 --> 00:00:11,000",
+                ["This"],
+            )
+            write_srt(source_paths.srt, [original])
+            translator = Mock()
+            translate_calls = 0
+
+            def translate(blocks, _source, target, **kwargs) -> None:
+                nonlocal translate_calls
+                translate_calls += 1
+                self.assertEqual(kwargs.get("source_language"), "en")
+                if blocks[0].text == ["Corrected English source"]:
+                    write_srt(
+                        target,
+                        [SrtBlock(1, blocks[0].timing, ["修正後的中文翻譯"])],
+                    )
+                    return
+                write_srt(target, [original])
+                write_translation_quality_events(
+                    target,
+                    [
+                        {
+                            "code": "translation_safe_omission",
+                            "severity": "fail",
+                            "index": 1,
+                            "source": "This",
+                            "output": "1[__ASR_REVIEW__]",
+                            "reason": "source transcription is unreliable",
+                        }
+                    ],
+                    srt_sha256=sha256_file(target),
+                )
+
+            def repeat_omission(_blocks, _source, target, **kwargs) -> None:
+                self.assertEqual(kwargs.get("source_language"), "en")
+                write_srt(target, [original])
+                write_translation_quality_events(
+                    target,
+                    [
+                        {
+                            "code": "translation_safe_omission",
+                            "severity": "fail",
+                            "index": 1,
+                            "source": "This",
+                            "output": "1[__ASR_REVIEW__]",
+                            "reason": "source transcription is unreliable",
+                        }
+                    ],
+                    srt_sha256=sha256_file(target),
+                )
+
+            observed: dict[str, object] = {}
+
+            def selective(
+                _video,
+                observed_audio,
+                observed_paths,
+                ranges,
+                fallback_config,
+                *,
+                require_confidence,
+                require_changed_transcript,
+            ) -> bool:
+                observed["audio"] = observed_audio
+                observed["ranges"] = ranges
+                observed["language"] = fallback_config.whisper_language
+                observed["prompt"] = fallback_config.whisper_initial_prompt
+                observed["op_ed_prompt"] = fallback_config.op_ed_initial_prompt
+                observed["require_confidence"] = require_confidence
+                observed["require_changed"] = require_changed_transcript
+                write_srt(
+                    observed_paths.ja_srt,
+                    [
+                        SrtBlock(
+                            1,
+                            original.timing,
+                            ["Corrected English source"],
+                        )
+                    ],
+                )
+                worker._invalidate_translation_intermediates(observed_paths)
+                return True
+
+            translator.translate_blocks.side_effect = translate
+            translator.retranslate_problem_blocks.side_effect = repeat_omission
+
+            def convert(source: Path, target: Path) -> None:
+                write_srt(target, read_srt(source))
+
+            with (
+                patch.object(worker, "_get_translator", return_value=translator),
+                patch.object(worker, "_build_series_metadata_context", return_value=None),
+                patch.object(worker, "_audio_path", return_value=audio),
+                patch("worker.validate_cached_audio", return_value=True),
+                patch.object(
+                    worker,
+                    "_try_prompt_free_selective_asr_repair",
+                    side_effect=selective,
+                ) as selective_retry,
+                patch.object(worker, "_run_full_prompt_free_asr_fallback") as full,
+                patch.object(worker, "_convert_to_zh_tw", side_effect=convert),
+            ):
+                outcome = worker._translate_source_transcription(video, source_paths)
+
+            selective_retry.assert_called_once()
+            full.assert_not_called()
+            self.assertEqual(translate_calls, 2)
+            self.assertEqual(observed["audio"], audio)
+            self.assertEqual(observed["ranges"], [(8.5, 12.5)])
+            self.assertEqual(observed["language"], "en")
+            self.assertIsNone(observed["prompt"])
+            self.assertIsNone(observed["op_ed_prompt"])
+            self.assertFalse(observed["require_confidence"])
+            self.assertTrue(observed["require_changed"])
+            self.assertEqual(
+                read_srt(paths_for_video(video, config).zh_cn_srt)[0].text,
+                ["修正後的中文翻譯"],
+            )
+            self.assertEqual(outcome.status, "ok")
+
     def test_source_asr_rejection_is_rebuilt_then_normalized_success_is_cached(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
