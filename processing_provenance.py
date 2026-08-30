@@ -126,6 +126,7 @@ def provenance_path_for_video(config: Any, video_path: str | Path) -> Path:
 def processing_config_signature(config: Any) -> str:
     from source_decision import SOURCE_DECISION_CONTRACT
     from subtitle_remediation import SUBTITLE_REMEDIATION_CONTRACT
+    from transcriber import ASR_TRANSCRIPTION_CONTRACT
     from translation_memory import (
         TRANSLATION_MEMORY_CONTEXT_CONTRACT,
         TRANSLATION_MEMORY_SCHEMA_VERSION,
@@ -233,6 +234,7 @@ def processing_config_signature(config: Any) -> str:
         "resource_admission_recovery_samples",
     )
     payload = {field: _json_value(getattr(config, field, None)) for field in fields}
+    payload["asr_transcription_contract"] = ASR_TRANSCRIPTION_CONTRACT
     payload["translation_prompt_version"] = TRANSLATION_PROMPT_VERSION
     payload["subtitle_source_decision_contract"] = SOURCE_DECISION_CONTRACT
     payload["subtitle_remediation_contract"] = SUBTITLE_REMEDIATION_CONTRACT

@@ -8,10 +8,22 @@ import time
 from typing import Any
 
 from ai_failure_markers import ai_failure_marker_path, clear_ai_failure_marker
+from completed_delivery import (
+    COMPLETED_DELIVERY_CONTRACT,
+    COMPLETED_DELIVERY_SCHEMA_VERSION,
+    completed_delivery_destination,
+    completed_delivery_enabled,
+    completed_delivery_marker_path,
+    completed_delivery_receipt_path,
+)
 from config import AppConfig, load_config
 from lock import VideoLock
-from output_manifest import output_manifest_path, output_publication_marker_path
-from scan_state import ScanStateStore
+from output_manifest import (
+    delivery_identity,
+    output_manifest_path,
+    output_publication_marker_path,
+)
+from scan_state import ScanStateStore, ai_delivery_identity
 from safe_files import atomic_write_text, sha256_file, verified_move
 from subtitle_paths import paths_for_video, source_transcript_artifacts_for_video
 from subtitle_quality import quality_report_candidates
@@ -59,17 +71,32 @@ def reprocess_video(
     if not lock.acquire():
         raise RuntimeError(f"video is currently being processed: {video}")
     try:
-        candidates = _reprocess_candidates(config, video, mode=normalized_mode)
+        _assert_current_delivery_reprocessable(config, video)
+        completed_required, completed_hashes = _validate_completed_delivery_for_reprocess(
+            config,
+            video,
+        )
+        candidates = _reprocess_candidates(
+            config,
+            video,
+            mode=normalized_mode,
+            completed_paths=completed_required,
+        )
         digest = hashlib.sha1(str(video).encode("utf-8", errors="replace")).hexdigest()[:16]
         archive_dir = (
             Path(config.work_path)
             / "manual_ai_reprocess"
             / f"{time.time_ns()}-{digest}-{normalized_mode}"
         )
+        entries = _prepare_archive_entries(
+            candidates,
+            archive_dir,
+            precomputed_sha256=completed_hashes,
+        )
+        _assert_required_archive_entries(completed_required, entries)
+        _assert_completed_delivery_snapshot(config, video, completed_required)
         archive_dir.mkdir(parents=True, exist_ok=False)
         manifest_path = archive_dir / MANIFEST_NAME
-
-        entries = _prepare_archive_entries(candidates, archive_dir)
         manifest: dict[str, Any] = {
             "schema_version": MANIFEST_SCHEMA_VERSION,
             "operation": "reprocess_archive",
@@ -249,12 +276,24 @@ def restore_reprocess_manifest(
             / "manual_ai_reprocess_restore"
             / f"{time.time_ns()}-{digest}-{mode}"
         )
+        completed_required, completed_hashes = _validate_completed_delivery_for_reprocess(
+            config,
+            video,
+        )
+        current_entries = _prepare_archive_entries(
+            _reprocess_candidates(
+                config,
+                video,
+                mode=mode,
+                completed_paths=completed_required,
+            ),
+            restore_dir,
+            precomputed_sha256=completed_hashes,
+        )
+        _assert_required_archive_entries(completed_required, current_entries)
+        _assert_completed_delivery_snapshot(config, video, completed_required)
         restore_dir.mkdir(parents=True, exist_ok=False)
         restore_manifest_path = restore_dir / MANIFEST_NAME
-        current_entries = _prepare_archive_entries(
-            _reprocess_candidates(config, video, mode=mode),
-            restore_dir,
-        )
         restore_manifest: dict[str, Any] = {
             "schema_version": MANIFEST_SCHEMA_VERSION,
             "operation": "reprocess_restore",
@@ -401,6 +440,7 @@ def _reprocess_candidates(
     video: Path,
     *,
     mode: str,
+    completed_paths: set[Path] | None = None,
 ) -> list[Path]:
     paths = paths_for_video(video, config)
     candidates = {
@@ -432,12 +472,145 @@ def _reprocess_candidates(
     for path in list(candidates):
         report_candidates.update(quality_report_candidates(path, config.work_path))
     candidates.update(report_candidates)
+    candidates.update(completed_paths or set())
     return sorted(candidates, key=lambda path: str(path).casefold())
+
+
+def _assert_current_delivery_reprocessable(
+    config: AppConfig | Any,
+    video: Path,
+) -> None:
+    identity = delivery_identity(video, config)
+    state = ScanStateStore.from_config(config)
+    try:
+        obligation = state.get_ai_delivery_obligation(str(identity["obligation_id"]))
+    finally:
+        state.close()
+    if obligation is None or obligation["state"] == "open":
+        return
+    if obligation["state"] == "excluded" and int(obligation["attempt_count"]) == 0:
+        return
+    raise RuntimeError(
+        "current AI delivery identity is terminal and cannot be reprocessed in place: "
+        f"obligation_id={identity['obligation_id']} state={obligation['state']}"
+    )
+
+
+def _completed_delivery_managed_paths(
+    config: AppConfig | Any,
+    video: Path,
+) -> set[Path]:
+    if not completed_delivery_enabled(config):
+        return set()
+    return {
+        completed_delivery_destination(video, config),
+        completed_delivery_receipt_path(video, config),
+    }
+
+
+def _validate_completed_delivery_for_reprocess(
+    config: AppConfig | Any,
+    video: Path,
+) -> tuple[set[Path], dict[str, str]]:
+    managed = _completed_delivery_managed_paths(config, video)
+    if not managed:
+        return set(), {}
+    destination = completed_delivery_destination(video, config)
+    receipt = completed_delivery_receipt_path(video, config)
+    marker = completed_delivery_marker_path(video, config)
+    if marker.exists():
+        raise RuntimeError(
+            f"completed delivery is incomplete and must be recovered before reprocess: {marker}"
+        )
+    if destination.exists() != receipt.exists():
+        raise RuntimeError(
+            "completed delivery artifact and receipt must either both exist or both be absent"
+        )
+    if not destination.exists():
+        return set(), {}
+    try:
+        payload = json.loads(receipt.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"completed delivery receipt is unreadable: {receipt}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"completed delivery receipt is malformed: {receipt}")
+    output = payload.get("output")
+    source = payload.get("source")
+    delivery = payload.get("delivery")
+    publication_manifest = payload.get("publication_manifest")
+    video_stat = video.stat()
+    current_media = delivery_identity(video, config)["media"]
+    source_sha256 = sha256_file(video)
+    destination_sha256 = sha256_file(destination)
+    receipt_sha256 = sha256_file(receipt)
+    stored_policy_revision = (
+        str(delivery.get("policy_revision") or "")
+        if isinstance(delivery, dict)
+        else ""
+    )
+    stored_identity = (
+        ai_delivery_identity(
+            video,
+            media_size=int(video_stat.st_size),
+            media_mtime_ns=int(video_stat.st_mtime_ns),
+            policy_revision=stored_policy_revision,
+        )
+        if stored_policy_revision
+        else None
+    )
+    configured_manifest = output_manifest_path(video, config).resolve()
+    manifest_matches = bool(
+        isinstance(publication_manifest, dict)
+        and publication_manifest.get("path") == str(configured_manifest)
+        and len(str(publication_manifest.get("sha256") or "")) == 64
+        and all(
+            character in "0123456789abcdef"
+            for character in str(publication_manifest.get("sha256") or "").casefold()
+        )
+    )
+    if configured_manifest.exists() and manifest_matches:
+        manifest_matches = (
+            sha256_file(configured_manifest)
+            == str(publication_manifest.get("sha256") or "").casefold()
+        )
+    if not (
+        payload.get("schema_version") == COMPLETED_DELIVERY_SCHEMA_VERSION
+        and payload.get("contract") == COMPLETED_DELIVERY_CONTRACT
+        and payload.get("state") == "committed"
+        and isinstance(source, dict)
+        and source.get("canonical_path") == str(video.resolve())
+        and int(source.get("media_size") or -1) == int(video_stat.st_size)
+        and int(source.get("media_mtime_ns") or -1) == int(video_stat.st_mtime_ns)
+        and source.get("media_fingerprint") == current_media["media_fingerprint"]
+        and str(source.get("sha256") or "").casefold() == source_sha256
+        and isinstance(delivery, dict)
+        and stored_identity is not None
+        and delivery.get("obligation_id") == stored_identity["obligation_id"]
+        and manifest_matches
+        and payload.get("destination") == str(destination)
+        and isinstance(output, dict)
+        and output.get("path") == str(destination)
+        and int(output.get("size") or -1) == destination.stat().st_size
+        and int(output.get("mtime_ns") or -1) == destination.stat().st_mtime_ns
+        and str(output.get("sha256") or "").casefold() == destination_sha256
+    ):
+        raise RuntimeError(
+            f"completed delivery receipt does not own the configured artifact: {receipt}"
+        )
+    return (
+        {destination, receipt},
+        {
+            str(destination.resolve()).casefold(): destination_sha256,
+            str(receipt.resolve()).casefold(): receipt_sha256,
+        },
+    )
 
 
 def _prepare_archive_entries(
     candidates: list[Path],
     archive_dir: Path,
+    *,
+    precomputed_sha256: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     for index, source in enumerate(candidates):
@@ -449,16 +622,55 @@ def _prepare_archive_entries(
         suffix = source.suffix if source.suffix else ".bin"
         destination = archive_dir / f"item-{index:03d}-{source_digest}{suffix}"
         stat = source.stat()
+        source_key = str(source.resolve()).casefold()
         entries.append(
             {
                 "source": str(source),
                 "archive": str(destination),
-                "sha256": sha256_file(source),
+                "sha256": (precomputed_sha256 or {}).get(source_key) or sha256_file(source),
                 "size": int(stat.st_size),
                 "state": "pending",
             }
         )
     return entries
+
+
+def _assert_required_archive_entries(
+    required: set[Path],
+    entries: list[dict[str, Any]],
+) -> None:
+    prepared = {
+        str(Path(str(entry["source"])).resolve()).casefold()
+        for entry in entries
+    }
+    missing = [
+        str(path)
+        for path in required
+        if str(path.resolve()).casefold() not in prepared
+    ]
+    if missing:
+        raise RuntimeError(
+            "required completed delivery changed before archive preparation: "
+            + ", ".join(sorted(missing, key=str.casefold))
+        )
+
+
+def _assert_completed_delivery_snapshot(
+    config: AppConfig | Any,
+    video: Path,
+    expected: set[Path],
+) -> None:
+    managed = _completed_delivery_managed_paths(config, video)
+    actual = {path for path in managed if path.exists()}
+    marker = (
+        completed_delivery_marker_path(video, config)
+        if completed_delivery_enabled(config)
+        else None
+    )
+    if actual != expected or (marker is not None and marker.exists()):
+        raise RuntimeError(
+            "completed delivery changed after ownership validation; refusing archive"
+        )
 
 
 def _public_archive_entry(entry: dict[str, Any]) -> dict[str, Any]:
@@ -600,7 +812,12 @@ def _validated_restore_entries(
         raise RuntimeError(f"invalid reprocess archive entries: {manifest_path}")
     allowed = {
         str(path.resolve()).casefold(): path
-        for path in _reprocess_candidates(config, video, mode=mode)
+        for path in _reprocess_candidates(
+            config,
+            video,
+            mode=mode,
+            completed_paths=_completed_delivery_managed_paths(config, video),
+        )
     }
     archive_root = manifest_path.parent.resolve()
     seen_sources: set[str] = set()

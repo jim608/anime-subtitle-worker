@@ -8,6 +8,13 @@ import unittest
 from unittest.mock import patch
 
 from ai_failure_markers import ai_failure_marker_path, mark_ai_failure
+from completed_delivery import (
+    COMPLETED_DELIVERY_CONTRACT,
+    COMPLETED_DELIVERY_SCHEMA_VERSION,
+    completed_delivery_destination,
+    completed_delivery_receipt_path,
+)
+from output_manifest import delivery_identity, output_manifest_path
 from reprocess_ai_video import reprocess_video, restore_reprocess_manifest
 from safe_files import sha256_file, verified_move as real_verified_move
 from scan_state import ScanStateStore
@@ -105,6 +112,182 @@ class ReprocessAiVideoTest(unittest.TestCase):
                 self.assertEqual(state.iter_ai_queue_candidates(), [video.resolve()])
             finally:
                 state.close()
+
+    def test_retranscribe_archives_owned_completed_delivery(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            anime = root / "anime"
+            work = root / "work"
+            anime.mkdir()
+            work.mkdir()
+            video = anime / "Anime S01E01.mkv"
+            video.write_bytes(b"source-video")
+            config = _config(anime, work)
+            config.completed_delivery_enabled = True
+            config.completed_delivery_path = str(root / "completed")
+            config.completed_delivery_manifest_path = str(work / "completed_manifests")
+            destination = completed_delivery_destination(video, config)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(b"old-completed-video")
+            receipt = completed_delivery_receipt_path(video, config)
+            receipt.parent.mkdir(parents=True, exist_ok=True)
+            identity = delivery_identity(video, config)
+            manifest = output_manifest_path(video, config)
+            manifest.parent.mkdir(parents=True, exist_ok=True)
+            manifest.write_text("old-manifest", encoding="utf-8")
+            video_stat = video.stat()
+            destination_stat = destination.stat()
+            receipt.write_text(
+                json.dumps(
+                    {
+                        "schema_version": COMPLETED_DELIVERY_SCHEMA_VERSION,
+                        "contract": COMPLETED_DELIVERY_CONTRACT,
+                        "state": "committed",
+                        "source": {
+                            "canonical_path": str(video.resolve()),
+                            "media_size": video_stat.st_size,
+                            "media_mtime_ns": video_stat.st_mtime_ns,
+                            "media_fingerprint": identity["media"]["media_fingerprint"],
+                            "sha256": sha256_file(video),
+                        },
+                        "delivery": {
+                            "obligation_id": identity["obligation_id"],
+                            "policy_revision": identity["policy_revision"],
+                        },
+                        "publication_manifest": {
+                            "path": str(manifest.resolve()),
+                            "sha256": sha256_file(manifest),
+                        },
+                        "destination": str(destination),
+                        "output": {
+                            "path": str(destination),
+                            "size": destination_stat.st_size,
+                            "mtime_ns": destination_stat.st_mtime_ns,
+                            "sha256": sha256_file(destination),
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = reprocess_video(config, video, mode="retranscribe")
+
+            archived_sources = {item["source"] for item in result["moved"]}
+            self.assertIn(str(destination), archived_sources)
+            self.assertIn(str(receipt), archived_sources)
+            self.assertFalse(destination.exists())
+            self.assertFalse(receipt.exists())
+
+            restored = restore_reprocess_manifest(config, result["manifest"])
+            self.assertEqual(restored["restored_outputs"], result["moved_outputs"])
+            self.assertEqual(destination.read_bytes(), b"old-completed-video")
+            self.assertTrue(receipt.is_file())
+
+            receipt_payload = json.loads(receipt.read_text(encoding="utf-8"))
+            destination.write_bytes(b"X" * destination.stat().st_size)
+            receipt_payload["output"]["mtime_ns"] = destination.stat().st_mtime_ns
+            receipt.write_text(json.dumps(receipt_payload), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "does not own"):
+                reprocess_video(config, video, mode="retranscribe")
+            self.assertTrue(destination.is_file())
+            self.assertTrue(receipt.is_file())
+
+    def test_reprocess_refuses_current_terminal_delivery_before_archiving(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            anime = root / "anime"
+            work = root / "work"
+            anime.mkdir()
+            work.mkdir()
+            video = anime / "Anime S01E01.mkv"
+            video.write_bytes(b"source-video")
+            config = _config(anime, work)
+            paths = paths_for_video(video, config)
+            paths.ja_srt.write_text("preserve me", encoding="utf-8")
+            identity = delivery_identity(video, config)
+            state = ScanStateStore.from_config(config)
+            try:
+                media = identity["media"]
+                obligation = state.ensure_ai_delivery_obligation(
+                    video,
+                    media_size=media["media_size"],
+                    media_mtime_ns=media["media_mtime_ns"],
+                    policy_revision=identity["policy_revision"],
+                    obligation_id=identity["obligation_id"],
+                )
+                attempt = state.begin_ai_delivery_attempt(obligation["obligation_id"])
+                state.finish_ai_delivery_attempt(attempt["attempt_id"], status="succeeded")
+                state.mark_ai_delivery_verified(
+                    obligation["obligation_id"],
+                    manifest_path="/work/manifest.json",
+                    manifest_sha256="a" * 64,
+                    verification={
+                        "publication_semantics_verified": True,
+                        "publication_contract": "ai-publication-semantics-v2",
+                        "publication_kind": "translated_trilingual",
+                        "output_languages": ["ja", "zh-CN", "zh-TW"],
+                        "expected_policy_revision": identity["policy_revision"],
+                        "manifest_policy_revision": identity["policy_revision"],
+                        "policy_revision_matched": True,
+                    },
+                    evidence_verified=True,
+                )
+                state.commit()
+            finally:
+                state.close()
+
+            with self.assertRaisesRegex(RuntimeError, "terminal"):
+                reprocess_video(config, video, mode="retranscribe")
+
+            self.assertEqual(paths.ja_srt.read_text(encoding="utf-8"), "preserve me")
+            self.assertFalse((work / "manual_ai_reprocess").exists())
+
+            with patch(
+                "transcriber.ASR_TRANSCRIPTION_CONTRACT",
+                "asr-short-gap-rescue-fail-closed-v-next",
+            ):
+                result = reprocess_video(config, video, mode="retranscribe")
+            self.assertTrue(result["ok"])
+            self.assertFalse(paths.ja_srt.exists())
+
+    def test_reprocess_refuses_completed_pair_appearing_after_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            anime = root / "anime"
+            work = root / "work"
+            anime.mkdir()
+            work.mkdir()
+            video = anime / "Anime S01E01.mkv"
+            video.write_bytes(b"source-video")
+            config = _config(anime, work)
+            config.completed_delivery_enabled = True
+            config.completed_delivery_path = str(root / "completed")
+            config.completed_delivery_manifest_path = str(work / "completed_manifests")
+            paths = paths_for_video(video, config)
+            paths.ja_srt.write_text("preserve me", encoding="utf-8")
+            destination = completed_delivery_destination(video, config)
+            receipt = completed_delivery_receipt_path(video, config)
+
+            def appear_after_validation(*_args: object, **_kwargs: object):
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(b"unexpected-completed")
+                receipt.parent.mkdir(parents=True, exist_ok=True)
+                receipt.write_text("{}", encoding="utf-8")
+                return set(), {}
+
+            with (
+                patch(
+                    "reprocess_ai_video._validate_completed_delivery_for_reprocess",
+                    side_effect=appear_after_validation,
+                ),
+                self.assertRaisesRegex(RuntimeError, "changed after ownership validation"),
+            ):
+                reprocess_video(config, video, mode="retranscribe")
+
+            self.assertEqual(paths.ja_srt.read_text(encoding="utf-8"), "preserve me")
+            self.assertEqual(destination.read_bytes(), b"unexpected-completed")
+            self.assertTrue(receipt.is_file())
+            self.assertFalse((work / "manual_ai_reprocess").exists())
 
     def test_automatic_review_retranscribe_preserves_consumed_retry_budget(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

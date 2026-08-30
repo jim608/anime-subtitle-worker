@@ -24,6 +24,9 @@ from srt_utils import SrtBlock, read_srt, write_srt
 from whisper_runtime import get_whisper_model
 
 
+ASR_TRANSCRIPTION_CONTRACT = "asr-short-gap-rescue-fail-closed-v2"
+
+
 class TranscriptionError(RuntimeError):
     pass
 

@@ -152,6 +152,14 @@ class ProcessingProvenanceTests(unittest.TestCase):
         self.assertEqual(prompt_signature("a", "b"), prompt_signature("a", "b"))
         self.assertNotEqual(prompt_signature("a", "b"), prompt_signature("a", "c"))
 
+    def test_asr_contract_changes_processing_signature(self) -> None:
+        baseline = processing_config_signature(self.config)
+        with patch(
+            "transcriber.ASR_TRANSCRIPTION_CONTRACT",
+            "asr-short-gap-rescue-fail-closed-v-next",
+        ):
+            self.assertNotEqual(baseline, processing_config_signature(self.config))
+
     def test_language_routing_policy_changes_processing_signature(self) -> None:
         baseline_values = {
             **vars(self.config),
