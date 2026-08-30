@@ -1043,9 +1043,10 @@ class TranscriberFilterTest(unittest.TestCase):
             self.assertFalse(uncovered["complete"])
             self.assertEqual(uncovered["uncovered_speech_ranges"], [[17.5, 18.0]])
 
-            # Live regression: the retained cue plus the existing 0.15s
-            # tolerance covers 95.26% of one VAD interval.  The remaining
-            # 0.344s is only the trailing edge of that same interval.
+            # Exact live regression: the retained cue ends at 1427.18s.  The
+            # existing 0.15s tolerance extends coverage to 1427.33s, covering
+            # 93.20% of the 1420.56-1427.824s VAD interval.  The remaining
+            # 0.494s is only the trailing edge of that same interval.
             with patch(
                 "transcriber._silero_speech_timestamps",
                 return_value=[
@@ -1060,7 +1061,7 @@ class TranscriberFilterTest(unittest.TestCase):
                     18.0,
                     20.0,
                     20.0,
-                    [(6.0, 12.93, "covered dialogue")],
+                    [(6.0, 12.78, "covered dialogue")],
                     config,
                 )
             self.assertTrue(trailing_edge["complete"])
@@ -1069,18 +1070,60 @@ class TranscriberFilterTest(unittest.TestCase):
                 trailing_edge["accepted_trailing_edge_ranges"][0][
                     "trailing_gap_seconds"
                 ],
-                0.344,
+                0.494,
             )
             self.assertEqual(
                 trailing_edge["accepted_trailing_edge_ranges"][0][
                     "coverage_ratio"
                 ],
-                0.9526,
+                0.932,
+            )
+            self.assertEqual(
+                trailing_edge["accepted_trailing_edge_ranges"][0][
+                    "uncovered_range"
+                ],
+                [12.93, 13.424],
+            )
+
+            # Partial-edge exceptions cannot accumulate across VAD regions.
+            # Even though each gap independently satisfies both numeric caps,
+            # two separate partial regions must fail closed.
+            with patch(
+                "transcriber._silero_speech_timestamps",
+                return_value=[
+                    {"start": 2 * 16000, "end": 6 * 16000},
+                    {"start": 8 * 16000, "end": 12 * 16000},
+                ],
+            ):
+                accumulated_edges = _tail_adjacent_speech_coverage_evidence(
+                    audio,
+                    18.0,
+                    20.0,
+                    20.0,
+                    [
+                        (7.8, 11.64, "first partial dialogue"),
+                        (13.8, 17.64, "second partial dialogue"),
+                    ],
+                    config,
+                )
+            self.assertFalse(accumulated_edges["complete"])
+            self.assertEqual(accumulated_edges["accepted_trailing_edge_ranges"], [])
+            self.assertEqual(
+                accumulated_edges["uncovered_speech_ranges"],
+                [[8.0, 12.0], [14.0, 18.0]],
+            )
+            self.assertEqual(len(accumulated_edges["partial_edge_rejections"]), 2)
+            self.assertTrue(
+                all(
+                    edge["reason"]
+                    == "multiple partial trailing-edge exceptions are not allowed"
+                    for edge in accumulated_edges["partial_edge_rejections"]
+                )
             )
 
             boundary_cases = (
-                # 94.75% coverage with an otherwise small trailing gap.
-                (4.0, 8.0, (9.8, 13.64, "below ratio")),
+                # 92.75% coverage with an otherwise small 0.29s trailing gap.
+                (4.0, 8.0, (9.8, 13.56, "below ratio")),
                 # 96.36% coverage but a 0.51s trailing gap.
                 (0.0, 14.0, (5.8, 19.34, "gap too large")),
                 # Coverage starts after the VAD speech, leaving a leading gap.
@@ -1131,6 +1174,106 @@ class TranscriberFilterTest(unittest.TestCase):
                 internal_gap["uncovered_speech_ranges"],
                 [[10.0, 16.0]],
             )
+
+    def test_prompt_free_tail_consensus_independently_covers_partial_vad_edge(
+        self,
+    ) -> None:
+        duration = 1435.225
+        artifact_range = (1432.4, 1435.2)
+        config = SimpleNamespace(
+            asr_prompt_free_allow_recovered_primary_artifacts=True,
+            whisper_initial_prompt=None,
+            op_ed_initial_prompt=None,
+            whisper_condition_on_previous_text=False,
+        )
+        adjacent = {
+            "complete": True,
+            "accepted_trailing_edge_ranges": [
+                {
+                    "speech_range": [1420.56, 1427.824],
+                    "coverage_range": [1420.4, 1427.33],
+                    "uncovered_range": [1427.33, 1427.824],
+                    "coverage_ratio": 0.932,
+                    "trailing_gap_seconds": 0.494,
+                }
+            ],
+            "uncovered_speech_ranges": [],
+        }
+        base_probe = {
+            "range": [1427.18, duration],
+            "completed_clip_ranges": [[1426.18, duration]],
+            "prompt_free": True,
+            "completed": True,
+            "observed_ranges": [],
+            "known_artifact_ranges": [],
+            "rejected_quality_ranges": [],
+            "clean_ranges": [],
+            "unbounded_observation": False,
+        }
+
+        with (
+            patch("transcriber._wav_duration_seconds", return_value=duration),
+            patch(
+                "transcriber._selective_window_silence_evidence",
+                return_value={"confirmed": True},
+            ),
+            patch(
+                "transcriber._tail_adjacent_speech_coverage_evidence",
+                return_value=adjacent,
+            ),
+        ):
+            confirmed, evidence = _prompt_free_tail_artifact_consensus(
+                "episode.wav",
+                [artifact_range],
+                [(1420.4, 1427.18, "covered final dialogue")],
+                [],
+                [base_probe],
+                config,
+            )
+        self.assertEqual(confirmed, [artifact_range])
+        self.assertTrue(evidence[0]["confirmed"])
+        self.assertTrue(
+            evidence[0]["trailing_edge_probe_evidence"][0][
+                "confirmed_no_dialogue"
+            ]
+        )
+
+        observed_probe = {
+            **base_probe,
+            "observed_ranges": [[1427.5, 1427.7]],
+            "clean_ranges": [[1427.5, 1427.7]],
+        }
+        with (
+            patch("transcriber._wav_duration_seconds", return_value=duration),
+            patch(
+                "transcriber._selective_window_silence_evidence",
+                return_value={"confirmed": True},
+            ),
+            patch(
+                "transcriber._tail_adjacent_speech_coverage_evidence",
+                return_value=adjacent,
+            ),
+        ):
+            rejected, rejected_evidence = _prompt_free_tail_artifact_consensus(
+                "episode.wav",
+                [artifact_range],
+                [(1420.4, 1427.18, "covered final dialogue")],
+                [],
+                [observed_probe],
+                config,
+            )
+        self.assertEqual(rejected, [])
+        self.assertFalse(rejected_evidence[0]["confirmed"])
+        self.assertEqual(
+            rejected_evidence[0]["failure"],
+            "prompt-free probe observed content in accepted VAD trailing edge",
+        )
+        self.assertEqual(
+            rejected_evidence[0]["trailing_edge_probe_evidence"][0][
+                "overlapping_observed_ranges"
+            ],
+            [[1427.5, 1427.7]],
+        )
 
     def test_full_prompt_free_tail_consensus_is_hash_bound_and_dialogue_stays_review(
         self,

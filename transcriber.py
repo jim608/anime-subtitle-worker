@@ -112,7 +112,7 @@ SELECTIVE_SILENCE_MAX_RMS_DBFS = -50.0
 TAIL_ARTIFACT_MAX_END_GAP_SECONDS = 0.75
 TAIL_ARTIFACT_CONTEXT_SECONDS = 12.0
 TAIL_SPEECH_COVERAGE_TOLERANCE_SECONDS = 0.15
-TAIL_SPEECH_MIN_EDGE_COVERAGE_RATIO = 0.95
+TAIL_SPEECH_MIN_EDGE_COVERAGE_RATIO = 0.93
 TAIL_SPEECH_MAX_TRAILING_GAP_SECONDS = 0.5
 
 
@@ -1300,9 +1300,11 @@ def _prompt_free_tail_artifact_consensus(
     prompt-free full pass must identify a known artifact ending at the audio
     boundary.  A completed prompt-free OP/ED pass must independently observe
     only the same known artifact, or no segment at all, over that exact window.
-    VAD plus conservative PCM energy must find no speech in the artifact, and
-    all adjacent VAD speech must already be covered by retained subtitle chunks.
-    Any missing evidence, clean tail text, or low-quality speech fails closed.
+    VAD plus conservative PCM energy must find no speech in the artifact.  All
+    adjacent VAD speech must be covered by retained subtitle chunks, except one
+    bounded final trailing edge that a completed prompt-free probe independently
+    covers without any observation.  Any missing evidence, clean tail text, or
+    low-quality speech fails closed.
     """
 
     if not bool(
@@ -1351,6 +1353,7 @@ def _prompt_free_tail_artifact_consensus(
             continue
         item["probe_range"] = list(probe.get("range") or [])
 
+        completed_clips = _probe_ranges(probe.get("completed_clip_ranges"))
         observed = _probe_ranges(probe.get("observed_ranges"))
         known_artifacts = _probe_ranges(probe.get("known_artifact_ranges"))
         rejected_quality = _probe_ranges(probe.get("rejected_quality_ranges"))
@@ -1407,6 +1410,110 @@ def _prompt_free_tail_artifact_consensus(
         item["adjacent_speech_coverage"] = adjacent
         if not bool(adjacent.get("complete")):
             item["failure"] = "adjacent speech coverage is incomplete"
+            evidence.append(item)
+            continue
+
+        accepted_edges_value = adjacent.get("accepted_trailing_edge_ranges", [])
+        if not isinstance(accepted_edges_value, list):
+            item["failure"] = "accepted VAD trailing-edge evidence is malformed"
+            evidence.append(item)
+            continue
+        if len(accepted_edges_value) > 1:
+            item["failure"] = "multiple accepted VAD trailing edges are not allowed"
+            evidence.append(item)
+            continue
+
+        trailing_edge_probe_evidence: list[dict[str, Any]] = []
+        trailing_edge_probe_failure: str | None = None
+        for accepted_edge in accepted_edges_value:
+            if not isinstance(accepted_edge, dict):
+                trailing_edge_probe_failure = (
+                    "accepted VAD trailing-edge evidence is malformed"
+                )
+                break
+            uncovered = _probe_ranges([accepted_edge.get("uncovered_range")])
+            if len(uncovered) != 1:
+                trailing_edge_probe_failure = (
+                    "accepted VAD trailing edge lacks an exact uncovered range"
+                )
+                break
+            uncovered_start, uncovered_end = uncovered[0]
+            covering_clips = [
+                (clip_start, clip_end)
+                for clip_start, clip_end in completed_clips
+                if clip_start <= uncovered_start + 1e-9
+                and clip_end >= uncovered_end - 1e-9
+            ]
+            overlapping_observed = [
+                (start, end)
+                for start, end in observed
+                if _ranges_overlap(uncovered_start, uncovered_end, start, end)
+            ]
+            overlapping_clean = [
+                (start, end)
+                for start, end in clean
+                if _ranges_overlap(uncovered_start, uncovered_end, start, end)
+            ]
+            overlapping_rejected = [
+                (start, end)
+                for start, end in rejected_quality
+                if _ranges_overlap(uncovered_start, uncovered_end, start, end)
+            ]
+            overlapping_known = [
+                (start, end)
+                for start, end in known_artifacts
+                if _ranges_overlap(uncovered_start, uncovered_end, start, end)
+            ]
+            edge_probe = {
+                "uncovered_range": [
+                    round(uncovered_start, 3),
+                    round(uncovered_end, 3),
+                ],
+                "covering_completed_clip_ranges": [
+                    [round(start, 3), round(end, 3)]
+                    for start, end in covering_clips
+                ],
+                "overlapping_observed_ranges": [
+                    [round(start, 3), round(end, 3)]
+                    for start, end in overlapping_observed
+                ],
+                "overlapping_clean_ranges": [
+                    [round(start, 3), round(end, 3)]
+                    for start, end in overlapping_clean
+                ],
+                "overlapping_rejected_quality_ranges": [
+                    [round(start, 3), round(end, 3)]
+                    for start, end in overlapping_rejected
+                ],
+                "overlapping_known_artifact_ranges": [
+                    [round(start, 3), round(end, 3)]
+                    for start, end in overlapping_known
+                ],
+                "confirmed_no_dialogue": False,
+            }
+            trailing_edge_probe_evidence.append(edge_probe)
+            if not covering_clips:
+                trailing_edge_probe_failure = (
+                    "prompt-free probe does not cover accepted VAD trailing edge"
+                )
+                break
+            if any(
+                (
+                    overlapping_observed,
+                    overlapping_clean,
+                    overlapping_rejected,
+                    overlapping_known,
+                )
+            ):
+                trailing_edge_probe_failure = (
+                    "prompt-free probe observed content in accepted VAD trailing edge"
+                )
+                break
+            edge_probe["confirmed_no_dialogue"] = True
+
+        item["trailing_edge_probe_evidence"] = trailing_edge_probe_evidence
+        if trailing_edge_probe_failure is not None:
+            item["failure"] = trailing_edge_probe_failure
             evidence.append(item)
             continue
 
@@ -1481,6 +1588,7 @@ def _tail_adjacent_speech_coverage_evidence(
         "vad_speech_ranges": [],
         "covered_ranges": [],
         "accepted_trailing_edge_ranges": [],
+        "partial_edge_rejections": [],
         "uncovered_speech_ranges": [],
     }
     if context_end <= context_start:
@@ -1535,9 +1643,10 @@ def _tail_adjacent_speech_coverage_evidence(
                 and start < context_end
             ]
         )
+        speech_ranges.sort(key=lambda item: (item[0], item[1]))
         uncovered: list[tuple[float, float]] = []
-        accepted_trailing_edges: list[dict[str, Any]] = []
-        for start, end in speech_ranges:
+        trailing_edge_candidates: list[tuple[int, dict[str, Any]]] = []
+        for speech_index, (start, end) in enumerate(speech_ranges):
             if any(
                 start >= covered_start and end <= covered_end
                 for covered_start, covered_end in coverage
@@ -1574,6 +1683,10 @@ def _tail_adjacent_speech_coverage_evidence(
                             round(covered_start, 3),
                             round(covered_end, 3),
                         ],
+                        "uncovered_range": [
+                            round(covered_end, 3),
+                            round(end, 3),
+                        ],
                         "coverage_ratio": round(coverage_ratio, 4),
                         "trailing_gap_seconds": round(trailing_gap, 3),
                     }
@@ -1581,7 +1694,27 @@ def _tail_adjacent_speech_coverage_evidence(
             if accepted_edge is None:
                 uncovered.append((start, end))
             else:
-                accepted_trailing_edges.append(accepted_edge)
+                trailing_edge_candidates.append((speech_index, accepted_edge))
+
+        accepted_trailing_edges: list[dict[str, Any]] = []
+        rejected_trailing_edges: list[dict[str, Any]] = []
+        if (
+            len(trailing_edge_candidates) == 1
+            and trailing_edge_candidates[0][0] == len(speech_ranges) - 1
+        ):
+            accepted_trailing_edges.append(trailing_edge_candidates[0][1])
+        else:
+            rejection_reason = (
+                "multiple partial trailing-edge exceptions are not allowed"
+                if len(trailing_edge_candidates) > 1
+                else "partial trailing-edge exception is allowed only on the final VAD speech range"
+            )
+            for _speech_index, candidate in trailing_edge_candidates:
+                rejected = dict(candidate)
+                rejected["reason"] = rejection_reason
+                rejected_trailing_edges.append(rejected)
+                speech_start, speech_end = candidate["speech_range"]
+                uncovered.append((float(speech_start), float(speech_end)))
         result["vad_speech_ranges"] = [
             [round(start, 3), round(end, 3)] for start, end in speech_ranges
         ]
@@ -1589,8 +1722,10 @@ def _tail_adjacent_speech_coverage_evidence(
             [round(start, 3), round(end, 3)] for start, end in coverage
         ]
         result["accepted_trailing_edge_ranges"] = accepted_trailing_edges
+        result["partial_edge_rejections"] = rejected_trailing_edges
         result["uncovered_speech_ranges"] = [
-            [round(start, 3), round(end, 3)] for start, end in uncovered
+            [round(start, 3), round(end, 3)]
+            for start, end in sorted(uncovered, key=lambda item: (item[0], item[1]))
         ]
         result["complete"] = not uncovered
     except Exception as coverage_error:  # noqa: BLE001 - evidence must fail closed.
