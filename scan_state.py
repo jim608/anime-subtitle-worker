@@ -2189,7 +2189,12 @@ class ScanStateStore:
             )
             {exact_target_sql}
             ORDER BY
-                CASE WHEN q.source = 'manual_priority' THEN 1 ELSE 0 END DESC,
+                CASE q.source
+                    WHEN 'manual_priority' THEN 3
+                    WHEN 'manual_force' THEN 2
+                    WHEN 'auto_retry_sweep' THEN 1
+                    ELSE 0
+                END DESC,
                 COALESCE(q.force_ai, 0) DESC,
                 CASE WHEN deadline.earliest_due_at IS NULL THEN 1 ELSE 0 END ASC,
                 deadline.earliest_due_at ASC,

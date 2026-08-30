@@ -654,6 +654,76 @@ class ScanStateStoreQueueTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_safe_sweep_queue_preempts_review_without_beating_manual_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            store = ScanStateStore(root / "state.sqlite3")
+            manual_priority = root / "Manual Priority S01E01.mkv"
+            manual_force = root / "Manual Force S01E02.mkv"
+            sweep = root / "Sweep S01E02.mkv"
+            review = root / "Review S99E99.mkv"
+            for video in (manual_priority, manual_force, sweep, review):
+                video.write_bytes(b"media")
+            try:
+                store.upsert_ai_queue_candidate(
+                    manual_priority,
+                    manual_priority.stat().st_mtime_ns,
+                )
+                store.upsert_ai_queue_candidate(manual_force, manual_force.stat().st_mtime_ns)
+                store.upsert_ai_queue_candidate(sweep, sweep.stat().st_mtime_ns)
+                store.upsert_ai_queue_candidate(review, review.stat().st_mtime_ns)
+
+                store.mark_ai_queue_failed(
+                    sweep,
+                    "CUDA out of memory",
+                    error_code="transient_oom",
+                    retry_strategy="lower_memory_same_pipeline",
+                )
+                sweep_failure = store.ai_queue_candidate_snapshot(sweep)
+                self.assertIsNotNone(sweep_failure)
+                assert sweep_failure is not None
+                self.assertTrue(
+                    store.queue_failed_retry_preserving_budget(
+                        sweep,
+                        expected_failure_revision=str(sweep_failure["failure_revision"]),
+                        expected_failure_code="transient_oom",
+                        expected_media_mtime_ns=sweep.stat().st_mtime_ns,
+                    )
+                )
+
+                store.mark_ai_queue_failed(
+                    review,
+                    "ASR quality review",
+                    max_attempts=1,
+                    error_code="asr_quality",
+                    retry_strategy="asr-full-retranscribe-v1",
+                )
+                review_failure = store.ai_queue_candidate_snapshot(review)
+                self.assertIsNotNone(review_failure)
+                assert review_failure is not None
+                self.assertTrue(
+                    store.queue_paused_review_remediation(
+                        review,
+                        expected_failure_revision=str(review_failure["failure_revision"]),
+                        policy_revision="asr-full-retranscribe-v1",
+                    )
+                )
+                store.prioritize_ai_queue_candidate(manual_priority)
+                store.force_ai_queue_candidate(manual_force)
+                store.commit()
+
+                self.assertEqual(
+                    store.iter_ai_queue_candidates(),
+                    [
+                        manual_priority.resolve(),
+                        manual_force.resolve(),
+                        sweep.resolve(),
+                        review.resolve(),
+                    ],
+                )
+            finally:
+                store.close()
+
     def test_safe_sweep_queue_cas_does_not_overwrite_concurrent_failure_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
