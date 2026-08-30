@@ -1411,7 +1411,16 @@ class VideoWorker:
     ) -> TranslationMemoryOrigin | None:
         if origin is None:
             return None
+        current_source_hash = sha256_file(Path(origin.source_srt_path))
         current_hash = sha256_file(paths.zh_cn_srt)
+        if current_source_hash != origin.source_srt_sha256:
+            self.logger.warning(
+                "Dropping translation-memory lineage after validated prepublication source repair: "
+                "video=%s",
+                video,
+            )
+            remove_translation_memory_origin(self.config.work_path, paths.zh_cn_srt)
+            return None
         if current_hash != origin.target_srt_sha256:
             write_translation_memory_origin(
                 self.config.work_path,

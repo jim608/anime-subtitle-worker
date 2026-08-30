@@ -407,6 +407,52 @@ class VideoWorkerTest(unittest.TestCase):
             self.assertEqual(repaired_ja[3].timing, "00:00:50,320 --> 00:00:51,120")
             self.assertEqual(repaired_ja[4].timing, "00:00:51,120 --> 00:00:55,100")
 
+    def test_translation_memory_origin_is_dropped_after_aligned_timing_repair(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = _config(root)
+            worker = VideoWorker(config, _logger())
+            video = root / "Anime S01E01.mkv"
+            video.write_bytes(b"video")
+            paths = paths_for_video(video, config)
+            original_timing = "00:00:01,000 --> 00:00:03,000"
+            repaired_timing = "00:00:01,000 --> 00:00:02,900"
+            write_srt(paths.ja_srt, [SrtBlock(1, original_timing, ["source"])])
+            write_srt(paths.zh_cn_srt, [SrtBlock(1, original_timing, ["target"])])
+            scope = worker._translation_memory_scope(video)
+            write_translation_memory_origin(
+                config.work_path,
+                paths.zh_cn_srt,
+                source_srt_path=paths.ja_srt,
+                source_srt_sha256=sha256_file(paths.ja_srt),
+                target_srt_sha256=sha256_file(paths.zh_cn_srt),
+                split_decision_digest="1" * 64,
+                cached_indexes=(),
+                translation_lineage_mode="no_hits",
+                scope=scope,
+            )
+            origin = read_translation_memory_origin_strict(
+                config.work_path,
+                paths.zh_cn_srt,
+            )
+            self.assertIsNotNone(origin)
+
+            write_srt(paths.ja_srt, [SrtBlock(1, repaired_timing, ["source"])])
+            write_srt(paths.zh_cn_srt, [SrtBlock(1, repaired_timing, ["target"])])
+            rebound = worker._rebind_translation_memory_origin_after_qc(
+                video,
+                paths,
+                origin,
+            )
+
+            self.assertIsNone(rebound)
+            self.assertIsNone(
+                read_translation_memory_origin_strict(
+                    config.work_path,
+                    paths.zh_cn_srt,
+                )
+            )
+
     def test_prepublication_qc_repairs_evidence_bound_aligned_cps_duration(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
