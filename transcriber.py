@@ -2102,6 +2102,10 @@ def repair_low_confidence_ranges(
             asr_diagnostics_enabled=True,
             asr_diagnostics_path=str(root / "diagnostics"),
         )
+        minimum_repair_chars = max(
+            1,
+            int(getattr(repair_config, "gap_rescue_min_chars", 2)),
+        )
         for index, (start, end) in enumerate(ranges, start=1):
             range_blocks: list[SrtBlock] = []
             range_confidences: list[SegmentConfidence] = []
@@ -2213,6 +2217,19 @@ def repair_low_confidence_ranges(
                     absolute_end = block_end + clip_start
                     center = (absolute_start + absolute_end) / 2
                     if center < start or center > end:
+                        continue
+                    block_text = " ".join(
+                        line.strip() for line in block.text if line.strip()
+                    )
+                    if _display_length(block_text) < minimum_repair_chars:
+                        detail = (
+                            "Selective ASR repair block is below the minimum "
+                            "character threshold "
+                            f"range={absolute_start:.2f}-{absolute_end:.2f}s "
+                            f"text={block_text[:120]!r}"
+                        )
+                        range_failures.append(detail)
+                        logger.warning("%s", detail)
                         continue
                     range_blocks.append(
                         SrtBlock(

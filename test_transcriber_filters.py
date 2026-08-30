@@ -464,6 +464,64 @@ class TranscriberFilterTest(unittest.TestCase):
             self.assertEqual(payload["status"], "accepted_after_selective_retry")
             self.assertEqual(payload["repaired_ranges"], [[0.0, 45.0]])
 
+    def test_selective_repair_fails_closed_on_one_character_clip_block(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            audio = root / "episode.wav"
+            audio.write_bytes(b"audio")
+            output = root / "episode.srt"
+            write_srt(
+                output,
+                [
+                    SrtBlock(
+                        1,
+                        "00:00:00,000 --> 00:00:15,420",
+                        ["unsafe opening"],
+                    )
+                ],
+            )
+            config = _selective_repair_config(root)
+            config.gap_rescue_min_chars = 2
+
+            def run_ffmpeg(command, **_kwargs):
+                Path(command[-1]).write_bytes(b"clip")
+                return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+            def transcribe_clip(_sample, sample_srt, _clip_config, _logger):
+                write_srt(
+                    sample_srt,
+                    [
+                        SrtBlock(1, "00:00:00,000 --> 00:00:04,800", ["な"]),
+                        SrtBlock(2, "00:00:14,240 --> 00:00:15,420", ["はどうも"]),
+                    ],
+                )
+
+            with (
+                patch("transcriber.subprocess.run", side_effect=run_ffmpeg),
+                patch("transcriber.transcribe_to_srt", side_effect=transcribe_clip),
+                self.assertRaisesRegex(
+                    TranscriptionError,
+                    "below the minimum character threshold",
+                ),
+            ):
+                repair_low_confidence_ranges(
+                    audio,
+                    output,
+                    [(0.0, 15.42)],
+                    config,
+                    logging.getLogger("test.transcriber.selective-min-chars"),
+                )
+
+            self.assertEqual(
+                [(block.timing, block.text) for block in read_srt(output)],
+                [
+                    (
+                        "00:00:00,000 --> 00:00:15,420",
+                        ["unsafe opening"],
+                    )
+                ],
+            )
+
     def test_selective_repair_splits_long_opening_and_skips_silent_clips(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
