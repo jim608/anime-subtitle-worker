@@ -19,7 +19,6 @@ from output_manifest import (
     write_output_manifest,
 )
 from safe_files import atomic_write_text, sha256_file, verified_copy_replace
-from scan_state import ScanStateStore
 from srt_utils import SrtBlock, read_srt, validate_translation, write_srt
 from subtitle_paths import paths_for_video
 from subtitle_quality import quality_report_candidates
@@ -185,6 +184,7 @@ def retranslate_lines(config: object, video: Path, indexes: set[int], logger: lo
             output_languages=("ja", "zh-CN", "zh-TW"),
         )
         finish_output_publication(resolved_video, config)
+        worker._deliver_completed_media_if_required(resolved_video)
         if not config.keep_intermediate_files:
             # The Japanese SRT is the verified, expensive ASR source of truth.
             # Keep it after a successful line repair so another review action
@@ -205,16 +205,6 @@ def retranslate_lines(config: object, video: Path, indexes: set[int], logger: lo
             archive_dir / "result.json",
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
         )
-
-        try:
-            state = ScanStateStore.from_config(config)
-            try:
-                state.mark_ai_queue_done(resolved_video, f"Retranslated lines: {sorted(indexes)}")
-                state.commit()
-            finally:
-                state.close()
-        except Exception as exc:  # noqa: BLE001 - subtitle output is already valid.
-            logger.warning("Unable to update queue state after line retranslation: %s", exc)
 
         return manifest
     except Exception as operation_error:

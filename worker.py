@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import time
 from types import SimpleNamespace
@@ -374,6 +375,40 @@ class VideoWorker:
                         **asr_context,
                     },
                     candidates=self._asr_review_candidates(asr_context),
+                    replace_candidates=True,
+                )
+            omission_indexes = self._translation_safe_omission_review_indexes(exc)
+            if omission_indexes:
+                line_spec = ",".join(str(index) for index in omission_indexes)
+                self._create_review_item(
+                    video,
+                    kind="subtitle_quality",
+                    summary=str(exc),
+                    diagnosis={
+                        "error": str(exc),
+                        "stage": "quality_check",
+                        "reports": [
+                            {
+                                "role": "translated",
+                                "issues": [
+                                    {
+                                        "code": TRANSLATION_SAFE_OMISSION,
+                                        "severity": "fail",
+                                        "indexes": omission_indexes,
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                    candidates=[
+                        {
+                            "action": "ai.retranslate_lines",
+                            "label": "Re-translate only confirmed omitted lines",
+                            "lines": line_spec,
+                            "indexes": omission_indexes,
+                            "selective": True,
+                        }
+                    ],
                     replace_candidates=True,
                 )
             stage = self._stage_for_exception(exc)
@@ -7205,6 +7240,32 @@ class VideoWorker:
             if isinstance(current.__context__, BaseException):
                 pending.append(current.__context__)
         return False
+
+    @staticmethod
+    def _translation_safe_omission_review_indexes(
+        exc: BaseException,
+    ) -> list[int]:
+        """Accept only the exact bounded omission failure emitted by this Worker."""
+
+        if not isinstance(exc, SubtitleQualityError):
+            return []
+        message = " ".join(str(exc).strip().split())
+        match = re.fullmatch(
+            r"Translation safe-omission remained after bounded same-job recovery: "
+            r"indexes=\[([1-9]\d*(?:,\s*[1-9]\d*)*)\]",
+            message,
+        )
+        if match is None:
+            return []
+        indexes = [int(value.strip()) for value in match.group(1).split(",")]
+        if (
+            not indexes
+            or len(indexes) > 32
+            or any(index > 1_000_000 for index in indexes)
+            or indexes != sorted(set(indexes))
+        ):
+            return []
+        return indexes
 
     @staticmethod
     def _asr_review_archive_reason(exc: BaseException) -> str:

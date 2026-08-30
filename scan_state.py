@@ -629,6 +629,182 @@ class ScanStateStore:
         }
         return force_ai, force_ai or manual_retry
 
+    def claim_ai_line_retranslation(
+        self,
+        path: Path,
+        *,
+        expected_failure_revision: str,
+        expected_media_mtime_ns: int,
+    ) -> dict[str, Any]:
+        """Claim one failed row for targeted repair without consuming retry budget."""
+
+        normalized_path = _queue_path(path)
+        revision = str(expected_failure_revision or "").strip()
+        if not re.fullmatch(r"[0-9a-f]{24}", revision):
+            raise ValueError("line retranslation requires an exact failure revision")
+        if isinstance(expected_media_mtime_ns, bool):
+            raise ValueError("line retranslation requires an exact media mtime")
+        mtime_ns = int(expected_media_mtime_ns)
+        try:
+            current_mtime_ns = int(Path(normalized_path).stat().st_mtime_ns)
+        except OSError as exc:
+            raise ValueError("line retranslation media is unavailable") from exc
+        if mtime_ns <= 0 or current_mtime_ns != mtime_ns:
+            raise ValueError("line retranslation media identity changed")
+        row = self._conn.execute(
+            """
+            SELECT q.status, q.next_retry_at, q.source,
+                   COALESCE(j.stage, ''), COALESCE(j.status, ''), COALESCE(j.message, '')
+            FROM ai_candidate_queue q
+            LEFT JOIN ai_job_state j ON j.path=q.path
+            WHERE q.path=? AND q.mtime_ns=? AND q.failure_revision=?
+              AND q.status IN ('paused', 'failed_retry')
+            """,
+            (normalized_path, mtime_ns, revision),
+        ).fetchone()
+        if row is None:
+            raise ValueError("line retranslation target is not the exact failed queue identity")
+        original_status = str(row[0] or "")
+        original_next_retry_at = float(row[1] or 0)
+        original_source = str(row[2] or "")
+        original_job_stage = str(row[3] or "")
+        original_job_status = str(row[4] or "")
+        original_job_message = str(row[5] or "")
+        running_at = time.time()
+        changed = self._conn.execute(
+            """
+            UPDATE ai_candidate_queue
+            SET status='running', source='line_retranslation',
+                running_at=?, next_retry_at=0, updated_at=?
+            WHERE path=? AND status=? AND mtime_ns=? AND failure_revision=?
+            """,
+            (
+                running_at,
+                running_at,
+                normalized_path,
+                original_status,
+                mtime_ns,
+                revision,
+            ),
+        ).rowcount
+        try:
+            post_claim_mtime_ns = int(Path(normalized_path).stat().st_mtime_ns)
+        except OSError as exc:
+            raise ValueError("line retranslation media is unavailable") from exc
+        if int(changed or 0) != 1 or post_claim_mtime_ns != mtime_ns:
+            raise ValueError("line retranslation queue identity changed before claim")
+        self.update_ai_job_stage(
+            path,
+            "line_retranslation",
+            "running",
+            "Targeted subtitle line repair is running",
+        )
+        return {
+            "original_status": original_status,
+            "original_next_retry_at": original_next_retry_at,
+            "original_source": original_source,
+            "original_job_stage": original_job_stage,
+            "original_job_status": original_job_status,
+            "original_job_message": original_job_message,
+            "running_at": running_at,
+            "failure_revision": revision,
+            "media_mtime_ns": mtime_ns,
+        }
+
+    def restore_ai_line_retranslation(
+        self,
+        path: Path,
+        *,
+        original_status: str,
+        original_next_retry_at: float,
+        original_source: str,
+        original_job_stage: str,
+        original_job_status: str,
+        original_job_message: str,
+        expected_running_at: float,
+        expected_failure_revision: str,
+        expected_media_mtime_ns: int,
+    ) -> bool:
+        """Restore an exact targeted-repair claim after a fail-closed outcome."""
+
+        status = str(original_status or "").strip().casefold()
+        if status not in {"paused", "failed_retry"}:
+            raise ValueError("line retranslation restore status is invalid")
+        try:
+            current_mtime_ns = int(Path(_queue_path(path)).stat().st_mtime_ns)
+        except OSError:
+            return False
+        if current_mtime_ns != int(expected_media_mtime_ns):
+            return False
+        changed = self._conn.execute(
+            """
+            UPDATE ai_candidate_queue
+            SET status=?, source=?, running_at=0, next_retry_at=?, updated_at=?
+            WHERE path=? AND status='running' AND source='line_retranslation' AND running_at=?
+              AND mtime_ns=? AND failure_revision=?
+            """,
+            (
+                status,
+                str(original_source or "")[:100],
+                float(original_next_retry_at or 0),
+                time.time(),
+                _queue_path(path),
+                float(expected_running_at),
+                int(expected_media_mtime_ns),
+                str(expected_failure_revision or ""),
+            ),
+        ).rowcount
+        if int(changed or 0) != 1:
+            return False
+        self.update_ai_job_stage(
+            path,
+            str(original_job_stage or "quality_check")[:100],
+            str(original_job_status or "failed")[:50],
+            str(original_job_message or "Targeted subtitle line repair failed closed")[:1000],
+        )
+        return True
+
+    def mark_ai_line_retranslation_done(
+        self,
+        path: Path,
+        message: str,
+        *,
+        expected_running_at: float,
+        expected_failure_revision: str,
+        expected_media_mtime_ns: int,
+    ) -> bool:
+        """Complete only the unchanged queue claim owned by one line repair."""
+
+        normalized_path = _queue_path(path)
+        try:
+            current_mtime_ns = int(Path(normalized_path).stat().st_mtime_ns)
+        except OSError:
+            return False
+        if current_mtime_ns != int(expected_media_mtime_ns):
+            return False
+        now = time.time()
+        changed = self._conn.execute(
+            """
+            UPDATE ai_candidate_queue
+            SET status='done', attempts=0, updated_at=?, running_at=0,
+                next_retry_at=0, last_error='', last_error_at=0,
+                last_error_code='', retry_strategy='', failure_revision='', force_ai=0
+            WHERE path=? AND status='running' AND source='line_retranslation' AND running_at=?
+              AND mtime_ns=? AND failure_revision=?
+            """,
+            (
+                now,
+                normalized_path,
+                float(expected_running_at),
+                int(expected_media_mtime_ns),
+                str(expected_failure_revision or ""),
+            ),
+        ).rowcount
+        if int(changed or 0) != 1:
+            return False
+        self.update_ai_job_stage(path, "complete", "ok", str(message or "AI line repair completed"))
+        return True
+
     def mark_ai_queue_running(
         self,
         path: Path,
@@ -834,7 +1010,7 @@ class ScanStateStore:
             ).fetchone()
             if row is not None:
                 existing_skipped_stage = (str(row[0] or "skipped"), str(row[1] or "Skipped"))
-        self._conn.execute(
+        cursor = self._conn.execute(
             """
             INSERT INTO ai_candidate_queue (
                 path,
@@ -864,9 +1040,23 @@ class ScanStateStore:
                 retry_strategy = '',
                 failure_revision = '',
                 force_ai = 0
+            WHERE NOT (
+                ai_candidate_queue.status = 'running'
+                AND EXISTS (
+                    SELECT 1
+                    FROM ai_delivery_attempts a
+                    JOIN ai_delivery_obligations o
+                      ON o.obligation_id = a.obligation_id
+                    WHERE o.canonical_path = ai_candidate_queue.path
+                      AND o.state = 'open'
+                      AND a.status = 'running'
+                )
+            )
             """,
             (normalized_path, mtime_ns, queue_updated_at, queue_updated_at),
         )
+        if int(cursor.rowcount or 0) != 1:
+            return False
         if existing_skipped_stage is not None:
             stage, skipped_message = existing_skipped_stage
             self.update_ai_job_stage(path, stage, "skipped", skipped_message)
@@ -1523,6 +1713,77 @@ class ScanStateStore:
         row = cursor.fetchone()
         return dict(zip(columns, row, strict=True)) if row is not None else None
 
+    def _recover_interrupted_line_retranslations(
+        self,
+        *,
+        message: str,
+        recovery_stage: str,
+        cutoff: float | None = None,
+        only_path: str | None = None,
+    ) -> list[str]:
+        """Fail closed targeted line claims while preserving queue retry budget."""
+
+        clauses = [
+            "q.status='running'",
+            "q.source='line_retranslation'",
+            "o.state='open'",
+            "a.status='running'",
+        ]
+        parameters: list[Any] = []
+        if only_path is not None:
+            clauses.append("q.path=?")
+            parameters.append(str(only_path))
+        if cutoff is not None:
+            clauses.append(
+                "COALESCE(j.updated_at, q.updated_at, q.running_at, q.added_at, 0) <= ?"
+            )
+            parameters.append(float(cutoff))
+        rows = self._conn.execute(
+            f"""
+            SELECT q.path, q.last_error, a.attempt_id
+            FROM ai_candidate_queue q
+            JOIN ai_delivery_obligations o ON o.canonical_path=q.path
+            JOIN ai_delivery_attempts a ON a.obligation_id=o.obligation_id
+            LEFT JOIN ai_job_state j ON j.path=q.path
+            WHERE {' AND '.join(clauses)}
+            ORDER BY q.path COLLATE NOCASE, a.started_at, a.attempt_id
+            """,
+            tuple(parameters),
+        ).fetchall()
+        recovered: list[str] = []
+        seen_paths: set[str] = set()
+        for raw_path, last_error, attempt_id in rows:
+            path = str(raw_path)
+            self.finish_ai_delivery_attempt(
+                str(attempt_id),
+                status="deferred",
+                stage=str(recovery_stage),
+                error_code="line_retranslation_interrupted",
+                detail=str(message),
+            )
+            if path in seen_paths:
+                continue
+            seen_paths.add(path)
+            changed = self._conn.execute(
+                """
+                UPDATE ai_candidate_queue
+                SET status='paused', source='failure_review', updated_at=?,
+                    running_at=0, next_retry_at=0
+                WHERE path=? AND status='running' AND source='line_retranslation'
+                """,
+                (time.time(), path),
+            ).rowcount
+            if int(changed or 0) != 1:
+                continue
+            self.update_ai_job_stage(
+                Path(path),
+                "review",
+                "failed",
+                str(last_error or message)[:1000],
+            )
+            recovered.append(path)
+        return recovered
+
     def recover_stale_ai_queue_candidate(self, path: Path, stale_after_seconds: int) -> bool:
         """Requeue exactly one running item only when its heartbeat is stale."""
 
@@ -1530,6 +1791,13 @@ class ScanStateStore:
         now = time.time()
         cutoff = now - max(60, int(stale_after_seconds or 0))
         normalized_path = _queue_path(path)
+        if self._recover_interrupted_line_retranslations(
+            message="Timed-out targeted subtitle line repair was paused safely",
+            recovery_stage="stale_recovery",
+            cutoff=cutoff,
+            only_path=normalized_path,
+        ):
+            return True
         row = self._conn.execute(
             """
             SELECT status,
@@ -1755,6 +2023,11 @@ class ScanStateStore:
         stale_after_seconds = max(60, int(stale_after_seconds or 0))
         now = time.time()
         cutoff = now - stale_after_seconds
+        recovered_line_repairs = self._recover_interrupted_line_retranslations(
+            message="Timed-out targeted subtitle line repair was paused safely",
+            recovery_stage="stale_recovery",
+            cutoff=cutoff,
+        )
         rows = self._conn.execute(
             """
             SELECT path
@@ -1776,7 +2049,7 @@ class ScanStateStore:
             (cutoff,),
         ).fetchall()
         if not rows:
-            return 0
+            return len(recovered_line_repairs)
         requeued = 0
         for (path,) in rows:
             cursor = self._conn.execute(
@@ -1834,7 +2107,7 @@ class ScanStateStore:
                 "Requeued stale running AI job",
             )
             requeued += 1
-        return requeued
+        return len(recovered_line_repairs) + requeued
 
     def requeue_acceptance_running_targets(
         self,
@@ -1959,6 +2232,10 @@ class ScanStateStore:
             delivery_evidence_resolver=delivery_evidence_resolver,
         )
         now = time.time()
+        recovered_line_repairs = self._recover_interrupted_line_retranslations(
+            message="Interrupted targeted subtitle line repair was paused safely",
+            recovery_stage="restart_recovery",
+        )
         rows = self._conn.execute(
             """
             SELECT path
@@ -1968,7 +2245,7 @@ class ScanStateStore:
             """
         ).fetchall()
         if not rows:
-            return 0
+            return len(recovered_line_repairs)
 
         interrupted_attempts = self._conn.execute(
             """
@@ -2008,7 +2285,7 @@ class ScanStateStore:
         )
         for (path,) in rows:
             self.update_ai_job_stage(Path(str(path)), "queued", "queued", message)
-        return len(rows)
+        return len(recovered_line_repairs) + len(rows)
 
     def reconcile_completed_running(
         self,
@@ -2037,8 +2314,14 @@ class ScanStateStore:
             FROM ai_candidate_queue q
             JOIN ai_job_state j ON j.path = q.path
             WHERE q.status = 'running'
-              AND j.stage IN ('complete', 'source_translation')
-              AND j.status = 'ok'
+              AND (
+                    (j.stage IN ('complete', 'source_translation') AND j.status = 'ok')
+                    OR (
+                        q.source='line_retranslation'
+                        AND j.stage='line_retranslation'
+                        AND j.status='running'
+                    )
+              )
             ORDER BY q.path COLLATE NOCASE
             """
         ).fetchall()

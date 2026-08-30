@@ -1902,6 +1902,91 @@ class ScanStateStoreQueueTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_line_retranslation_claim_restores_exactly_and_restart_cannot_orphan_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Anime S01E01.mkv"
+            video.write_bytes(b"media")
+            store = ScanStateStore(root / "state.sqlite3")
+            try:
+                store.upsert_ai_queue_candidate(video, video.stat().st_mtime_ns)
+                store.mark_ai_queue_running(video)
+                store.update_ai_job_stage(
+                    video,
+                    "quality_check",
+                    "failed",
+                    "Translation safe-omission remained after bounded same-job recovery: indexes=[2]",
+                )
+                store.mark_ai_queue_failed(
+                    video,
+                    "worker returned false",
+                    max_attempts=1,
+                    error_code="translation_safe_omission",
+                    retry_strategy="manual_review",
+                )
+                before = store.ai_queue_candidate_snapshot(video)
+                claim = store.claim_ai_line_retranslation(
+                    video,
+                    expected_failure_revision=before["failure_revision"],
+                    expected_media_mtime_ns=video.stat().st_mtime_ns,
+                )
+                self.assertEqual(store.ai_queue_candidate_snapshot(video)["status"], "running")
+                self.assertTrue(
+                    store.restore_ai_line_retranslation(
+                        video,
+                        original_status=claim["original_status"],
+                        original_next_retry_at=claim["original_next_retry_at"],
+                        original_source=claim["original_source"],
+                        original_job_stage=claim["original_job_stage"],
+                        original_job_status=claim["original_job_status"],
+                        original_job_message=claim["original_job_message"],
+                        expected_running_at=claim["running_at"],
+                        expected_failure_revision=claim["failure_revision"],
+                        expected_media_mtime_ns=claim["media_mtime_ns"],
+                    )
+                )
+                restored = store.ai_queue_candidate_snapshot(video)
+                self.assertEqual(restored["status"], before["status"])
+                self.assertEqual(restored["attempts"], before["attempts"])
+                self.assertEqual(restored["failure_revision"], before["failure_revision"])
+                self.assertEqual(restored["last_error"], before["last_error"])
+
+                obligation = store.ensure_ai_delivery_obligation(
+                    video,
+                    media_size=video.stat().st_size,
+                    media_mtime_ns=video.stat().st_mtime_ns,
+                    policy_revision="line-repair-policy",
+                )
+                attempt = store.begin_ai_delivery_attempt(obligation["obligation_id"])
+                store.claim_ai_line_retranslation(
+                    video,
+                    expected_failure_revision=before["failure_revision"],
+                    expected_media_mtime_ns=video.stat().st_mtime_ns,
+                )
+                store.commit()
+
+                self.assertFalse(
+                    store.mark_ai_queue_done(
+                        video,
+                        "Scanner detected finished subtitle during line repair",
+                        detected_existing=True,
+                    )
+                )
+                self.assertEqual(store.ai_queue_candidate_snapshot(video)["status"], "running")
+
+                self.assertEqual(store.requeue_running_from_previous_worker(), 1)
+                store.commit()
+                recovered = store.ai_queue_candidate_snapshot(video)
+                self.assertEqual(recovered["status"], "paused")
+                self.assertEqual(recovered["source"], "failure_review")
+                self.assertEqual(recovered["attempts"], before["attempts"])
+                self.assertEqual(
+                    store.get_ai_delivery_attempt(attempt["attempt_id"])["status"],
+                    "deferred",
+                )
+            finally:
+                store.close()
+
 
 class ScanStateInventoryEpochTest(unittest.TestCase):
     @staticmethod

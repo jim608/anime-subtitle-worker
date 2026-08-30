@@ -96,13 +96,11 @@ class RetranslateAiLinesSafetyTest(unittest.TestCase):
             config, video, paths = _fixture(root)
             worker = _worker_that_publishes(paths)
             translator = _translator_with_replacement("fixed-one")
-            state = Mock()
 
             with (
                 patch("retranslate_ai_lines.VideoWorker", return_value=worker),
                 patch("retranslate_ai_lines.SubtitleTranslator", return_value=translator),
                 patch("retranslate_ai_lines.build_series_metadata_context", return_value=None),
-                patch("retranslate_ai_lines.ScanStateStore.from_config", return_value=state),
             ):
                 result = retranslate_lines(config, video, {1}, logging.getLogger("test.retranslate"))
 
@@ -118,7 +116,6 @@ class RetranslateAiLinesSafetyTest(unittest.TestCase):
             )
             self.assertFalse(output_publication_marker_path(video.resolve(), config).exists())
             self.assertEqual(read_srt(paths.zh_cn_srt)[0].text, ["fixed-one"])
-            state.mark_ai_queue_done.assert_called_once()
             self.assertTrue((Path(str(result["archive"])) / "result.json").is_file())
 
     def test_success_keeps_japanese_srt_when_intermediates_are_disabled(self) -> None:
@@ -133,7 +130,6 @@ class RetranslateAiLinesSafetyTest(unittest.TestCase):
                 patch("retranslate_ai_lines.VideoWorker", return_value=worker),
                 patch("retranslate_ai_lines.SubtitleTranslator", return_value=translator),
                 patch("retranslate_ai_lines.build_series_metadata_context", return_value=None),
-                patch("retranslate_ai_lines.ScanStateStore.from_config", return_value=Mock()),
             ):
                 retranslate_lines(config, video, {1}, logging.getLogger("test.retranslate"))
 
@@ -173,7 +169,6 @@ class RetranslateAiLinesSafetyTest(unittest.TestCase):
                 patch("retranslate_ai_lines.VideoWorker", return_value=worker),
                 patch("retranslate_ai_lines.SubtitleTranslator", return_value=translator),
                 patch("retranslate_ai_lines.build_series_metadata_context", return_value=None),
-                patch("retranslate_ai_lines.ScanStateStore.from_config") as state_store,
             ):
                 with self.assertRaisesRegex(RuntimeError, "injected staged publisher failure"):
                     retranslate_lines(config, video, {1}, logging.getLogger("test.retranslate"))
@@ -194,7 +189,6 @@ class RetranslateAiLinesSafetyTest(unittest.TestCase):
                     required_outputs=outputs,
                 )
             )
-            state_store.assert_not_called()
             archives = list((config.work_path / "manual_line_retranslate").glob("*"))
             self.assertEqual(len(archives), 1)
             archive_manifest = json.loads((archives[0] / "manifest.json").read_text(encoding="utf-8"))

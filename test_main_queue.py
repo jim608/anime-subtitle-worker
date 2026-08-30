@@ -477,6 +477,112 @@ class MainQueueResultTest(unittest.TestCase):
                 "canary media identity changed"
             ))
 
+    def test_configured_sweep_terminal_failure_does_not_remain_paused(self) -> None:
+        cases = (
+            ("configured_scheduler", "failed_retry", None, "failed", "failed"),
+            (
+                "configured_scheduler",
+                "paused",
+                {"kind": "subtitle_quality", "status": "open"},
+                "failed",
+                "blocked_review",
+            ),
+            ("configured_scheduler", "paused", None, "failed", "failed"),
+            ("", "failed_retry", None, "paused", "failed"),
+        )
+        for origin, queue_status, review, expected_state, expected_item in cases:
+            with self.subTest(origin=origin, queue_status=queue_status, review=bool(review)):
+                campaign_id = "sweep_" + "a" * 24
+                item_id = "sweepitem_" + "b" * 24
+                parameters = {
+                    "strategy_version": "safe-sweep-v1",
+                    "origin": origin,
+                    "max_items": 1,
+                    "interval_seconds": 300,
+                }
+                campaign = {
+                    "campaign_id": campaign_id,
+                    "current_item_id": item_id,
+                    "parameters": parameters,
+                    "counters": {},
+                }
+                item = {
+                    "item_id": item_id,
+                    "path": "/anime/Anime.mkv",
+                    "status": "running",
+                }
+                state = Mock()
+                state.ai_queue_candidate_snapshot.return_value = {
+                    "status": queue_status,
+                    "failure_revision": "same-revision",
+                    "last_error_code": "transient_timeout",
+                    "last_error": "temporary failure",
+                }
+                with (
+                    patch("control_state.due_auto_remediation_campaign", return_value=campaign),
+                    patch("control_state.get_auto_remediation_item", return_value=item),
+                    patch(
+                        "control_state.open_ai_quality_review_for_target",
+                        return_value=review,
+                    ),
+                    patch("control_state.update_auto_remediation_item") as update_item,
+                    patch("control_state.update_auto_remediation_campaign") as update_campaign,
+                    patch("scan_state.ScanStateStore.from_config", return_value=state),
+                ):
+                    main_module._advance_ai_failed_retry_sweep(SimpleNamespace(), Mock())
+
+                self.assertEqual(update_item.call_args.kwargs["status"], expected_item)
+                self.assertEqual(update_campaign.call_args.kwargs["state"], expected_state)
+                self.assertEqual(update_campaign.call_args.kwargs["current_item_id"], "")
+
+    def test_configured_sweep_records_scheduler_origin(self) -> None:
+        config = SimpleNamespace(
+            auto_ai_failed_retry_sweep_enabled=True,
+            auto_ai_failed_retry_sweep_interval_seconds=300,
+            auto_ai_failed_retry_sweep_max_items=1,
+            auto_ai_max_attempts=3,
+        )
+        create = Mock(return_value={"campaign_id": "sweep_" + "c" * 24})
+        with (
+            patch("control_state.latest_auto_remediation_campaign", return_value=None),
+            patch("control_state.create_auto_remediation_campaign", create),
+            patch.object(main_module.time, "time", return_value=1200.0),
+        ):
+            main_module._ensure_configured_ai_failed_retry_sweep(config, Mock())
+
+        self.assertEqual(
+            create.call_args.kwargs["parameters"]["origin"],
+            "configured_scheduler",
+        )
+
+    def test_resumed_sweep_at_item_budget_terminalizes_without_selecting_more(self) -> None:
+        campaign = {
+            "campaign_id": "sweep_" + "d" * 24,
+            "current_item_id": "",
+            "parameters": {
+                "strategy_version": "safe-sweep-v1",
+                "max_items": 1,
+                "interval_seconds": 300,
+            },
+            "counters": {
+                "selected": 1,
+                "processed": 1,
+                "succeeded": 0,
+                "failed": 1,
+                "blocked_review": 0,
+            },
+        }
+        with (
+            patch("control_state.due_auto_remediation_campaign", return_value=campaign),
+            patch("control_state.update_auto_remediation_campaign") as update_campaign,
+            patch.object(main_module, "_preview_ai_failed_retry_sweep") as preview,
+        ):
+            main_module._advance_ai_failed_retry_sweep(SimpleNamespace(), Mock())
+
+        preview.assert_not_called()
+        self.assertEqual(update_campaign.call_args.kwargs["state"], "failed")
+        self.assertEqual(update_campaign.call_args.kwargs["current_item_id"], "")
+
     def test_ai_canary_once_refuses_an_overlapping_campaign_before_pausing(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -1633,7 +1739,10 @@ class MainQueueResultTest(unittest.TestCase):
             )
 
             def candidates(*_args, **kwargs):
-                if kwargs.get("idempotency_prefix") == line_prefix:
+                if (
+                    kwargs.get("idempotency_prefix") == line_prefix
+                    and kwargs.get("kind") == "asr_quality"
+                ):
                     return iter([review])
                 return iter([])
 
@@ -1685,9 +1794,10 @@ class MainQueueResultTest(unittest.TestCase):
                 for item in candidate_iterator.call_args_list
                 if item.kwargs.get("idempotency_prefix") == line_prefix
             ]
-            self.assertEqual(len(line_calls), 1)
-            self.assertEqual(line_calls[0]["required_completed_prefix"], omission_prefix)
-            self.assertTrue(line_calls[0]["allow_revision_scoped_attempts"])
+            self.assertEqual([item["kind"] for item in line_calls], ["subtitle_quality", "asr_quality"])
+            self.assertNotIn("required_completed_prefix", line_calls[0])
+            self.assertEqual(line_calls[1]["required_completed_prefix"], omission_prefix)
+            self.assertTrue(all(item["allow_revision_scoped_attempts"] for item in line_calls))
             checked_interval_prefixes = {
                 item.kwargs.get("idempotency_prefix")
                 for item in interval_ready.call_args_list
@@ -1730,7 +1840,12 @@ class MainQueueResultTest(unittest.TestCase):
             )
 
             def candidates(*_args, **kwargs):
-                return iter([review]) if kwargs.get("idempotency_prefix") == line_prefix else iter([])
+                return (
+                    iter([review])
+                    if kwargs.get("idempotency_prefix") == line_prefix
+                    and kwargs.get("kind") == "asr_quality"
+                    else iter([])
+                )
 
             enqueue = Mock()
             revision_allowed = Mock(return_value=False)
@@ -1750,6 +1865,101 @@ class MainQueueResultTest(unittest.TestCase):
             self.assertFalse(queued)
             enqueue.assert_not_called()
             self.assertEqual(revision_allowed.call_args.kwargs["max_attempts"], 1)
+
+    def test_quality_review_autopilot_directly_repairs_exact_subtitle_omission(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Anime" / "Anime - S01E02.mkv"
+            video.parent.mkdir(parents=True)
+            video.write_bytes(b"media")
+            review = {
+                "review_id": "review_" + "7" * 24,
+                "kind": "subtitle_quality",
+                "target_key": str(video),
+                "diagnosis": {
+                    "video": str(video),
+                    "reports": [
+                        {
+                            "issues": [
+                                {
+                                    "code": "translation_safe_omission",
+                                    "indexes": [2],
+                                }
+                            ]
+                        }
+                    ],
+                },
+                "candidates": [
+                    {
+                        "action": "ai.retranslate_lines",
+                        "lines": "2",
+                        "indexes": [2],
+                    }
+                ],
+            }
+            queue_state = Mock()
+            queue_state.active_review_remediation_count.return_value = 0
+            queue_state.running_ai_queue_count.return_value = 0
+            queue_state.ai_queue_candidate_snapshot.return_value = {
+                "status": "paused",
+                "attempts": 1,
+                "failure_revision": "direct-omission-revision",
+                "job_stage": "quality_check",
+                "last_error": (
+                    "Translation safe-omission remained after bounded same-job recovery: "
+                    "indexes=[2]"
+                ),
+            }
+            config = SimpleNamespace(
+                input_path=root,
+                video_extensions=[".mkv"],
+                auto_ai_quality_review_autopilot_enabled=True,
+                auto_ai_quality_review_autopilot_interval_seconds=60,
+            )
+            line_prefix = main_module._review_autopilot_prefix(
+                main_module._AI_TRANSLATION_OMISSION_LINE_AUTOPILOT_POLICY,
+                "review.resolve_ai",
+            )
+
+            def candidates(*_args, **kwargs):
+                if (
+                    kwargs.get("idempotency_prefix") == line_prefix
+                    and kwargs.get("kind") == "subtitle_quality"
+                ):
+                    return iter([review])
+                return iter([])
+
+            enqueue = Mock(return_value={"command_id": "cmd_direct", "status": "queued"})
+            with (
+                patch.object(main_module, "_ai_queue_paused", return_value=False),
+                patch.object(
+                    main_module,
+                    "_review_autopilot_interval_elapsed",
+                    side_effect=lambda _config, **kwargs: (
+                        kwargs.get("idempotency_prefix") == line_prefix
+                    ),
+                ),
+                patch.object(
+                    main_module,
+                    "_iter_review_autopilot_candidates",
+                    side_effect=candidates,
+                ),
+                patch(
+                    "control_state.review_autopilot_revision_attempt_allowed",
+                    return_value=True,
+                ),
+                patch("control_state.enqueue_command", enqueue),
+                patch("scan_state.ScanStateStore.from_config", return_value=queue_state),
+            ):
+                queued = main_module._advance_ai_quality_review_autopilot(config, Mock())
+
+            self.assertTrue(queued)
+            self.assertEqual(enqueue.call_args.kwargs["parameters"]["lines"], "2")
+            self.assertEqual(
+                enqueue.call_args.kwargs["parameters"]["expected_failure_revision"],
+                "direct-omission-revision",
+            )
+            queue_state.close.assert_called_once()
 
     def test_omission_line_autopilot_waits_for_active_review_remediation(self) -> None:
         queue_state = Mock()
@@ -1802,7 +2012,12 @@ class MainQueueResultTest(unittest.TestCase):
             )
 
             def candidates(*_args, **kwargs):
-                return iter([review]) if kwargs.get("idempotency_prefix") == line_prefix else iter([])
+                return (
+                    iter([review])
+                    if kwargs.get("idempotency_prefix") == line_prefix
+                    and kwargs.get("kind") == "asr_quality"
+                    else iter([])
+                )
 
             for running_jobs, lock_available in ((1, True), (0, False)):
                 with self.subTest(running_jobs=running_jobs, lock_available=lock_available):
@@ -2333,6 +2548,52 @@ class MainQueueResultTest(unittest.TestCase):
             retry_strategy="lower_memory_same_pipeline",
         )
         state.mark_ai_queue_review_required.assert_not_called()
+
+    def test_exact_translation_omission_routes_to_review_without_full_retry(self) -> None:
+        message = (
+            "Translation safe-omission remained after bounded same-job recovery: "
+            "indexes=[2]"
+        )
+        self.assertEqual(
+            main_module._ai_failure_policy("quality_check", message),
+            ("translation_safe_omission", "bounded_retry"),
+        )
+        self.assertEqual(
+            main_module._ai_failure_policy("quality_check", f"{message} trailing"),
+            ("subtitle_quality_unknown", "manual_review"),
+        )
+        self.assertEqual(
+            main_module._ai_failure_policy(
+                "quality_check",
+                "Translation safe-omission remained after bounded same-job recovery: "
+                "indexes=[2, 2]",
+            ),
+            ("subtitle_quality_unknown", "manual_review"),
+        )
+        video = Path("/anime/Example.mkv")
+        state = Mock()
+        state.ai_job_failure.return_value = ("quality_check", message)
+        with patch(
+            "control_state.open_ai_quality_review_for_target",
+            return_value={"kind": "subtitle_quality", "status": "open"},
+        ):
+            main_module._mark_queue_result(
+                state,
+                video,
+                False,
+                SimpleNamespace(
+                    auto_ai_failure_cooldown_seconds=60,
+                    auto_ai_max_attempts=3,
+                ),
+            )
+
+        state.mark_ai_queue_review_required.assert_called_once_with(
+            video,
+            message,
+            source="quality_review",
+            error_code="subtitle_quality_review",
+        )
+        state.mark_ai_queue_failed.assert_not_called()
 
     def test_scan_and_process_drains_current_video_on_shutdown(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -3330,6 +3591,297 @@ class MainQueueResultTest(unittest.TestCase):
             self.assertFalse(result["queued"])
             self.assertEqual(result["output"], "repaired")
 
+    def test_line_repair_settles_strict_delivery_ledger_before_queue_done(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Anime - S01E01.mkv"
+            video.write_bytes(b"video")
+            config = SimpleNamespace(
+                input_path=root,
+                video_extensions=[".mkv"],
+                scanner_cache_enabled=True,
+                scanner_queue_enabled=True,
+            )
+            run_id = "accrun_" + "9" * 48
+            obligation = {
+                "obligation_id": "obligation-line-repair",
+                "policy_revision": "policy-line-repair",
+                "acceptance_run_id": run_id,
+            }
+            attempt = {
+                "attempt_id": "attempt-line-repair",
+                "obligation_id": obligation["obligation_id"],
+                "started_at": 123.0,
+            }
+            identity = {
+                "obligation_id": obligation["obligation_id"],
+                "policy_revision": obligation["policy_revision"],
+                "media": {
+                    "media_size": video.stat().st_size,
+                    "media_mtime_ns": video.stat().st_mtime_ns,
+                },
+            }
+            evidence = {
+                "manifest_path": str(root / "manifest.json"),
+                "manifest_sha256": "a" * 64,
+                "verified_at": 124.0,
+                "verification": {"strict": True},
+            }
+            claim_state = Mock()
+            claim_state.ai_queue_candidate_snapshot.return_value = {
+                "failure_revision": "0123456789abcdef01234567",
+            }
+            claim_state.claim_ai_line_retranslation.return_value = {
+                "original_status": "paused",
+                "original_next_retry_at": 0.0,
+                "original_source": "failure_review",
+                "original_job_stage": "quality_check",
+                "original_job_status": "failed",
+                "original_job_message": "safe omission",
+                "running_at": 122.0,
+                "failure_revision": "0123456789abcdef01234567",
+                "media_mtime_ns": video.stat().st_mtime_ns,
+            }
+            claim_state.ai_delivery_admission_bound.return_value = 100.0
+            claim_state.ensure_ai_delivery_obligation.return_value = obligation
+            settle_state = Mock()
+            settle_state.get_ai_delivery_attempt.return_value = attempt
+            settle_state.get_ai_delivery_obligation.return_value = obligation
+            settle_state.mark_ai_line_retranslation_done.return_value = True
+            events: list[str] = []
+
+            def begin_attempt(*_args, **_kwargs):
+                events.append("begin")
+                return attempt
+
+            def run_command(*_args, **_kwargs):
+                events.append("subprocess")
+                return SimpleNamespace(returncode=0, stdout="repaired", stderr="")
+
+            def finish_attempt(*_args, **_kwargs):
+                events.append("finish")
+                return attempt
+
+            claim_state.begin_ai_delivery_attempt.side_effect = begin_attempt
+            settle_state.finish_ai_delivery_attempt.side_effect = finish_attempt
+            acceptance_target = object()
+            acceptance_lane = Mock(run_id=run_id)
+            acceptance_lane.target_for_path.return_value = acceptance_target
+
+            with (
+                patch("scan_state.ScanStateStore.from_config", side_effect=[claim_state, settle_state]),
+                patch("output_manifest.delivery_identity", return_value=identity),
+                patch.object(
+                    main_module,
+                    "load_acceptance_queue_lane",
+                    return_value=acceptance_lane,
+                ),
+                patch.object(
+                    main_module,
+                    "verify_acceptance_queue_target_source",
+                ) as verify_target,
+                patch.object(main_module.subprocess, "run", side_effect=run_command),
+                patch.object(
+                    main_module,
+                    "_verified_ai_delivery_evidence",
+                    return_value=evidence,
+                ) as verify,
+            ):
+                output = main_module._run_ai_retranslate_lines_command(
+                    config,
+                    video,
+                    lines="2",
+                    expected_failure_revision="0123456789abcdef01234567",
+                )
+
+            self.assertEqual(output, "repaired")
+            self.assertEqual(events, ["begin", "subprocess", "finish"])
+            claim_state.ensure_ai_delivery_obligation.assert_called_once_with(
+                video.resolve(),
+                media_size=video.stat().st_size,
+                media_mtime_ns=video.stat().st_mtime_ns,
+                policy_revision=obligation["policy_revision"],
+                eligible_at=100.0,
+                source="line_retranslation",
+                obligation_id=obligation["obligation_id"],
+                acceptance_run_id=run_id,
+            )
+            verify_target.assert_called_once_with(acceptance_target, config)
+            claim_state.begin_ai_delivery_attempt.assert_called_once_with(
+                obligation["obligation_id"],
+                acceptance_run_id=run_id,
+            )
+            verify.assert_called_once_with(
+                video.resolve(),
+                config,
+                obligation_id=obligation["obligation_id"],
+                expected_policy_revision=obligation["policy_revision"],
+                attempt_started_at=attempt["started_at"],
+            )
+            settle_state.finish_ai_delivery_attempt.assert_called_once_with(
+                attempt["attempt_id"],
+                status="succeeded",
+                stage="delivery_verification",
+            )
+            settle_state.mark_ai_delivery_verified.assert_called_once_with(
+                obligation["obligation_id"],
+                manifest_path=evidence["manifest_path"],
+                manifest_sha256=evidence["manifest_sha256"],
+                verification=evidence["verification"],
+                evidence_verified=True,
+                verified_at=evidence["verified_at"],
+            )
+            settle_state.mark_ai_line_retranslation_done.assert_called_once_with(
+                video.resolve(),
+                "Retranslated lines: 2",
+                expected_running_at=122.0,
+                expected_failure_revision="0123456789abcdef01234567",
+                expected_media_mtime_ns=video.stat().st_mtime_ns,
+            )
+            claim_state.close.assert_called_once()
+            settle_state.close.assert_called_once()
+
+    def test_line_repair_refuses_non_allowlisted_acceptance_target_before_claim(self) -> None:
+        lane = Mock(run_id="accrun_" + "8" * 48)
+        lane.target_for_path.return_value = None
+        state_factory = Mock()
+        with (
+            patch.object(main_module, "load_acceptance_queue_lane", return_value=lane),
+            patch("scan_state.ScanStateStore.from_config", state_factory),
+            self.assertRaisesRegex(
+                main_module.AcceptanceQueueLaneError,
+                "non-allowlisted acceptance line repair",
+            ),
+        ):
+            main_module._run_ai_retranslate_lines_command(
+                SimpleNamespace(),
+                Path("/anime/Other.mkv"),
+                lines="2",
+            )
+
+        state_factory.assert_not_called()
+
+    def test_line_repair_refuses_stale_command_revision_at_claim_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Anime - S01E01.mkv"
+            video.write_bytes(b"video")
+            state = Mock()
+            state.ai_queue_candidate_snapshot.return_value = {
+                "failure_revision": "fedcba9876543210fedcba98",
+            }
+            identity = {
+                "obligation_id": "obligation-line-repair",
+                "policy_revision": "policy-line-repair",
+                "media": {
+                    "media_size": video.stat().st_size,
+                    "media_mtime_ns": video.stat().st_mtime_ns,
+                },
+            }
+            with (
+                patch.object(main_module, "load_acceptance_queue_lane", return_value=None),
+                patch("scan_state.ScanStateStore.from_config", return_value=state),
+                patch("output_manifest.delivery_identity", return_value=identity),
+                patch.object(main_module.subprocess, "run") as run,
+                self.assertRaisesRegex(ValueError, "revision changed before exact claim"),
+            ):
+                main_module._run_ai_retranslate_lines_command(
+                    SimpleNamespace(),
+                    video,
+                    lines="2",
+                    expected_failure_revision="0123456789abcdef01234567",
+                )
+
+            state.claim_ai_line_retranslation.assert_not_called()
+            run.assert_not_called()
+            state.close.assert_called_once()
+
+    def test_line_repair_missing_evidence_fails_attempt_without_queue_done(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Anime - S01E01.mkv"
+            video.write_bytes(b"video")
+            config = SimpleNamespace(input_path=root, video_extensions=[".mkv"])
+            obligation = {
+                "obligation_id": "obligation-line-repair",
+                "policy_revision": "policy-line-repair",
+                "acceptance_run_id": "",
+            }
+            attempt = {
+                "attempt_id": "attempt-line-repair",
+                "obligation_id": obligation["obligation_id"],
+                "started_at": 123.0,
+            }
+            identity = {
+                "obligation_id": obligation["obligation_id"],
+                "policy_revision": obligation["policy_revision"],
+                "media": {
+                    "media_size": video.stat().st_size,
+                    "media_mtime_ns": video.stat().st_mtime_ns,
+                },
+            }
+            claim_state = Mock()
+            claim_state.ai_queue_candidate_snapshot.return_value = {
+                "failure_revision": "0123456789abcdef01234567",
+            }
+            claim_state.claim_ai_line_retranslation.return_value = {
+                "original_status": "paused",
+                "original_next_retry_at": 0.0,
+                "original_source": "failure_review",
+                "original_job_stage": "quality_check",
+                "original_job_status": "failed",
+                "original_job_message": "safe omission",
+                "running_at": 122.0,
+                "failure_revision": "0123456789abcdef01234567",
+                "media_mtime_ns": video.stat().st_mtime_ns,
+            }
+            claim_state.ai_delivery_admission_bound.return_value = 100.0
+            claim_state.ensure_ai_delivery_obligation.return_value = obligation
+            claim_state.begin_ai_delivery_attempt.return_value = attempt
+            settle_state = Mock()
+            settle_state.get_ai_delivery_attempt.return_value = attempt
+            settle_state.get_ai_delivery_obligation.return_value = obligation
+            settle_state.restore_ai_line_retranslation.return_value = True
+
+            with (
+                patch("scan_state.ScanStateStore.from_config", side_effect=[claim_state, settle_state]),
+                patch("output_manifest.delivery_identity", return_value=identity),
+                patch.object(main_module, "load_acceptance_queue_lane", return_value=None),
+                patch.object(
+                    main_module.subprocess,
+                    "run",
+                    return_value=SimpleNamespace(returncode=0, stdout="repaired", stderr=""),
+                ),
+                patch.object(main_module, "_verified_ai_delivery_evidence", return_value=None),
+                self.assertRaisesRegex(RuntimeError, "without current strictly verified"),
+            ):
+                main_module._run_ai_retranslate_lines_command(config, video, lines="2")
+
+            settle_state.finish_ai_delivery_attempt.assert_called_once_with(
+                attempt["attempt_id"],
+                status="failed",
+                stage="delivery_verification",
+                error_code="delivery_evidence_missing",
+                detail=(
+                    "AI line retranslation returned success without current strictly "
+                    "verified delivery evidence"
+                ),
+            )
+            settle_state.mark_ai_delivery_verified.assert_not_called()
+            settle_state.mark_ai_line_retranslation_done.assert_not_called()
+            settle_state.restore_ai_line_retranslation.assert_called_once_with(
+                video.resolve(),
+                original_status="paused",
+                original_next_retry_at=0.0,
+                original_source="failure_review",
+                original_job_stage="quality_check",
+                original_job_status="failed",
+                original_job_message="safe omission",
+                expected_running_at=122.0,
+                expected_failure_revision="0123456789abcdef01234567",
+                expected_media_mtime_ns=video.stat().st_mtime_ns,
+            )
+
     def test_line_repair_asr_review_parser_accepts_only_exact_structured_error(self) -> None:
         direct = (
             "Traceback (most recent call last):\n"
@@ -3492,9 +4044,28 @@ class MainQueueResultTest(unittest.TestCase):
             video.write_bytes(b"video")
             config = SimpleNamespace(input_path=anime, video_extensions=[".mkv"])
             review = {
-                "kind": "asr_quality",
+                "kind": "subtitle_quality",
                 "status": "open",
-                "diagnosis": {"video": str(video.resolve())},
+                "diagnosis": {
+                    "video": str(video.resolve()),
+                    "reports": [
+                        {
+                            "issues": [
+                                {
+                                    "code": "translation_safe_omission",
+                                    "indexes": [4, 8],
+                                }
+                            ]
+                        }
+                    ],
+                },
+                "candidates": [
+                    {
+                        "action": "ai.retranslate_lines",
+                        "lines": "4,8",
+                        "indexes": [4, 8],
+                    }
+                ],
             }
             queue_state = Mock()
             queue_state.ai_queue_candidate_snapshot.return_value = {
@@ -3536,7 +4107,12 @@ class MainQueueResultTest(unittest.TestCase):
                     },
                 )
 
-            repair.assert_called_once_with(config, video.resolve(), lines="4,8")
+            repair.assert_called_once_with(
+                config,
+                video.resolve(),
+                lines="4,8",
+                expected_failure_revision="current-line-revision",
+            )
             finished.assert_called_once_with(video.resolve(), config)
             resolve_review.assert_called_once()
             queue_state.close.assert_called_once()
@@ -3611,7 +4187,12 @@ class MainQueueResultTest(unittest.TestCase):
                     },
                 )
 
-            repair.assert_called_once_with(config, video.resolve(), lines="98")
+            repair.assert_called_once_with(
+                config,
+                video.resolve(),
+                lines="98",
+                expected_failure_revision="current-line-revision",
+            )
             reprocess.assert_called_once_with(
                 config,
                 video.resolve(),

@@ -2386,7 +2386,8 @@ def _execute_control_command(config, logger, action: str, target: str, parameter
                     state.close()
                 evidence = _translation_omission_line_repair_evidence(snapshot)
                 if (
-                    str(review.get("kind") or "") != "asr_quality"
+                    str(review.get("kind") or "")
+                    not in {"asr_quality", "subtitle_quality"}
                     or policy_revision
                     != _AI_TRANSLATION_OMISSION_LINE_AUTOPILOT_POLICY
                     or not expected_failure_revision
@@ -2394,6 +2395,13 @@ def _execute_control_command(config, logger, action: str, target: str, parameter
                     or str(evidence.get("failure_revision") or "")
                     != expected_failure_revision
                     or str(evidence.get("lines") or "") != lines
+                    or (
+                        str(review.get("kind") or "") == "subtitle_quality"
+                        and not _translation_omission_review_matches_evidence(
+                            review,
+                            evidence,
+                        )
+                    )
                 ):
                     raise ValueError(
                         "automatic line remediation requires current revision-bound omission evidence"
@@ -2406,7 +2414,16 @@ def _execute_control_command(config, logger, action: str, target: str, parameter
             mode = "retranslate_lines"
             escalated_to_full_asr = False
             try:
-                output = _run_ai_retranslate_lines_command(config, video, lines=lines)
+                line_command_parameters = {"lines": lines}
+                if automatic_review:
+                    line_command_parameters["expected_failure_revision"] = str(
+                        parameters.get("expected_failure_revision") or ""
+                    )
+                output = _run_ai_retranslate_lines_command(
+                    config,
+                    video,
+                    **line_command_parameters,
+                )
             except RuntimeError as exc:
                 asr_review_index = _line_repair_asr_review_index(exc)
                 expected_indexes = {
@@ -2605,6 +2622,11 @@ _AI_SWEEP_ALLOWED_FAILURE_CODES = {
     "transient_connection",
     "translation_safe_omission",
 }
+_AI_REVIEW_BYPASS_FAILURE_CODES = {
+    "transient_oom",
+    "transient_timeout",
+    "transient_connection",
+}
 
 _AI_QUALITY_REVIEW_AUTOPILOT_POLICY = "asr-full-retranscribe-v1"
 _AI_QUALITY_REVIEW_AUTOPILOT_MAX_ATTEMPTS = 3
@@ -2635,6 +2657,34 @@ _CACHED_ASR_CONTEXT_MISMATCH_REASONS = {
     "japanese srt cache fingerprint mismatch",
     "repair fingerprint mismatch",
 }
+
+
+def _exact_translation_safe_omission_indexes(
+    stage: str,
+    message: str,
+) -> list[int]:
+    """Parse only the canonical bounded failure emitted by the current Worker."""
+
+    if str(stage or "").strip().casefold() not in {"quality_check", "failed"}:
+        return []
+    normalized_message = " ".join(str(message or "").strip().split())
+    match = re.fullmatch(
+        rf"{re.escape(_HISTORICAL_TRANSLATION_OMISSION_MARKER)}"
+        r"\s*indexes=\[([1-9]\d*(?:,\s*[1-9]\d*)*)\]",
+        normalized_message,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return []
+    indexes = [int(value.strip()) for value in match.group(1).split(",")]
+    if (
+        not indexes
+        or len(indexes) > _AI_TRANSLATION_OMISSION_LINE_AUTOPILOT_MAX_INDEXES
+        or any(index > 1_000_000 for index in indexes)
+        or indexes != sorted(set(indexes))
+    ):
+        return []
+    return indexes
 
 
 def _classify_historical_failed_retry(stage: str, message: str) -> dict[str, object] | None:
@@ -2766,6 +2816,66 @@ def _translation_omission_line_repair_evidence(
         "indexes": normalized_indexes,
         "lines": ",".join(str(index) for index in normalized_indexes),
     }
+
+
+def _translation_omission_review_matches_evidence(
+    review: dict[str, object],
+    evidence: dict[str, object],
+) -> bool:
+    """Bind a subtitle-quality review to the same exact omitted line set."""
+
+    if str(review.get("kind") or "") != "subtitle_quality":
+        return False
+    expected = evidence.get("indexes")
+    if not isinstance(expected, list) or not expected:
+        return False
+    expected_indexes = [int(index) for index in expected]
+    reported: set[int] = set()
+    diagnosis = review.get("diagnosis")
+    reports = diagnosis.get("reports") if isinstance(diagnosis, dict) else None
+    for report in (reports if isinstance(reports, list) else ()):
+        if not isinstance(report, dict):
+            continue
+        issues = report.get("issues")
+        for issue in (issues if isinstance(issues, list) else ()):
+            if (
+                not isinstance(issue, dict)
+                or str(issue.get("code") or "").strip().casefold()
+                != "translation_safe_omission"
+            ):
+                continue
+            indexes = issue.get("indexes")
+            if not isinstance(indexes, list):
+                return False
+            try:
+                reported.update(int(index) for index in indexes)
+            except (TypeError, ValueError):
+                return False
+    if sorted(reported) != expected_indexes:
+        return False
+    for candidate in review.get("candidates") or []:
+        if (
+            not isinstance(candidate, dict)
+            or str(candidate.get("action") or "").strip().casefold()
+            != "ai.retranslate_lines"
+        ):
+            continue
+        candidate_indexes = candidate.get("indexes")
+        if isinstance(candidate_indexes, list):
+            try:
+                normalized_candidate = sorted({int(index) for index in candidate_indexes})
+            except (TypeError, ValueError):
+                continue
+        else:
+            line_spec = str(candidate.get("lines") or "").strip()
+            if not re.fullmatch(r"[1-9]\d*(?:\s*,\s*[1-9]\d*)*", line_spec):
+                continue
+            normalized_candidate = sorted(
+                {int(value.strip()) for value in line_spec.split(",")}
+            )
+        if normalized_candidate == expected_indexes:
+            return True
+    return False
 
 
 def _line_repair_asr_review_index(error: BaseException) -> int | None:
@@ -3442,14 +3552,26 @@ def _advance_ai_quality_review_autopilot_locked(config, logger) -> bool:
                 )
                 return True
         if omission_line_ready:
-            omission_line_reviews = _iter_review_autopilot_candidates(
-                config,
-                kind="asr_quality",
-                idempotency_prefix=omission_line_prefix,
-                required_completed_prefix=omission_prefix,
-                allow_revision_scoped_attempts=True,
+            omission_line_review_groups = (
+                _iter_review_autopilot_candidates(
+                    config,
+                    kind="subtitle_quality",
+                    idempotency_prefix=omission_line_prefix,
+                    allow_revision_scoped_attempts=True,
+                ),
+                _iter_review_autopilot_candidates(
+                    config,
+                    kind="asr_quality",
+                    idempotency_prefix=omission_line_prefix,
+                    required_completed_prefix=omission_prefix,
+                    allow_revision_scoped_attempts=True,
+                ),
             )
-            for review in omission_line_reviews:
+            for review in (
+                item
+                for group in omission_line_review_groups
+                for item in group
+            ):
                 review_id = str(review.get("review_id") or "").strip()
                 target = str(
                     (review.get("diagnosis") or {}).get("video")
@@ -3464,7 +3586,22 @@ def _advance_ai_quality_review_autopilot_locked(config, logger) -> bool:
                     continue
                 snapshot = state.ai_queue_candidate_snapshot(video) or {}
                 evidence = _translation_omission_line_repair_evidence(snapshot)
-                if evidence is None or int(snapshot.get("attempts") or 0) < 2:
+                if (
+                    evidence is None
+                    or int(snapshot.get("attempts") or 0)
+                    < (
+                        1
+                        if str(review.get("kind") or "") == "subtitle_quality"
+                        else 2
+                    )
+                    or (
+                        str(review.get("kind") or "") == "subtitle_quality"
+                        and not _translation_omission_review_matches_evidence(
+                            review,
+                            evidence,
+                        )
+                    )
+                ):
                     continue
                 failure_revision = str(evidence["failure_revision"])
                 if not review_autopilot_revision_attempt_allowed(
@@ -4052,6 +4189,7 @@ def _ensure_configured_ai_failed_retry_sweep(config, logger) -> None:
             ),
         }
     )
+    parameters["origin"] = "configured_scheduler"
     campaign = create_auto_remediation_campaign(
         config,
         campaign_key=str(parameters["campaign_key"]),
@@ -4114,6 +4252,13 @@ def _validated_ai_failed_retry_sweep_parameters(
             raise ValueError("AI failed retry sweep start requires a campaign_key")
         normalized["campaign_key"] = campaign_key
     return operation, normalized
+
+
+def _configured_ai_failed_retry_sweep(parameters: dict[str, object]) -> bool:
+    return (
+        str(parameters.get("strategy_version") or "") == "safe-sweep-v1"
+        and str(parameters.get("origin") or "") == "configured_scheduler"
+    )
 
 
 def _preview_ai_failed_retry_sweep(
@@ -4546,7 +4691,11 @@ def _apply_preparing_auto_remediation_item(
         update_auto_remediation_campaign(
             config,
             campaign_id,
-            state="paused",
+            state=(
+                "failed"
+                if _configured_ai_failed_retry_sweep(parameters)
+                else "paused"
+            ),
             counters=counters,
             current_item_id="",
             last_error=error,
@@ -4599,6 +4748,7 @@ def _advance_ai_failed_retry_sweep(config, logger) -> None:
         create_and_bind_auto_remediation_item,
         due_auto_remediation_campaign,
         get_auto_remediation_item,
+        open_ai_quality_review_for_target,
         update_auto_remediation_campaign,
         update_auto_remediation_item,
     )
@@ -4651,7 +4801,11 @@ def _advance_ai_failed_retry_sweep(config, logger) -> None:
             update_auto_remediation_campaign(
                 config,
                 campaign_id,
-                state="paused",
+                state=(
+                    "failed"
+                    if _configured_ai_failed_retry_sweep(parameters)
+                    else "paused"
+                ),
                 counters=counters,
                 current_item_id="",
                 last_error="AI queue row disappeared during remediation",
@@ -4785,7 +4939,15 @@ def _advance_ai_failed_retry_sweep(config, logger) -> None:
                 next_run_at=time.time() + interval_seconds,
             )
             return
-        terminal_status = "blocked_review" if queue_status == "paused" else "failed"
+        open_review = (
+            open_ai_quality_review_for_target(
+                config,
+                str(Path(str(item.get("path") or "")).resolve()),
+            )
+            if queue_status == "paused"
+            else None
+        )
+        terminal_status = "blocked_review" if open_review is not None else "failed"
         update_auto_remediation_item(
             config,
             current_item_id,
@@ -4802,7 +4964,11 @@ def _advance_ai_failed_retry_sweep(config, logger) -> None:
         update_auto_remediation_campaign(
             config,
             campaign_id,
-            state="paused",
+            state=(
+                "failed"
+                if _configured_ai_failed_retry_sweep(parameters)
+                else "paused"
+            ),
             counters=counters,
             current_item_id="",
             last_error=(
@@ -4810,6 +4976,22 @@ def _advance_ai_failed_retry_sweep(config, logger) -> None:
                 if terminal_status == "blocked_review"
                 else f"automatic retry ended in {queue_status}"
             ),
+        )
+        return
+
+    if int(counters.get("processed") or 0) >= max_items:
+        terminal_state = (
+            "failed"
+            if int(counters.get("failed") or 0) > 0
+            or int(counters.get("blocked_review") or 0) > 0
+            else "completed"
+        )
+        update_auto_remediation_campaign(
+            config,
+            campaign_id,
+            state=terminal_state,
+            counters=counters,
+            current_item_id="",
         )
         return
 
@@ -5058,7 +5240,75 @@ def _run_control_subprocess(command: list[str], *, timeout_seconds: int) -> str:
     return completed.stdout[-4000:]
 
 
-def _run_ai_retranslate_lines_command(config, video: Path, *, lines: str) -> str:
+def _run_ai_retranslate_lines_command(
+    config,
+    video: Path,
+    *,
+    lines: str,
+    expected_failure_revision: str = "",
+) -> str:
+    from output_manifest import delivery_identity
+
+    resolved_video = Path(video).resolve()
+    acceptance_run_id = ""
+    acceptance_lane = load_acceptance_queue_lane(config)
+    if acceptance_lane is not None:
+        acceptance_target = acceptance_lane.target_for_path(resolved_video)
+        if acceptance_target is None:
+            raise AcceptanceQueueLaneError(
+                f"refusing non-allowlisted acceptance line repair: {resolved_video}"
+            )
+        verify_acceptance_queue_target_source(acceptance_target, config)
+        acceptance_run_id = acceptance_lane.run_id
+    state = _open_ai_queue_state(config)
+    if state is None:
+        raise RuntimeError("AI line retranslation requires the durable delivery ledger")
+    claim: dict[str, object] = {}
+    try:
+        def begin_delivery_attempt() -> None:
+            identity = delivery_identity(resolved_video, config)
+            media = dict(identity["media"])
+            obligation_id = str(identity["obligation_id"])
+            snapshot = state.ai_queue_candidate_snapshot(resolved_video)
+            if snapshot is None:
+                raise ValueError("AI line retranslation target is absent from the queue")
+            snapshot_revision = str(snapshot.get("failure_revision") or "")
+            command_revision = str(expected_failure_revision or "").strip()
+            if command_revision and snapshot_revision != command_revision:
+                raise ValueError(
+                    "AI line retranslation failure revision changed before exact claim"
+                )
+            queue_claim = state.claim_ai_line_retranslation(
+                resolved_video,
+                expected_failure_revision=command_revision or snapshot_revision,
+                expected_media_mtime_ns=int(media["media_mtime_ns"]),
+            )
+            obligation = state.ensure_ai_delivery_obligation(
+                resolved_video,
+                media_size=int(media["media_size"]),
+                media_mtime_ns=int(media["media_mtime_ns"]),
+                policy_revision=str(identity["policy_revision"]),
+                eligible_at=state.ai_delivery_admission_bound(),
+                source="line_retranslation",
+                obligation_id=obligation_id,
+                acceptance_run_id=acceptance_run_id,
+            )
+            attempt = state.begin_ai_delivery_attempt(
+                str(obligation["obligation_id"]),
+                acceptance_run_id=str(obligation.get("acceptance_run_id") or ""),
+            )
+            claim.update(
+                {
+                    "attempt_id": str(attempt["attempt_id"]),
+                    "obligation_id": str(obligation["obligation_id"]),
+                    **queue_claim,
+                }
+            )
+
+        _commit_ai_queue_state_write(state, begin_delivery_attempt)
+    finally:
+        state.close()
+
     command = [
         sys.executable,
         "/app/retranslate_ai_lines.py",
@@ -5069,9 +5319,137 @@ def _run_ai_retranslate_lines_command(config, video: Path, *, lines: str) -> str
         "--lines",
         str(lines),
     ]
-    completed = subprocess.run(command, text=True, capture_output=True, timeout=900, check=False)
-    if completed.returncode != 0:
-        raise RuntimeError((completed.stderr or completed.stdout or "AI line retranslation failed")[-2000:])
+    try:
+        completed = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            timeout=900,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError(
+                (completed.stderr or completed.stdout or "AI line retranslation failed")[-2000:]
+            )
+    except Exception as operation_error:
+        failure_state = _open_ai_queue_state(config)
+        if failure_state is None:
+            raise RuntimeError(
+                f"{operation_error}; delivery attempt could not be settled"
+            ) from operation_error
+        try:
+            def record_failure() -> None:
+                failure_state.finish_ai_delivery_attempt(
+                    str(claim["attempt_id"]),
+                    status="failed",
+                    stage="line_retranslation",
+                    error_code="line_retranslation_failed",
+                    detail=f"{type(operation_error).__name__}: {operation_error}",
+                )
+                restored = failure_state.restore_ai_line_retranslation(
+                    resolved_video,
+                    original_status=str(claim["original_status"]),
+                    original_next_retry_at=float(claim["original_next_retry_at"]),
+                    original_source=str(claim["original_source"]),
+                    original_job_stage=str(claim["original_job_stage"]),
+                    original_job_status=str(claim["original_job_status"]),
+                    original_job_message=str(claim["original_job_message"]),
+                    expected_running_at=float(claim["running_at"]),
+                    expected_failure_revision=str(claim["failure_revision"]),
+                    expected_media_mtime_ns=int(claim["media_mtime_ns"]),
+                )
+                if not restored:
+                    raise RuntimeError("line retranslation queue claim changed before restore")
+
+            _commit_ai_queue_state_write(failure_state, record_failure)
+        except Exception as settlement_error:
+            raise RuntimeError(
+                f"{operation_error}; delivery attempt settlement failed: {settlement_error}"
+            ) from operation_error
+        finally:
+            failure_state.close()
+        raise
+
+    result = {"error": ""}
+    success_state = _open_ai_queue_state(config)
+    if success_state is None:
+        raise RuntimeError("AI line retranslation output could not be verified in the delivery ledger")
+    try:
+        def verify_and_settle() -> None:
+            attempt_id = str(claim["attempt_id"])
+            attempt = success_state.get_ai_delivery_attempt(attempt_id)
+            if attempt is None:
+                raise RuntimeError(f"AI delivery attempt disappeared: {attempt_id}")
+            obligation = success_state.get_ai_delivery_obligation(
+                str(claim["obligation_id"])
+            )
+            if obligation is None:
+                raise RuntimeError(
+                    f"AI delivery obligation disappeared: {claim['obligation_id']}"
+                )
+            evidence = _verified_ai_delivery_evidence(
+                resolved_video,
+                config,
+                obligation_id=str(obligation["obligation_id"]),
+                expected_policy_revision=str(obligation["policy_revision"]),
+                attempt_started_at=float(attempt["started_at"]),
+            )
+            if evidence is None:
+                message = (
+                    "AI line retranslation returned success without current strictly "
+                    "verified delivery evidence"
+                )
+                success_state.finish_ai_delivery_attempt(
+                    attempt_id,
+                    status="failed",
+                    stage="delivery_verification",
+                    error_code="delivery_evidence_missing",
+                    detail=message,
+                )
+                restored = success_state.restore_ai_line_retranslation(
+                    resolved_video,
+                    original_status=str(claim["original_status"]),
+                    original_next_retry_at=float(claim["original_next_retry_at"]),
+                    original_source=str(claim["original_source"]),
+                    original_job_stage=str(claim["original_job_stage"]),
+                    original_job_status=str(claim["original_job_status"]),
+                    original_job_message=str(claim["original_job_message"]),
+                    expected_running_at=float(claim["running_at"]),
+                    expected_failure_revision=str(claim["failure_revision"]),
+                    expected_media_mtime_ns=int(claim["media_mtime_ns"]),
+                )
+                if not restored:
+                    raise RuntimeError("line retranslation queue claim changed before restore")
+                result["error"] = message
+                return
+            success_state.finish_ai_delivery_attempt(
+                attempt_id,
+                status="succeeded",
+                stage="delivery_verification",
+            )
+            success_state.mark_ai_delivery_verified(
+                str(obligation["obligation_id"]),
+                manifest_path=str(evidence["manifest_path"]),
+                manifest_sha256=str(evidence["manifest_sha256"]),
+                verification=dict(evidence["verification"]),
+                evidence_verified=True,
+                verified_at=float(evidence["verified_at"]),
+            )
+            queue_done = success_state.mark_ai_line_retranslation_done(
+                resolved_video,
+                f"Retranslated lines: {lines}",
+                expected_running_at=float(claim["running_at"]),
+                expected_failure_revision=str(claim["failure_revision"]),
+                expected_media_mtime_ns=int(claim["media_mtime_ns"]),
+            )
+            if not queue_done:
+                raise RuntimeError("line retranslation queue claim changed before completion")
+
+        _commit_ai_queue_state_write(success_state, verify_and_settle)
+    finally:
+        success_state.close()
+    if result["error"]:
+        raise RuntimeError(str(result["error"]))
     return completed.stdout[-2000:]
 
 
@@ -6619,7 +6997,7 @@ def _mark_queue_result(
                     failure_message,
                 )
                 open_review = open_ai_quality_review_for_target(config, str(video.resolve()))
-                if open_review is not None and error_code in _AI_SWEEP_ALLOWED_FAILURE_CODES:
+                if open_review is not None and error_code in _AI_REVIEW_BYPASS_FAILURE_CODES:
                     # A review remains open, but infrastructure failures such
                     # as OOM/timeouts are not evidence that the subtitle itself
                     # needs an operator. Preserve the same bounded attempt
@@ -6707,6 +7085,8 @@ def _mark_queue_result(
 
 
 def _ai_failure_policy(stage: str, message: str) -> tuple[str, str]:
+    if _exact_translation_safe_omission_indexes(stage, message):
+        return "translation_safe_omission", "bounded_retry"
     normalized_stage = str(stage or "").strip().casefold()
     normalized_message = str(message or "").strip().casefold()
     if normalized_stage == "resource_runtime" and any(

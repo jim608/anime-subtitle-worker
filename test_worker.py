@@ -3263,6 +3263,36 @@ class VideoWorkerTest(unittest.TestCase):
             "quality_check",
         )
 
+    def test_translation_safe_omission_review_parser_is_exact_and_bounded(self) -> None:
+        exact = SubtitleQualityError(
+            "Translation safe-omission remained after bounded same-job recovery: "
+            "indexes=[2, 9]"
+        )
+        self.assertEqual(
+            VideoWorker._translation_safe_omission_review_indexes(exact),
+            [2, 9],
+        )
+        malformed = (
+            "Translation safe-omission remained after bounded same-job recovery: "
+            "indexes=[2, 2]"
+        )
+        self.assertEqual(
+            VideoWorker._translation_safe_omission_review_indexes(
+                SubtitleQualityError(malformed)
+            ),
+            [],
+        )
+        too_many = ", ".join(str(index) for index in range(1, 34))
+        self.assertEqual(
+            VideoWorker._translation_safe_omission_review_indexes(
+                SubtitleQualityError(
+                    "Translation safe-omission remained after bounded same-job recovery: "
+                    f"indexes=[{too_many}]"
+                )
+            ),
+            [],
+        )
+
     def test_exhausted_low_confidence_asr_is_classified_for_review_through_exception_chain(self) -> None:
         direct = LowConfidenceTranscriptionError(
             "prompt-free ASR remained unreliable",
@@ -3398,6 +3428,43 @@ class VideoWorkerTest(unittest.TestCase):
             manifest = json.loads(manifests[0].read_text(encoding="utf-8"))
             self.assertEqual(manifest["reason"], "translator_requested_fresh_asr")
             self.assertEqual(VideoWorker._stage_for_exception(AsrReviewError("bad ASR")), "transcription_review")
+
+    def test_exact_translation_omission_creates_targeted_subtitle_review(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Anime S01E01.mkv"
+            video.write_bytes(b"video")
+            worker = VideoWorker(_config(root, log_path=root), _logger())
+            error = SubtitleQualityError(
+                "Translation safe-omission remained after bounded same-job recovery: "
+                "indexes=[2, 9]"
+            )
+            provenance = Mock()
+
+            with (
+                patch("worker.VideoLock") as video_lock,
+                patch("worker.ProvenanceRecorder", return_value=provenance),
+                patch.object(worker, "_process_locked", side_effect=error),
+                patch.object(worker, "_create_review_item") as create_review,
+                patch.object(worker, "_set_stage"),
+                patch.object(worker, "_cleanup_audio_files"),
+                patch.object(worker, "_close_stage_state"),
+                patch("worker.log_failure"),
+                patch("worker.notify_event"),
+            ):
+                video_lock.return_value.acquire.return_value = True
+                self.assertFalse(worker.process(video))
+
+            create_review.assert_called_once()
+            self.assertEqual(create_review.call_args.kwargs["kind"], "subtitle_quality")
+            self.assertEqual(
+                create_review.call_args.kwargs["diagnosis"]["reports"][0]["issues"][0]["indexes"],
+                [2, 9],
+            )
+            self.assertEqual(
+                create_review.call_args.kwargs["candidates"][0]["lines"],
+                "2,9",
+            )
 
     def test_asr_review_archive_failure_retains_source_and_records_partial_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
