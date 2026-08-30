@@ -1043,6 +1043,95 @@ class TranscriberFilterTest(unittest.TestCase):
             self.assertFalse(uncovered["complete"])
             self.assertEqual(uncovered["uncovered_speech_ranges"], [[17.5, 18.0]])
 
+            # Live regression: the retained cue plus the existing 0.15s
+            # tolerance covers 95.26% of one VAD interval.  The remaining
+            # 0.344s is only the trailing edge of that same interval.
+            with patch(
+                "transcriber._silero_speech_timestamps",
+                return_value=[
+                    {
+                        "start": int(0.16 * 16000),
+                        "end": int(7.424 * 16000),
+                    }
+                ],
+            ):
+                trailing_edge = _tail_adjacent_speech_coverage_evidence(
+                    audio,
+                    18.0,
+                    20.0,
+                    20.0,
+                    [(6.0, 12.93, "covered dialogue")],
+                    config,
+                )
+            self.assertTrue(trailing_edge["complete"])
+            self.assertEqual(trailing_edge["uncovered_speech_ranges"], [])
+            self.assertEqual(
+                trailing_edge["accepted_trailing_edge_ranges"][0][
+                    "trailing_gap_seconds"
+                ],
+                0.344,
+            )
+            self.assertEqual(
+                trailing_edge["accepted_trailing_edge_ranges"][0][
+                    "coverage_ratio"
+                ],
+                0.9526,
+            )
+
+            boundary_cases = (
+                # 94.75% coverage with an otherwise small trailing gap.
+                (4.0, 8.0, (9.8, 13.64, "below ratio")),
+                # 96.36% coverage but a 0.51s trailing gap.
+                (0.0, 14.0, (5.8, 19.34, "gap too large")),
+                # Coverage starts after the VAD speech, leaving a leading gap.
+                (4.0, 8.0, (10.2, 14.2, "leading gap")),
+            )
+            for vad_start, vad_end, retained in boundary_cases:
+                with patch(
+                    "transcriber._silero_speech_timestamps",
+                    return_value=[
+                        {
+                            "start": int(vad_start * 16000),
+                            "end": int(vad_end * 16000),
+                        }
+                    ],
+                ):
+                    rejected_edge = _tail_adjacent_speech_coverage_evidence(
+                        audio,
+                        18.0,
+                        20.0,
+                        20.0,
+                        [retained],
+                        config,
+                    )
+                self.assertFalse(rejected_edge["complete"])
+
+            # Two separated subtitle ranges leave an internal gap, even when
+            # their combined duration would exceed 95%.  They must never be
+            # treated as one continuous coverage interval.
+            with patch(
+                "transcriber._silero_speech_timestamps",
+                return_value=[
+                    {"start": 4 * 16000, "end": 10 * 16000},
+                ],
+            ):
+                internal_gap = _tail_adjacent_speech_coverage_evidence(
+                    audio,
+                    18.0,
+                    20.0,
+                    20.0,
+                    [
+                        (9.8, 13.0, "first block"),
+                        (13.4, 15.7, "second block"),
+                    ],
+                    config,
+                )
+            self.assertFalse(internal_gap["complete"])
+            self.assertEqual(
+                internal_gap["uncovered_speech_ranges"],
+                [[10.0, 16.0]],
+            )
+
     def test_full_prompt_free_tail_consensus_is_hash_bound_and_dialogue_stays_review(
         self,
     ) -> None:

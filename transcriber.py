@@ -112,6 +112,8 @@ SELECTIVE_SILENCE_MAX_RMS_DBFS = -50.0
 TAIL_ARTIFACT_MAX_END_GAP_SECONDS = 0.75
 TAIL_ARTIFACT_CONTEXT_SECONDS = 12.0
 TAIL_SPEECH_COVERAGE_TOLERANCE_SECONDS = 0.15
+TAIL_SPEECH_MIN_EDGE_COVERAGE_RATIO = 0.95
+TAIL_SPEECH_MAX_TRAILING_GAP_SECONDS = 0.5
 
 
 def transcribe_to_srt(
@@ -1474,8 +1476,11 @@ def _tail_adjacent_speech_coverage_evidence(
         "complete": False,
         "context_range": [round(context_start, 3), round(context_end, 3)],
         "coverage_tolerance_seconds": TAIL_SPEECH_COVERAGE_TOLERANCE_SECONDS,
+        "minimum_edge_coverage_ratio": TAIL_SPEECH_MIN_EDGE_COVERAGE_RATIO,
+        "maximum_trailing_gap_seconds": TAIL_SPEECH_MAX_TRAILING_GAP_SECONDS,
         "vad_speech_ranges": [],
         "covered_ranges": [],
+        "accepted_trailing_edge_ranges": [],
         "uncovered_speech_ranges": [],
     }
     if context_end <= context_start:
@@ -1530,20 +1535,60 @@ def _tail_adjacent_speech_coverage_evidence(
                 and start < context_end
             ]
         )
-        uncovered = [
-            (start, end)
-            for start, end in speech_ranges
-            if not any(
+        uncovered: list[tuple[float, float]] = []
+        accepted_trailing_edges: list[dict[str, Any]] = []
+        for start, end in speech_ranges:
+            if any(
                 start >= covered_start and end <= covered_end
                 for covered_start, covered_end in coverage
-            )
-        ]
+            ):
+                continue
+
+            overlapping_coverage = [
+                (covered_start, covered_end)
+                for covered_start, covered_end in coverage
+                if covered_end > start and covered_start < end
+            ]
+            accepted_edge: dict[str, Any] | None = None
+            # Silero can extend the end of one continuous utterance slightly
+            # beyond its subtitle cue.  Accept only a tiny trailing overhang;
+            # leading gaps, internal gaps, and separate speech stay fail-closed.
+            if len(overlapping_coverage) == 1 and end > start:
+                covered_start, covered_end = overlapping_coverage[0]
+                overlap_seconds = max(
+                    0.0,
+                    min(end, covered_end) - max(start, covered_start),
+                )
+                coverage_ratio = overlap_seconds / (end - start)
+                trailing_gap = max(0.0, end - covered_end)
+                if (
+                    covered_start <= start
+                    and covered_end < end
+                    and coverage_ratio + 1e-9
+                    >= TAIL_SPEECH_MIN_EDGE_COVERAGE_RATIO
+                    and trailing_gap <= TAIL_SPEECH_MAX_TRAILING_GAP_SECONDS + 1e-9
+                ):
+                    accepted_edge = {
+                        "speech_range": [round(start, 3), round(end, 3)],
+                        "coverage_range": [
+                            round(covered_start, 3),
+                            round(covered_end, 3),
+                        ],
+                        "coverage_ratio": round(coverage_ratio, 4),
+                        "trailing_gap_seconds": round(trailing_gap, 3),
+                    }
+
+            if accepted_edge is None:
+                uncovered.append((start, end))
+            else:
+                accepted_trailing_edges.append(accepted_edge)
         result["vad_speech_ranges"] = [
             [round(start, 3), round(end, 3)] for start, end in speech_ranges
         ]
         result["covered_ranges"] = [
             [round(start, 3), round(end, 3)] for start, end in coverage
         ]
+        result["accepted_trailing_edge_ranges"] = accepted_trailing_edges
         result["uncovered_speech_ranges"] = [
             [round(start, 3), round(end, 3)] for start, end in uncovered
         ]
