@@ -3386,6 +3386,14 @@ def _yield_normal_ai_queue_to_review_remediation(config, logger) -> bool:
                 str(active.get("command_id") or ""),
                 str(active.get("target") or ""),
             )
+            update_ai_scheduler_state(
+                config,
+                state="processing",
+                reason_code="review_remediation",
+                message="AI scheduler yielded to reserved automatic line remediation.",
+                current_video=reservation[1],
+                logger=logger,
+            )
             if reservation != _AI_REVIEW_REMEDIATION_LOGGED_RESERVATION:
                 _AI_REVIEW_REMEDIATION_LOGGED_RESERVATION = reservation
                 logger.info(

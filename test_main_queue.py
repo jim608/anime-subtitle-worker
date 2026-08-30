@@ -793,6 +793,67 @@ class MainQueueResultTest(unittest.TestCase):
             self.assertGreater(state["retry_requested_at"], 0)
             main_module.AI_SCHEDULER_WAKE_EVENT.clear()
 
+    def test_scheduler_retry_after_hold_release_reports_active_review_remediation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            work = Path(temp_dir)
+            hold_path = work / "deployment_hold.json"
+            hold_path.write_text('{"active": true}', encoding="utf-8")
+            config = SimpleNamespace(work_path=work)
+            logger = Mock()
+            main_module.AI_SCHEDULER_WAKE_EVENT.clear()
+            self.addCleanup(main_module.AI_SCHEDULER_WAKE_EVENT.clear)
+
+            main_module._auto_run_once(Mock(), Mock(), config, logger)
+            held_state = json.loads(
+                (work / "ai_scheduler_state.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(held_state["state"], "deployment_hold")
+
+            hold_path.unlink()
+            retry = main_module._execute_control_command(
+                config,
+                logger,
+                "system.ai_scheduler_retry",
+                "",
+                {},
+            )
+            retry_state = json.loads(
+                (work / "ai_scheduler_state.json").read_text(encoding="utf-8")
+            )
+            self.assertTrue(retry["applied"])
+            self.assertGreater(retry_state["next_retry_at"], 0)
+            self.assertTrue(main_module.AI_SCHEDULER_WAKE_EVENT.is_set())
+
+            shutdown_event = Mock()
+            stopped = main_module._wait_for_next_cycle_or_ai_resume(
+                shutdown_event,
+                300,
+                config,
+            )
+            self.assertFalse(stopped)
+            self.assertFalse(main_module.AI_SCHEDULER_WAKE_EVENT.is_set())
+            shutdown_event.wait.assert_not_called()
+
+            reservation = {
+                "command_id": "cmd_reserved",
+                "target": "/anime/Paused - S01E02.mkv",
+                "status": "running",
+            }
+            with patch.object(
+                main_module,
+                "_active_translation_omission_line_command",
+                return_value=reservation,
+            ):
+                main_module._auto_run_once(Mock(), Mock(), config, logger)
+
+            recovered_state = json.loads(
+                (work / "ai_scheduler_state.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(recovered_state["state"], "processing")
+            self.assertEqual(recovered_state["reason_code"], "review_remediation")
+            self.assertEqual(recovered_state["current_video"], reservation["target"])
+            self.assertNotEqual(recovered_state["state"], "deployment_hold")
+
     def test_expired_scheduler_retry_does_not_spin_the_next_cycle(self) -> None:
         shutdown_event = Mock()
         shutdown_event.wait.return_value = True
