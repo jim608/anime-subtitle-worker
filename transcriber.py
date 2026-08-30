@@ -921,6 +921,10 @@ def _rescue_op_ed_lyrics(
     padding = max(0.0, float(getattr(config, "op_ed_padding_seconds", 1.0)))
     rejected_segments = 0
     initial_prompt = str(getattr(config, "op_ed_initial_prompt", "") or "").strip()
+    minimum_rescue_chars = max(
+        1,
+        int(getattr(config, "gap_rescue_min_chars", 2)),
+    )
 
     for gap_start, gap_end in ranges:
         clip_start = max(0.0, gap_start - padding)
@@ -1034,7 +1038,10 @@ def _rescue_op_ed_lyrics(
                 center = (start + end) / 2
                 if center < gap_start or center > gap_end:
                     continue
-                if _display_length(text) < 1 or _is_duplicate_rescue(text, existing_texts):
+                if (
+                    _display_length(text) < minimum_rescue_chars
+                    or _is_duplicate_rescue(text, existing_texts)
+                ):
                     continue
                 clamped_start = max(gap_start, start)
                 clamped_end = min(gap_end, end)

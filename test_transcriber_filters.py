@@ -2099,6 +2099,55 @@ class TranscriberFilterTest(unittest.TestCase):
         self.assertTrue(all(not call[1]["vad_filter"] for call in calls))
         self.assertTrue(all(call[1]["no_speech_threshold"] == 0.95 for call in calls))
 
+    def test_op_ed_rescue_rejects_one_character_but_keeps_two_character_chunk(
+        self,
+    ) -> None:
+        config = SimpleNamespace(
+            op_ed_min_audio_seconds=600.0,
+            op_ed_opening_window_seconds=360.0,
+            op_ed_ending_window_seconds=300.0,
+            op_ed_gap_threshold_seconds=6.0,
+            op_ed_max_gap_seconds=210.0,
+            op_ed_padding_seconds=1.0,
+            op_ed_max_rescue_ranges=6,
+            op_ed_no_speech_threshold=0.95,
+            op_ed_log_prob_threshold=-1.5,
+            op_ed_compression_ratio_threshold=3.0,
+            op_ed_initial_prompt=None,
+            gap_rescue_clip_seconds=30.0,
+            gap_rescue_clip_overlap_seconds=2.0,
+            gap_rescue_min_chars=2,
+            whisper_language="ja",
+            whisper_task="transcribe",
+            whisper_beam_size=5,
+            whisper_best_of=5,
+            whisper_patience=1.0,
+            whisper_length_penalty=1.0,
+            whisper_repetition_penalty=1.0,
+            whisper_no_repeat_ngram_size=5,
+            whisper_hallucination_silence_threshold=None,
+            whisper_hallucination_phrases=[],
+            subtitle_timing_mode="segment",
+        )
+        segments = [
+            SimpleNamespace(start=40.0, end=42.0, text="づ", words=[]),
+            SimpleNamespace(start=44.0, end=46.0, text="歌詞", words=[]),
+        ]
+        model = SimpleNamespace(
+            transcribe=lambda *_args, **_kwargs: (segments, SimpleNamespace())
+        )
+
+        with patch("transcriber._wav_duration_seconds", return_value=1440.0):
+            rescued = _rescue_op_ed_lyrics(
+                model,
+                "episode.wav",
+                [(0.0, 30.0, "cold open"), (120.0, 1440.0, "dialogue")],
+                config,
+                logging.getLogger("test.transcriber.op-ed-min-chars"),
+            )
+
+        self.assertEqual(rescued, [(44.0, 46.0, "歌詞")])
+
     def test_op_ed_rescue_does_not_send_empty_initial_prompt(self) -> None:
         config = SimpleNamespace(
             op_ed_min_audio_seconds=600.0,
