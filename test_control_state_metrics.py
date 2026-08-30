@@ -729,6 +729,93 @@ class ControlStateMetricsTest(unittest.TestCase):
                 )
             )
 
+    def test_revision_scoped_review_autopilot_prioritizes_first_attempts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = SimpleNamespace(
+                work_path=root,
+                control_state_path="control_state.sqlite3",
+            )
+            first_video = root / "Anime - S01E01.mkv"
+            second_video = root / "Anime - S01E02.mkv"
+            third_video = root / "Anime - S01E03.mkv"
+            retried_review = upsert_review_item(
+                config,
+                kind="asr_quality",
+                target_key=str(first_video),
+                summary="older review with one policy attempt",
+                diagnosis={"video": str(first_video)},
+                candidates=[{"action": "ai.retranscribe"}],
+            )
+            scoped_retry_review = upsert_review_item(
+                config,
+                kind="asr_quality",
+                target_key=str(second_video),
+                summary="review with one revision-scoped policy attempt",
+                diagnosis={"video": str(second_video)},
+                candidates=[{"action": "ai.retranscribe"}],
+            )
+            fresh_review = upsert_review_item(
+                config,
+                kind="asr_quality",
+                target_key=str(third_video),
+                summary="newer review without a policy attempt",
+                diagnosis={"video": str(third_video)},
+                candidates=[{"action": "ai.retranscribe"}],
+            )
+            prefix = "review-autopilot:asr-full-v1:review.resolve_ai:"
+            command = enqueue_command(
+                config,
+                action="review.resolve_ai",
+                target=str(first_video),
+                parameters={
+                    "review_id": retried_review,
+                    "expected_failure_revision": "revision-1",
+                },
+                idempotency_key=f"{prefix}{retried_review}",
+            )
+            claimed = claim_next_command(config, worker_id="test-worker")
+            self.assertEqual(claimed.command_id, command["command_id"])
+            finish_command(config, command["command_id"], result={"queued": True})
+            scoped_command = enqueue_command(
+                config,
+                action="review.resolve_ai",
+                target=str(second_video),
+                parameters={
+                    "review_id": scoped_retry_review,
+                    "expected_failure_revision": "revision-2",
+                },
+                idempotency_key=f"{prefix}{scoped_retry_review}:revision-2",
+            )
+            claimed = claim_next_command(config, worker_id="test-worker")
+            self.assertEqual(claimed.command_id, scoped_command["command_id"])
+            finish_command(
+                config,
+                scoped_command["command_id"],
+                result={"queued": True},
+            )
+
+            one_shot_candidates = list_open_review_autopilot_candidates(
+                config,
+                kind="asr_quality",
+                idempotency_prefix=prefix,
+            )
+            candidates = list_open_review_autopilot_candidates(
+                config,
+                kind="asr_quality",
+                idempotency_prefix=prefix,
+                allow_revision_scoped_attempts=True,
+            )
+
+            self.assertEqual(
+                [item["review_id"] for item in one_shot_candidates],
+                [scoped_retry_review, fresh_review],
+            )
+            self.assertEqual(
+                [item["review_id"] for item in candidates],
+                [fresh_review, retried_review, scoped_retry_review],
+            )
+
     def test_revision_scoped_review_autopilot_still_excludes_operator_command(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

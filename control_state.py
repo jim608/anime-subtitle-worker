@@ -1620,11 +1620,13 @@ def list_open_review_autopilot_candidates(
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
-    """Return old-to-new open reviews not yet attempted by one autopilot policy.
+    """Return open reviews eligible for one autopilot policy.
 
     The durable command idempotency key is also the attempt ledger.  By
     default a review is considered once per policy; revision-scoped policies
-    may opt into later filtering against their bounded revision ledger.
+    may opt into later filtering against their bounded revision ledger.  For
+    revision-scoped policies, reviews that have never consumed this policy run
+    before retries so one repeatedly failing title cannot starve the backlog.
     Active operator commands always own their review and exclude it from
     automatic selection.
     """
@@ -1680,7 +1682,24 @@ def list_open_review_autopilot_candidates(
                         AND prerequisite.status='completed'
                   )
               )
-            ORDER BY r.created_at, r.updated_at, r.review_id
+            ORDER BY
+              CASE
+                WHEN ?=1 AND EXISTS (
+                    SELECT 1
+                    FROM control_commands policy_attempt
+                    WHERE policy_attempt.review_id=r.review_id
+                      AND (
+                          policy_attempt.idempotency_key = ? || r.review_id
+                          OR substr(
+                                 policy_attempt.idempotency_key,
+                                 1,
+                                 length(? || r.review_id || ':')
+                             ) = ? || r.review_id || ':'
+                      )
+                ) THEN 1
+                ELSE 0
+              END,
+              r.created_at, r.updated_at, r.review_id
             LIMIT ? OFFSET ?
             """,
             (
@@ -1691,6 +1710,10 @@ def list_open_review_autopilot_candidates(
                 normalized_required_prefix,
                 normalized_required_prefix,
                 normalized_required_prefix,
+                1 if allow_revision_scoped_attempts else 0,
+                normalized_prefix,
+                normalized_prefix,
+                normalized_prefix,
                 max(1, min(500, int(limit))),
                 normalized_offset,
             ),
