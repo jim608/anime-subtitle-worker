@@ -26,7 +26,7 @@ from source_decision import (
 )
 from srt_utils import SrtBlock, read_srt, write_srt
 from subtitle_extract import ExtractedSubtitle
-from subtitle_paths import paths_for_video
+from subtitle_paths import paths_for_video, source_transcript_paths_for_video
 from test_scanner import _config as _scanner_config
 from test_scanner import _logger as _scanner_logger
 from test_worker import _config as _worker_config
@@ -100,6 +100,10 @@ class SubtitleSourcePriorityTest(unittest.TestCase):
 
             with (
                 patch.object(worker, "_extract_preferred_audio") as preferred_audio,
+                patch.object(
+                    worker,
+                    "_remediate_aligned_timing_bundle",
+                ) as aligned_timing_remediation,
                 patch("worker.extract_audio") as raw_audio,
                 patch("worker.preferred_audio_stream_info") as audio_stream_probe,
                 patch("worker.validate_cached_audio") as audio_cache_probe,
@@ -115,6 +119,7 @@ class SubtitleSourcePriorityTest(unittest.TestCase):
 
             self.assertEqual((outcome.stage, outcome.status), ("complete", "ok"))
             preferred_audio.assert_not_called()
+            aligned_timing_remediation.assert_not_called()
             raw_audio.assert_not_called()
             audio_stream_probe.assert_not_called()
             audio_cache_probe.assert_not_called()
@@ -323,6 +328,159 @@ class SubtitleSourcePriorityTest(unittest.TestCase):
             self.assertEqual(evidence["strategy"], TRANSLATE_JAPANESE)
             self.assertEqual(evidence["source_language"], "ja")
             self.assertIs(evidence["asr_used"], False)
+
+    def test_english_sidecar_translation_uses_no_audio_or_asr_and_has_strict_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "English Anime S01E04.mkv"
+            video.write_bytes(b"media")
+            source = root / "English Anime S01E04.English.eng.ass"
+            events = [
+                (
+                    f"0:00:{index * 2 - 1:02d}.00",
+                    f"0:00:{index * 2 + 1:02d}.00",
+                    f"Line {index}: this is here for you.",
+                )
+                for index in range(1, 21)
+            ]
+            _write_ass(source, events)
+            config = _worker_config(
+                root,
+                export_ai_ass=True,
+                scanner_cache_enabled=False,
+                keep_intermediate_files=True,
+                language_gate_enabled=True,
+                allowed_source_languages=["ja"],
+                skip_non_allowed_language=True,
+                ai_output_manifest_path=root / "manifests",
+                mikan_remove_ai_after_extract=False,
+            )
+            worker = VideoWorker(config, _worker_logger())
+            translator = Mock()
+
+            def translate(blocks, _source_path, destination, **kwargs) -> None:
+                self.assertEqual(kwargs.get("source_language"), "en")
+                write_srt(
+                    destination,
+                    [
+                        SrtBlock(
+                            block.index,
+                            block.timing,
+                            [f"这是第{block.index}行简体中文字幕"],
+                        )
+                        for block in blocks
+                    ],
+                )
+
+            translator.translate_blocks.side_effect = translate
+
+            with (
+                patch.object(worker, "_extract_preferred_audio") as preferred_audio,
+                patch.object(
+                    worker,
+                    "_remediate_aligned_timing_bundle",
+                ) as aligned_timing_remediation,
+                patch("worker.extract_audio") as raw_audio,
+                patch("worker.preferred_audio_stream_info") as audio_stream_probe,
+                patch("worker.validate_cached_audio") as audio_cache_probe,
+                patch.object(worker, "_detect_source_language") as detect_language,
+                patch.object(worker, "_transcribe") as transcribe,
+                patch.object(worker, "_build_series_metadata_context", return_value=None),
+                patch.object(worker, "_get_translator", return_value=translator),
+            ):
+                outcome = worker._process_locked(
+                    video,
+                    root / "audio.wav",
+                    root / "vocals.wav",
+                )
+
+            self.assertEqual((outcome.stage, outcome.status), ("source_translation", "ok"))
+            preferred_audio.assert_not_called()
+            aligned_timing_remediation.assert_not_called()
+            raw_audio.assert_not_called()
+            audio_stream_probe.assert_not_called()
+            audio_cache_probe.assert_not_called()
+            detect_language.assert_not_called()
+            transcribe.assert_not_called()
+            translator.translate_blocks.assert_called_once()
+
+            source_paths = source_transcript_paths_for_video(video, config, "en")
+            expected_timings = [block.timing for block in read_srt(source_paths.srt)]
+            canonical = paths_for_video(video, config)
+            self.assertEqual(
+                [block.timing for block in read_srt(canonical.zh_cn_srt)],
+                expected_timings,
+            )
+            self.assertEqual(
+                [block.timing for block in read_srt(canonical.zh_tw_srt)],
+                expected_timings,
+            )
+            self.assertTrue(
+                validate_output_manifest(
+                    video,
+                    config,
+                    verify_hashes=True,
+                    require_publication_semantics=True,
+                )
+            )
+            payload = _manifest(video, config)
+            evidence = payload["provenance"]["source_transcription"]
+            self.assertEqual(
+                payload["publication"]["output_languages"],
+                ["en", "zh-CN", "zh-TW"],
+            )
+            self.assertIs(evidence["asr_used"], False)
+            self.assertEqual(
+                evidence["subtitle_source"]["original_path"],
+                str(source.resolve()),
+            )
+            snapshot = Path(evidence["subtitle_source"]["path"])
+            self.assertTrue(snapshot.is_file())
+            self.assertNotEqual(snapshot, source)
+            source.write_text("tampered English source", encoding="utf-8")
+            self.assertTrue(
+                validate_output_manifest(
+                    video,
+                    config,
+                    verify_hashes=True,
+                    require_publication_semantics=True,
+                )
+            )
+            snapshot.write_text("tampered immutable snapshot", encoding="utf-8")
+            self.assertFalse(
+                validate_output_manifest(
+                    video,
+                    config,
+                    verify_hashes=True,
+                    require_publication_semantics=True,
+                )
+            )
+
+    def test_english_sidecar_discovery_rejects_configured_ai_template_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "English Anime S01E05.mkv"
+            video.write_bytes(b"media")
+            generated = root / "English Anime S01E05.English.en.ass"
+            _write_ass(
+                generated,
+                [
+                    (
+                        f"0:00:{index * 2 - 1:02d}.00",
+                        f"0:00:{index * 2 + 1:02d}.00",
+                        f"Line {index}: this is here for you.",
+                    )
+                    for index in range(1, 21)
+                ],
+            )
+            config = _worker_config(
+                root,
+                ai_source_transcript_ass_suffix_template=".English.{language}.ass",
+            )
+
+            worker = VideoWorker(config, _worker_logger())
+
+            self.assertIsNone(worker._discover_english_subtitle_source(video))
 
     def test_scanner_keeps_invalid_named_zh_tw_and_skips_audio_probe_for_valid_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

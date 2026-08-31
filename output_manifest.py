@@ -18,6 +18,7 @@ SUPPORTED_MANIFEST_SCHEMA_VERSIONS = frozenset({1, MANIFEST_SCHEMA_VERSION})
 DELIVERY_EVIDENCE_CONTRACT = "ai-delivery-v1"
 PUBLICATION_SEMANTICS_CONTRACT = "ai-publication-semantics-v2"
 SOURCE_TRANSCRIPTION_PROVENANCE_CONTRACT = "ai-source-transcription-v1"
+SOURCE_SUBTITLE_NORMALIZATION_CONTRACT = "source-subtitle-normalization-v1"
 TRANSLATED_PUBLICATION_KIND = "translated_trilingual"
 SOURCE_LANGUAGE_PUBLICATION_KIND = "source_language"
 ADOPTED_ZH_TW_PUBLICATION_KIND = "adopted_zh_tw"
@@ -631,7 +632,8 @@ def _source_transcription_provenance_matches(
             return False
         if _normalize_language_tag(evidence.get("language")) != language:
             return False
-        if evidence.get("asr_used") is not True:
+        asr_used = evidence.get("asr_used")
+        if not isinstance(asr_used, bool):
             return False
 
         from subtitle_paths import source_transcript_paths_for_video
@@ -660,6 +662,99 @@ def _source_transcription_provenance_matches(
         if asr_transcription_hold_path(source_path, config).exists():
             return False
         diagnostic_path = asr_diagnostics_path(source_path, config)
+        if asr_used is False:
+            if diagnostic_path.exists():
+                return False
+            source = evidence.get("subtitle_source")
+            if not isinstance(source, dict):
+                return False
+            if source.get("contract") != SOURCE_SUBTITLE_NORMALIZATION_CONTRACT:
+                return False
+            if _normalize_language_tag(source.get("language")) != language:
+                return False
+            if language != "en":
+                return False
+
+            video_path = Path(video).resolve()
+            original_path = Path(str(source.get("original_path") or "")).resolve()
+            expected_original_paths = {
+                video_path.with_name(f"{video_path.stem}.English.eng.ass"),
+                video_path.with_name(f"{video_path.stem}.English.en.ass"),
+            }
+            if original_path not in expected_original_paths:
+                return False
+            origin_sha256 = str(source.get("sha256") or "")
+            if re.fullmatch(r"[0-9a-f]{64}", origin_sha256) is None:
+                return False
+            origin_path = Path(str(source.get("path") or "")).resolve()
+            expected_snapshot = (
+                Path(config.work_path).resolve()
+                / "source_subtitle_snapshots"
+                / origin_sha256[:2]
+                / f"{origin_sha256}.ass"
+            )
+            if origin_path != expected_snapshot or not origin_path.is_file():
+                return False
+            origin_stat = origin_path.stat()
+            if int(source.get("size") or -1) != int(origin_stat.st_size):
+                return False
+            if int(source.get("mtime_ns") or -1) != int(origin_stat.st_mtime_ns):
+                return False
+            if origin_sha256 != sha256_file(origin_path):
+                return False
+
+            from ass_utils import (
+                ass_dialogue_style_to_srt_blocks,
+                dominant_ass_dialogue_style,
+            )
+            from srt_utils import read_srt
+            from subtitle_extract import classify_subtitle_content_file
+            from subtitle_quality import analyze_subtitle_file
+
+            origin_content = origin_path.read_text(
+                encoding="utf-8-sig",
+                errors="replace",
+            )
+            dialogue_style = str(source.get("dialogue_style") or "")
+            if not dialogue_style:
+                return False
+            if dominant_ass_dialogue_style(origin_content) != dialogue_style:
+                return False
+            actual_blocks = read_srt(source_path)
+            expected_blocks = ass_dialogue_style_to_srt_blocks(
+                origin_content,
+                dialogue_style,
+            )
+            if len(actual_blocks) != len(expected_blocks):
+                return False
+            if any(
+                actual.index != expected.index
+                or actual.timing != expected.timing
+                or " ".join(" ".join(actual.text).split())
+                != " ".join(" ".join(expected.text).split())
+                for actual, expected in zip(
+                    actual_blocks,
+                    expected_blocks,
+                    strict=True,
+                )
+            ):
+                return False
+            classification = classify_subtitle_content_file(
+                source_path,
+                metadata_language=language,
+            )
+            if _normalize_language_tag(classification.language) != language:
+                return False
+            quality = analyze_subtitle_file(source_path, config, role="source")
+            hard_codes = {
+                str(issue.code)
+                for issue in quality.issues
+                if str(issue.severity).casefold() == "fail"
+            }
+            if hard_codes - {"very_long_line"}:
+                return False
+            return True
+
         if diagnostic_path.is_file():
             diagnostic = read_asr_diagnostics(source_path, config)
             if str(diagnostic.get("status") or "") not in {
@@ -670,7 +765,7 @@ def _source_transcription_provenance_matches(
             if str(diagnostic.get("srt_sha256") or "") != source_sha256:
                 return False
         return True
-    except (AttributeError, KeyError, OSError, TypeError, ValueError):
+    except (AttributeError, KeyError, OSError, RuntimeError, TypeError, ValueError):
         return False
 
 

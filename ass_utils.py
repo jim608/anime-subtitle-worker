@@ -133,6 +133,129 @@ def convert_ass_file_to_srt(ass_path: str | Path, srt_path: str | Path) -> Path:
     return output
 
 
+def dominant_ass_dialogue_style(
+    content: str,
+    *,
+    minimum_dialogues: int = 20,
+    minimum_share: float = 0.5,
+) -> str | None:
+    """Return the unique dominant usable ASS dialogue style, if trustworthy."""
+
+    if minimum_dialogues < 1:
+        raise ValueError("minimum_dialogues must be at least 1")
+    if not 0 < minimum_share <= 1:
+        raise ValueError("minimum_share must be greater than 0 and at most 1")
+
+    counts: dict[str, int] = {}
+    names: dict[str, str] = {}
+    timings: dict[str, list[tuple[str, str]]] = {}
+    total = 0
+    for _raw_line, fields in _ass_dialogue_fields(content):
+        style = fields[3].strip()
+        if not style:
+            continue
+        start = _ass_timestamp_to_srt(fields[1].strip())
+        end = _ass_timestamp_to_srt(fields[2].strip())
+        if not _unescape_generated_ass_text(fields[9]):
+            continue
+        key = style.casefold()
+        names.setdefault(key, style)
+        counts[key] = counts.get(key, 0) + 1
+        timings.setdefault(key, []).append((start, end))
+        total += 1
+
+    if not counts or total <= 0:
+        return None
+    highest = max(counts.values())
+    leaders = [key for key, count in counts.items() if count == highest]
+    if len(leaders) != 1:
+        return None
+    if highest < minimum_dialogues or highest / total < minimum_share:
+        return None
+    leader = leaders[0]
+    leader_timings = set(timings.get(leader, ()))
+    if any(
+        timing not in leader_timings
+        for key, style_timings in timings.items()
+        if key != leader
+        for timing in style_timings
+    ):
+        # A secondary style has unique timeline coverage.  It may contain
+        # signs or real dialogue rather than a duplicated karaoke/translation
+        # layer, so selecting one style would silently omit content.
+        return None
+    return names[leader]
+
+
+def ass_dialogue_style_to_srt_blocks(content: str, style: str) -> list[SrtBlock]:
+    """Convert one ASS style while retaining shadowed secondary text.
+
+    A trusted dominant style may have alternate events at the exact same
+    timestamps (for example signs, a second speaker, or karaoke text).  Those
+    events must not disappear merely because their style is not dominant, so
+    distinct text is appended to the first selected cue at that timestamp.
+    Callers must first use :func:`dominant_ass_dialogue_style`; it rejects any
+    secondary event with timeline coverage that cannot be merged safely.
+    """
+
+    requested_style = str(style or "").strip()
+    if not requested_style:
+        raise ValueError("style must not be empty")
+
+    parsed_events: list[tuple[str, str, str, list[str]]] = []
+    for _raw_line, fields in _ass_dialogue_fields(content):
+        start = _ass_timestamp_to_srt(fields[1].strip())
+        end = _ass_timestamp_to_srt(fields[2].strip())
+        text_lines = _unescape_generated_ass_text(fields[9])
+        if not text_lines:
+            continue
+        parsed_events.append((fields[3].strip(), start, end, text_lines))
+
+    blocks: list[SrtBlock] = []
+    first_block_by_timing: dict[tuple[str, str], int] = {}
+    seen_text_by_timing: dict[tuple[str, str], set[str]] = {}
+    for event_style, start, end, text_lines in parsed_events:
+        if event_style.casefold() != requested_style.casefold():
+            continue
+        timing_key = (start, end)
+        blocks.append(
+            SrtBlock(
+                index=len(blocks) + 1,
+                timing=f"{start} --> {end}",
+                text=list(text_lines),
+            )
+        )
+        first_block_by_timing.setdefault(timing_key, len(blocks) - 1)
+        seen_text_by_timing.setdefault(timing_key, set()).add(
+            " ".join(" ".join(text_lines).split()).casefold()
+        )
+    if not blocks:
+        raise AssExportError(
+            f"ASS contains no usable Dialogue events for style {requested_style!r}"
+        )
+
+    for event_style, start, end, text_lines in parsed_events:
+        if event_style.casefold() == requested_style.casefold():
+            continue
+        timing_key = (start, end)
+        destination_index = first_block_by_timing.get(timing_key)
+        if destination_index is None:
+            # The dominant-style gate rejects this case.  Keep the conversion
+            # helper fail closed as well so future callers cannot omit unique
+            # secondary timeline coverage accidentally.
+            raise AssExportError(
+                "ASS secondary style contains unique timeline coverage: "
+                f"style={event_style!r} start={start} end={end}"
+            )
+        normalized_text = " ".join(" ".join(text_lines).split()).casefold()
+        seen = seen_text_by_timing.setdefault(timing_key, set())
+        if normalized_text in seen:
+            continue
+        blocks[destination_index].text.extend(text_lines)
+        seen.add(normalized_text)
+    return blocks
+
+
 def restyle_ass_file(ass_path: str | Path, style: AssStyle | None = None) -> bool:
     path = Path(ass_path)
     resolved_style = style or AssStyle()
@@ -309,12 +432,7 @@ def _srt_timestamp_to_ass(timestamp: str) -> str:
 
 def _generated_ass_to_srt_blocks(content: str) -> list[SrtBlock]:
     blocks: list[SrtBlock] = []
-    for raw_line in content.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-        if not raw_line.startswith("Dialogue:"):
-            continue
-        fields = raw_line.split(":", 1)[1].lstrip().split(",", 9)
-        if len(fields) < 10:
-            raise AssExportError(f"Invalid ASS Dialogue line: {raw_line!r}")
+    for _raw_line, fields in _ass_dialogue_fields(content):
         start = _ass_timestamp_to_srt(fields[1].strip())
         end = _ass_timestamp_to_srt(fields[2].strip())
         text_lines = _unescape_generated_ass_text(fields[9])
@@ -330,6 +448,18 @@ def _generated_ass_to_srt_blocks(content: str) -> list[SrtBlock]:
     if not blocks:
         raise AssExportError("ASS contains no usable Dialogue events")
     return blocks
+
+
+def _ass_dialogue_fields(content: str) -> list[tuple[str, list[str]]]:
+    parsed: list[tuple[str, list[str]]] = []
+    for raw_line in content.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if not raw_line.startswith("Dialogue:"):
+            continue
+        fields = raw_line.split(":", 1)[1].lstrip().split(",", 9)
+        if len(fields) < 10:
+            raise AssExportError(f"Invalid ASS Dialogue line: {raw_line!r}")
+        parsed.append((raw_line, fields))
+    return parsed
 
 
 def _ass_timestamp_to_srt(timestamp: str) -> str:

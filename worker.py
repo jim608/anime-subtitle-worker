@@ -23,10 +23,12 @@ from audio import (
     validate_cached_audio,
 )
 from ass_utils import (
+    ass_dialogue_style_to_srt_blocks,
     ass_style_from_config,
     convert_ass_file_to_srt,
     convert_bilingual_srt_files_to_ass,
     convert_srt_file_to_ass,
+    dominant_ass_dialogue_style,
     restyle_ass_file,
 )
 from asr_review_checkpoint import (
@@ -55,6 +57,7 @@ from opencc_convert import convert_ass_to_zh_tw, convert_srt_to_zh_tw
 from output_manifest import (
     ADOPTED_ZH_TW_PUBLICATION_KIND,
     CONVERTED_ZH_CN_PUBLICATION_KIND,
+    SOURCE_SUBTITLE_NORMALIZATION_CONTRACT,
     SOURCE_TRANSCRIPTION_PROVENANCE_CONTRACT,
     TRANSLATED_PUBLICATION_KIND,
     begin_output_publication,
@@ -102,7 +105,11 @@ from series_metadata import (
     stable_series_id,
 )
 from mikan_source import extract_episode_number
-from subtitle_extract import classify_subtitle_content_file, remove_ai_srt_outputs
+from subtitle_extract import (
+    classify_subtitle_content_file,
+    is_configured_ai_source_transcript_sidecar,
+    remove_ai_srt_outputs,
+)
 from subtitle_quality import (
     SubtitleQualityError,
     SubtitleQualityReport,
@@ -623,6 +630,14 @@ class VideoWorker:
                 return self._adopt_traditional_chinese_source(video, source_decision)
             if source_decision.strategy == CONVERT_ZH_CN:
                 return self._convert_simplified_chinese_source(video, source_decision)
+        else:
+            english_source = self._discover_english_subtitle_source(video)
+            if english_source is not None:
+                return self._translate_english_subtitle_source(
+                    video,
+                    paths,
+                    english_source,
+                )
 
         # Preserve compatibility for old verified AI outputs that predate the
         # strict manifest, but never let a bare zh-CN or source-language artifact
@@ -1381,6 +1396,165 @@ class VideoWorker:
             "Japanese subtitle timeline imported; audio and ASR skipped",
         )
 
+    def _discover_english_subtitle_source(
+        self,
+        video: Path,
+    ) -> Path | None:
+        """Return a verified dominant English ASS dialogue style, if present."""
+
+        candidates = (
+            video.with_name(f"{video.stem}.English.eng.ass"),
+            video.with_name(f"{video.stem}.English.en.ass"),
+        )
+        for candidate in candidates:
+            if not candidate.is_file() or candidate.stat().st_size <= 0:
+                continue
+            if is_configured_ai_source_transcript_sidecar(
+                video,
+                candidate,
+                self.config,
+            ):
+                self.logger.warning(
+                    "Ignoring configured AI source-transcript artifact as an "
+                    "official English sidecar: %s",
+                    candidate,
+                )
+                continue
+            classification = classify_subtitle_content_file(
+                candidate,
+                metadata_language="en",
+            )
+            if str(classification.language or "").casefold() != "en":
+                self.logger.warning(
+                    "Ignoring English-labelled sidecar without English content evidence: %s",
+                    candidate,
+                )
+                continue
+            content = candidate.read_text(encoding="utf-8-sig", errors="replace")
+            dialogue_style = dominant_ass_dialogue_style(content)
+            if not dialogue_style:
+                self.logger.warning(
+                    "Ignoring English sidecar without one dominant dialogue style: %s",
+                    candidate,
+                )
+                continue
+            blocks = ass_dialogue_style_to_srt_blocks(content, dialogue_style)
+            validate_srt_structure(blocks)
+            return candidate
+        return None
+
+    def _translate_english_subtitle_source(
+        self,
+        video: Path,
+        paths: SubtitlePaths,
+        source_ass: Path,
+    ) -> ProcessOutcome:
+        """Translate a verified English sidecar without probing audio or ASR."""
+
+        self._set_stage(
+            video,
+            "subtitle_source",
+            "running",
+            "Importing English subtitle timeline; audio and ASR are not required",
+        )
+        source_sha256 = sha256_file(source_ass)
+        snapshot = (
+            Path(self.config.work_path)
+            / "source_subtitle_snapshots"
+            / source_sha256[:2]
+            / f"{source_sha256}.ass"
+        )
+        if not snapshot.is_file() or sha256_file(snapshot) != source_sha256:
+            verified_copy_replace(source_ass, snapshot)
+        if sha256_file(snapshot) != source_sha256:
+            raise SubtitleQualityError(
+                "English subtitle source changed while creating its immutable snapshot"
+            )
+        snapshot_content = snapshot.read_text(
+            encoding="utf-8-sig",
+            errors="replace",
+        )
+        snapshot_classification = classify_subtitle_content_file(
+            snapshot,
+            metadata_language="en",
+        )
+        if str(snapshot_classification.language or "").casefold() != "en":
+            raise SubtitleQualityError(
+                "English subtitle snapshot failed content-language verification"
+            )
+        dialogue_style = dominant_ass_dialogue_style(snapshot_content)
+        if not dialogue_style:
+            raise SubtitleQualityError(
+                "English subtitle snapshot has no safe dominant dialogue style"
+            )
+        source_blocks = ass_dialogue_style_to_srt_blocks(
+            snapshot_content,
+            dialogue_style,
+        )
+        validate_srt_structure(source_blocks)
+
+        if paths.zh_cn_srt.exists() or paths.zh_tw_srt.exists():
+            self._invalidate_translation_intermediates(paths)
+        source_paths = source_transcript_paths_for_video(video, self.config, "en")
+        source_paths.srt.parent.mkdir(parents=True, exist_ok=True)
+        staged = source_paths.srt.with_name(
+            f".{source_paths.srt.stem}.sidecar-{os.getpid()}-{time.time_ns()}.srt"
+        )
+        try:
+            write_srt(staged, source_blocks)
+            validate_srt_structure(read_srt(staged))
+            classification = classify_subtitle_content_file(
+                staged,
+                metadata_language="en",
+            )
+            if str(classification.language or "").casefold() != "en":
+                raise SubtitleQualityError(
+                    "Normalized English subtitle source lost its language evidence"
+                )
+            quality = analyze_subtitle_file(staged, self.config, role="source")
+            hard_codes = {
+                str(issue.code)
+                for issue in quality.issues
+                if str(issue.severity).casefold() == "fail"
+            }
+            if hard_codes - {"very_long_line"}:
+                raise SubtitleQualityError(
+                    "Normalized English subtitle source failed structural quality: "
+                    f"codes={sorted(hard_codes)}"
+                )
+            asr_diagnostics_path(source_paths.srt, self.config).unlink(missing_ok=True)
+            asr_transcription_hold_path(source_paths.srt, self.config).unlink(
+                missing_ok=True
+            )
+            verified_move(staged, source_paths.srt)
+        finally:
+            staged.unlink(missing_ok=True)
+        self._normalize_source_language_srt_for_readability(source_paths.srt)
+
+        source_stat = snapshot.stat()
+        source_origin = {
+            "contract": SOURCE_SUBTITLE_NORMALIZATION_CONTRACT,
+            "language": "en",
+            "path": str(snapshot.resolve()),
+            "original_path": str(source_ass.resolve()),
+            "size": int(source_stat.st_size),
+            "mtime_ns": int(source_stat.st_mtime_ns),
+            "sha256": source_sha256,
+            "dialogue_style": dialogue_style,
+        }
+        self._set_stage(
+            video,
+            "subtitle_source",
+            "ok",
+            "English subtitle timeline imported; audio and ASR skipped",
+        )
+        return self._translate_source_transcription(
+            video,
+            source_paths,
+            _allow_source_asr_recovery=False,
+            source_subtitle=source_origin,
+        )
+
     def _source_publication_provenance(
         self,
         decision: SubtitleSourceDecision,
@@ -1836,6 +2010,7 @@ class VideoWorker:
         source_paths: SourceTranscriptPaths,
         *,
         _allow_source_asr_recovery: bool = True,
+        source_subtitle: dict[str, object] | None = None,
     ) -> ProcessOutcome:
         """Translate a verified non-Japanese ASR transcript into strict zh-TW delivery."""
 
@@ -1911,6 +2086,7 @@ class VideoWorker:
                     video,
                     source_paths,
                     _allow_source_asr_recovery=False,
+                    source_subtitle=source_subtitle,
                 )
             translation_hold = read_translation_quality_hold_strict(
                 translated_paths.zh_cn_srt
@@ -2020,6 +2196,7 @@ class VideoWorker:
                 video,
                 translated_paths,
                 source_language=source_paths.language,
+                allow_source_timing_remediation=source_subtitle is None,
             )
             source_stat = source_paths.srt.stat()
             publication_provenance = (
@@ -2030,12 +2207,16 @@ class VideoWorker:
             publication_provenance["source_transcription"] = {
                 "contract": SOURCE_TRANSCRIPTION_PROVENANCE_CONTRACT,
                 "language": source_paths.language,
-                "asr_used": True,
+                "asr_used": source_subtitle is None,
                 "path": str(source_paths.srt),
                 "size": int(source_stat.st_size),
                 "mtime_ns": int(source_stat.st_mtime_ns),
                 "sha256": sha256_file(source_paths.srt),
             }
+            if source_subtitle is not None:
+                publication_provenance["source_transcription"][
+                    "subtitle_source"
+                ] = dict(source_subtitle)
             outputs = (
                 source_paths.ass,
                 translated_paths.ai_zh_cn_ass,
@@ -2054,8 +2235,24 @@ class VideoWorker:
                 publication_kind=TRANSLATED_PUBLICATION_KIND,
                 output_languages=output_languages,
             )
-            finish_output_publication(video, self.config)
             identity = delivery_identity(video, self.config)
+            if not validate_output_manifest(
+                video,
+                self.config,
+                verify_hashes=True,
+                required_outputs=outputs,
+                require_delivery_evidence=False,
+                expected_obligation_id=str(identity["obligation_id"]),
+                expected_policy_revision=str(identity["policy_revision"]),
+                expected_publication_kind=TRANSLATED_PUBLICATION_KIND,
+                expected_output_languages=output_languages,
+                require_publication_semantics=True,
+            ):
+                raise SubtitleQualityError(
+                    "Staged source-language translation manifest failed strict "
+                    f"verification before publication commit: {manifest}"
+                )
+            finish_output_publication(video, self.config)
             if not validate_output_manifest(
                 video,
                 self.config,
@@ -2068,6 +2265,9 @@ class VideoWorker:
                 expected_output_languages=output_languages,
                 require_publication_semantics=True,
             ):
+                # Restore the durable fail-closed marker so an invalid final
+                # verification can never look like a completed publication.
+                begin_output_publication(video, self.config)
                 raise SubtitleQualityError(
                     f"Published source-language translation manifest failed strict verification: {manifest}"
                 )
@@ -4512,6 +4712,7 @@ class VideoWorker:
         paths: SubtitlePaths,
         *,
         source_language: str = "ja",
+        allow_source_timing_remediation: bool = True,
     ) -> int:
         """Validate a complete staged ASS set before replacing media sidecars."""
 
@@ -4541,6 +4742,7 @@ class VideoWorker:
                 video,
                 paths,
                 source_language=source_language,
+                allow_source_timing_remediation=allow_source_timing_remediation,
             )
             self._enforce_asr_publication_gate(
                 paths.ja_srt,
@@ -4618,6 +4820,7 @@ class VideoWorker:
         paths: SubtitlePaths,
         *,
         source_language: str = "ja",
+        allow_source_timing_remediation: bool = True,
     ) -> list[dict[str, object]]:
         """Run bounded deterministic SRT repair and always re-run full QC.
 
@@ -4630,10 +4833,14 @@ class VideoWorker:
 
         if not bool(getattr(self.config, "subtitle_quality_check_enabled", True)):
             return []
-        diagnostics = self._remediate_aligned_timing_bundle(
-            video,
-            paths,
-            source_language=source_language,
+        diagnostics = (
+            self._remediate_aligned_timing_bundle(
+                video,
+                paths,
+                source_language=source_language,
+            )
+            if allow_source_timing_remediation
+            else []
         )
         targets = (
             (paths.zh_cn_srt, "translated_zh_cn", "zh-CN"),

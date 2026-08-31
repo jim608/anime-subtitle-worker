@@ -6,8 +6,10 @@ import unittest
 
 from ass_utils import (
     AssStyle,
+    ass_dialogue_style_to_srt_blocks,
     ass_style_is_current,
     convert_ass_file_to_srt,
+    dominant_ass_dialogue_style,
     format_ass,
     format_bilingual_ass,
     restyle_ass_file,
@@ -142,6 +144,66 @@ class AssUtilsTest(unittest.TestCase):
         self.assertIn("Style: Default,Noto Sans CJK TC,36", content)
         self.assertIn(r"\N{\fs18", content)
         self.assertIn(r"\bord0.7", content)
+
+    def test_dominant_ass_dialogue_style_requires_count_share_and_unique_leader(self) -> None:
+        def dialogue(style: str, text: str) -> str:
+            return (
+                "Dialogue: 0,0:00:01.00,0:00:02.00,"
+                f"{style},,0,0,0,,{text}"
+            )
+
+        content = "\n".join(
+            [dialogue("English", f"English dialogue {index}") for index in range(20)]
+            + [dialogue("Signs", f"Sign {index}") for index in range(9)]
+        )
+        self.assertEqual(dominant_ass_dialogue_style(content), "English")
+        merged = ass_dialogue_style_to_srt_blocks(content, "English")
+        self.assertEqual(len(merged), 20)
+        self.assertTrue(all(f"Sign {index}" in merged[0].text for index in range(9)))
+
+        unique_secondary_timing = content + "\n" + (
+            "Dialogue: 0,0:00:03.00,0:00:04.00,Signs,,0,0,0,,Unique sign"
+        )
+        self.assertIsNone(dominant_ass_dialogue_style(unique_secondary_timing))
+
+        too_few = "\n".join(
+            dialogue("English", f"English dialogue {index}") for index in range(19)
+        )
+        self.assertIsNone(dominant_ass_dialogue_style(too_few))
+
+        below_share = "\n".join(
+            [dialogue("English", f"English dialogue {index}") for index in range(20)]
+            + [dialogue("Signs", f"Sign {index}") for index in range(11)]
+            + [dialogue("Songs", f"Song {index}") for index in range(10)]
+        )
+        self.assertIsNone(dominant_ass_dialogue_style(below_share))
+
+        tied = "\n".join(
+            [dialogue("English", f"English dialogue {index}") for index in range(20)]
+            + [dialogue("Alternate", f"Alternate dialogue {index}") for index in range(20)]
+        )
+        self.assertIsNone(dominant_ass_dialogue_style(tied))
+
+    def test_ass_dialogue_style_to_srt_blocks_filters_style_and_converts_text(self) -> None:
+        content = "\n".join(
+            [
+                r"Dialogue: 0,0:00:01.23,0:00:03.45,English,,0,0,0,,{\i1}This is the first line.\NYou are here.",
+                "Dialogue: 0,0:00:01.23,0:00:03.45,Signs,,0,0,0,,SHOP",
+                "Dialogue: 0,0:00:07.00,0:00:08.00,english,,0,0,0,,This is the second line.",
+            ]
+        )
+
+        blocks = ass_dialogue_style_to_srt_blocks(content, "English")
+
+        self.assertEqual(len(blocks), 2)
+        self.assertEqual(blocks[0].index, 1)
+        self.assertEqual(blocks[0].timing, "00:00:01,230 --> 00:00:03,450")
+        self.assertEqual(
+            blocks[0].text,
+            ["This is the first line.", "You are here.", "SHOP"],
+        )
+        self.assertEqual(blocks[1].index, 2)
+        self.assertEqual(blocks[1].text, ["This is the second line."])
 
 
 if __name__ == "__main__":

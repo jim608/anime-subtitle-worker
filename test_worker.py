@@ -4114,8 +4114,17 @@ class VideoWorkerTest(unittest.TestCase):
                     [SrtBlock(1, source_blocks[0].timing, ["這裡很安全"])],
                 )
 
-            def publish(_video: Path, paths, *, source_language: str) -> int:
+            def publish(
+                _video: Path,
+                paths,
+                *,
+                source_language: str,
+                allow_source_timing_remediation: bool,
+            ) -> int:
                 seen["publication_source_language"] = source_language
+                seen["allow_source_timing_remediation"] = (
+                    allow_source_timing_remediation
+                )
                 return worker._export_ai_ass(paths)
 
             with (
@@ -4149,6 +4158,7 @@ class VideoWorkerTest(unittest.TestCase):
             self.assertEqual(seen["language"], "es")
             self.assertEqual(seen["translation_source_language"], "es")
             self.assertEqual(seen["publication_source_language"], "es")
+            self.assertIs(seen["allow_source_timing_remediation"], True)
             self.assertTrue(source_paths.srt.exists())
             self.assertTrue(source_paths.ass.exists())
             self.assertTrue(regular_paths.zh_cn_srt.exists())

@@ -19,6 +19,7 @@ from subtitle_extract import (
     _publish_official_subtitle_set,
     _read_subtitle_sample,
     _subtitle_text_for_classification,
+    classify_sidecar_subtitle,
     classify_sidecar_subtitle_language,
     extract_available_subtitles,
     normalize_sidecar_subtitles,
@@ -957,6 +958,117 @@ Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{\\fn微软雅黑}明天選班
 
         self.assertEqual(classification.language, "zh-tw")
         self.assertEqual(classification.reason, "chinese_script_score")
+
+    def test_trusted_english_sidecar_requires_explicit_metadata_and_content_evidence(self) -> None:
+        english_dialogues = "\n".join(
+            (
+                "Dialogue: 0,0:00:01.00,0:00:03.00,English,,0,0,0,,"
+                "This is the place where you and I are going, but we should not leave without them."
+            )
+            for _index in range(20)
+        )
+        spanish_dialogues = "\n".join(
+            (
+                "Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,"
+                "Esta es la historia de una joven que busca su familia durante toda la noche."
+            )
+            for _index in range(20)
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            trusted = root / "Anime S01E01.English.eng.ass"
+            trusted.write_text(english_dialogues, encoding="utf-8")
+            classification = classify_sidecar_subtitle(trusted)
+            self.assertEqual(classification.language, "en")
+            self.assertEqual(classification.metadata_language, "en")
+            self.assertEqual(classification.reason, "metadata_english_latin_content")
+
+            title_only = root / "English Show S01E01.ass"
+            title_only.write_text(english_dialogues, encoding="utf-8")
+            self.assertIsNone(classify_sidecar_subtitle_language(title_only))
+
+            mislabeled = root / "Anime S01E02.en.ass"
+            mislabeled.write_text(spanish_dialogues, encoding="utf-8")
+            self.assertIsNone(classify_sidecar_subtitle_language(mislabeled))
+
+    def test_ai_english_sidecars_are_never_trusted_as_official_sources(self) -> None:
+        content = "\n".join(
+            (
+                "Dialogue: 0,0:00:01.00,0:00:03.00,English,,0,0,0,,"
+                "This is the place where you and I are going, but we should not leave without them."
+            )
+            for _index in range(20)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            for name in (
+                "Anime S01E01.AIEnglish.en.ass",
+                "Anime S01E01.AI原語言.English.eng.ass",
+            ):
+                with self.subTest(name=name):
+                    subtitle = root / name
+                    subtitle.write_text(content, encoding="utf-8")
+                    classification = classify_sidecar_subtitle(subtitle)
+                    self.assertIsNone(classification.language)
+                    self.assertEqual(classification.reason, "ai_sidecar_skipped")
+
+    def test_normalize_english_sidecar_uses_canonical_english_eng_name(self) -> None:
+        config = SimpleNamespace(
+            ai_japanese_ass_suffix=".AI日本語.ja.ass",
+            ai_simplified_chinese_ass_suffix=".AI简日双语.zh.ass",
+            ai_traditional_chinese_ass_suffix=".AI繁日雙語.zh-TW.ass",
+            mikan_remove_ai_after_extract=False,
+        )
+        content = "\n".join(
+            (
+                "Dialogue: 0,0:00:01.00,0:00:03.00,English,,0,0,0,,"
+                "This is the place where you and I are going, but we should not leave without them."
+            )
+            for _index in range(20)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Anime S01E03.mkv"
+            video.write_bytes(b"video")
+            source = root / "Anime S01E03.en.ass"
+            source.write_text(content, encoding="utf-8")
+
+            normalized = normalize_sidecar_subtitles(video, config)
+
+            self.assertEqual([item.language for item in normalized], ["en"])
+            self.assertEqual(
+                normalized[0].path,
+                root / "Anime S01E03.English.eng.ass",
+            )
+            self.assertTrue(normalized[0].path.is_file())
+
+    def test_normalize_english_sidecar_rejects_configured_ai_source_template(self) -> None:
+        config = SimpleNamespace(
+            ai_japanese_ass_suffix=".AI日本語.ja.ass",
+            ai_simplified_chinese_ass_suffix=".AI简日双语.zh.ass",
+            ai_traditional_chinese_ass_suffix=".AI繁日雙語.zh-TW.ass",
+            ai_source_transcript_ass_suffix_template=".Source{label}.{language}.ass",
+            mikan_remove_ai_after_extract=False,
+        )
+        content = "\n".join(
+            (
+                "Dialogue: 0,0:00:01.00,0:00:03.00,English,,0,0,0,,"
+                "This is the place where you and I are going, but we should not leave without them."
+            )
+            for _index in range(20)
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Anime S01E04.mkv"
+            video.write_bytes(b"video")
+            generated = root / "Anime S01E04.SourceEnglish.en.ass"
+            generated.write_text(content, encoding="utf-8")
+
+            normalized = normalize_sidecar_subtitles(video, config)
+
+            self.assertEqual(normalized, [])
+            self.assertFalse((root / "Anime S01E04.English.eng.ass").exists())
 
 
 if __name__ == "__main__":

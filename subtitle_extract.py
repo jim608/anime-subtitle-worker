@@ -72,6 +72,51 @@ IMAGE_SUBTITLE_CODECS = {"dvd_subtitle", "hdmv_pgs_subtitle", "pgssub", "xsub"}
 SIDECAR_SUBTITLE_EXTENSIONS = {".ass", ".ssa", ".srt", ".vtt"}
 DEFAULT_SUBTITLE_EXTRACT_TIMEOUT_SECONDS = 300
 
+_ENGLISH_SIDECAR_METADATA_RE = re.compile(
+    r"(?:^|[._ -])(?:english|eng|en)"
+    r"(?:[._ -](?:english|eng|en))*\.(?:ass|ssa|srt|vtt)$",
+    re.IGNORECASE,
+)
+_ENGLISH_WORD_RE = re.compile(r"[A-Za-z]+(?:['’][A-Za-z]+)?")
+_ENGLISH_EVIDENCE_WORDS = frozenset(
+    {
+        "and",
+        "are",
+        "but",
+        "can",
+        "do",
+        "does",
+        "from",
+        "has",
+        "have",
+        "he",
+        "here",
+        "how",
+        "is",
+        "it",
+        "not",
+        "she",
+        "should",
+        "that",
+        "the",
+        "their",
+        "there",
+        "they",
+        "this",
+        "was",
+        "we",
+        "were",
+        "what",
+        "where",
+        "why",
+        "will",
+        "with",
+        "would",
+        "you",
+        "your",
+    }
+)
+
 
 def extract_available_subtitles(
     video_path: str | Path,
@@ -430,7 +475,11 @@ def normalize_sidecar_subtitles_for_output(
         _iter_sidecar_subtitles(video, extra_sidecar_paths=extra_sidecar_paths),
         key=lambda item: str(item).casefold(),
     ):
-        classification = classify_sidecar_subtitle(subtitle)
+        classification = (
+            _empty_classification("ai_sidecar_skipped")
+            if is_configured_ai_source_transcript_sidecar(video, subtitle, config)
+            else classify_sidecar_subtitle(subtitle)
+        )
         _append_subtitle_diagnostic(
             diagnostics,
             source="sidecar",
@@ -511,6 +560,8 @@ def classify_sidecar_subtitle(subtitle_path: str | Path) -> SubtitleClassificati
         metadata_language = "zh-cn"
     elif any(marker in lowered for marker in ("jpn", ".ja", "japanese", "日本語", "日文")):
         metadata_language = "ja"
+    elif _has_english_sidecar_metadata(lowered):
+        metadata_language = "en"
 
     return _classify_subtitle_content_detail(_read_subtitle_sample(subtitle), metadata_language=metadata_language)
 
@@ -1153,6 +1204,7 @@ def _subtitle_output_path(video: Path, language: str) -> Path:
         "zh-tw": ".zh-TW.ass",
         "zh-cn": ".zh.ass",
         "ja": ".ja.ass",
+        "en": ".English.eng.ass",
     }
     return video.with_name(f"{video.stem}{suffix_by_language[language]}")
 
@@ -1194,7 +1246,9 @@ def _select_best_subtitle_candidates(candidates: list[_SubtitleCandidate]) -> li
 
 
 def _language_sort_score(language: str | None) -> int:
-    return {"zh-tw": 0, "zh-cn": 1, "ja": 2}.get(language, 9)
+    if language is None:
+        return 9
+    return {"zh-tw": 0, "zh-cn": 1, "ja": 2, "en": 3}.get(language, 9)
 
 
 def _candidate_quality_key(candidate: _SubtitleCandidate) -> tuple[int, int, int]:
@@ -1310,6 +1364,17 @@ def _classify_subtitle_content_detail(text: str, *, metadata_language: str | Non
         return _classification(
             "zh-cn",
             "cjk_content_without_kana",
+            metadata_language,
+            traditional_score,
+            simplified_score,
+            japanese_score,
+            cjk_chars,
+            text_chars,
+        )
+    if metadata_language == "en" and _has_english_latin_content_evidence(cleaned):
+        return _classification(
+            "en",
+            "metadata_english_latin_content",
             metadata_language,
             traditional_score,
             simplified_score,
@@ -1516,6 +1581,38 @@ def _iter_sidecar_subtitles(video: Path, *, extra_sidecar_paths: list[str | Path
     return unique
 
 
+def is_configured_ai_source_transcript_sidecar(
+    video: Path,
+    subtitle: Path,
+    config: AppConfig,
+) -> bool:
+    """Reject every sidecar name reserved by the configurable AI template."""
+
+    template = str(
+        getattr(
+            config,
+            "ai_source_transcript_ass_suffix_template",
+            ".AI{label}.{language}.ass",
+        )
+    )
+    if "{language}" not in template:
+        return False
+    suffix_expression = re.escape(template)
+    suffix_expression = suffix_expression.replace(re.escape("{label}"), r".+?")
+    suffix_expression = suffix_expression.replace(
+        re.escape("{language}"),
+        r"[A-Za-z0-9_-]+",
+    )
+    return (
+        re.fullmatch(
+            re.escape(video.stem) + suffix_expression,
+            subtitle.name,
+            flags=re.IGNORECASE,
+        )
+        is not None
+    )
+
+
 def _copy_or_convert_sidecar(
     source: Path,
     output: Path,
@@ -1590,6 +1687,26 @@ def _has_simplified_marker(text: str) -> bool:
     return any(marker in text for marker in ("简体", "簡體", "简中", "簡中", "简日", "簡日", "simplified", "chs", "sc", "zh-hans", "zh-cn"))
 
 
+def _has_english_sidecar_metadata(lowered_name: str) -> bool:
+    return _ENGLISH_SIDECAR_METADATA_RE.search(lowered_name) is not None
+
+
+def _has_english_latin_content_evidence(text: str) -> bool:
+    words = [match.group(0).casefold() for match in _ENGLISH_WORD_RE.finditer(text)]
+    if len(words) < 12:
+        return False
+
+    latin_chars = sum(char.isascii() and char.isalpha() for char in text)
+    alphabetic_chars = sum(char.isalpha() for char in text)
+    if latin_chars < 48 or alphabetic_chars <= 0:
+        return False
+    if latin_chars / alphabetic_chars < 0.85:
+        return False
+
+    evidence = [word for word in words if word in _ENGLISH_EVIDENCE_WORDS]
+    return len(evidence) >= 3 and len(set(evidence)) >= 2
+
+
 def _is_ai_generated_sidecar_name(lowered_name: str) -> bool:
     return any(
         marker in lowered_name
@@ -1603,6 +1720,9 @@ def _is_ai_generated_sidecar_name(lowered_name: str) -> bool:
             ".ai繁",
             ".ai.zh",
             ".ai.ja",
+            ".aienglish",
+            ".ai原語言",
+            ".ai原语言",
             ".ai中文",
         )
     )
