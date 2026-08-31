@@ -67,14 +67,14 @@ class QBitClientTest(unittest.TestCase):
 
     def test_map_remote_path_uses_longest_matching_prefix(self) -> None:
         mapped = map_remote_path(
-            "/mnt/user/jellyfin/anime/Show/Episode.mkv",
+            "/remote/media/anime/Show/Episode.mkv",
             [
-                {"remote": "/mnt/user", "local": "X:/user"},
-                {"remote": "/mnt/user/jellyfin/anime", "local": "D:/Anime"},
+                {"remote": "/remote", "local": "/local"},
+                {"remote": "/remote/media/anime", "local": "/library/anime"},
             ],
         )
 
-        self.assertEqual(mapped, Path("D:/Anime/Show/Episode.mkv"))
+        self.assertEqual(mapped, Path("/library/anime/Show/Episode.mkv"))
 
     def test_ensure_category_creates_missing_category_with_save_path(self) -> None:
         client = QBitClient("http://qbit", "user", "pass")

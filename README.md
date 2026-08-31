@@ -34,10 +34,10 @@ AI 輸出命名：
 
 Unraid 範例掛載：
 
-- `/mnt/user/jellyfin/anime:/anime`
-- `/mnt/user/qbit_subtitle_extractor:/qbit_subtitle_extractor`
-- `/mnt/user/appdata/anime-subtitle-worker/work:/work`
-- `/mnt/user/appdata/anime-subtitle-worker/logs:/logs`
+- `${ANIME_INPUT_HOST_PATH:-./media}:/anime`
+- `${QBIT_SUBTITLE_HOST_PATH:-./qbit_subtitles}:/qbit_subtitle_extractor`
+- `${ANIME_WORK_HOST_PATH:-./work}:/work`
+- `${ANIME_LOG_HOST_PATH:-./logs}:/logs`
 
 ### Final MKV delivery
 
@@ -72,14 +72,14 @@ nvidia-smi
 3. 建立資料夾：
 
 ```bash
-mkdir -p /mnt/user/appdata/anime-subtitle-worker/work
-mkdir -p /mnt/user/appdata/anime-subtitle-worker/logs
+mkdir -p ./work
+mkdir -p ./logs
 ```
 
 4. 確認 qBittorrent WebUI API 可從容器網路連線。
 5. 確認 SakuraLLM / Ollama / vLLM 的 OpenAI-compatible API 可從容器網路連線。
 
-`translator_base_url` 不可以用 `localhost`，因為容器內的 `localhost` 是容器自己。請改成伺服器 LAN IP，例如 `http://192.168.50.10:11434/v1`。
+`translator_base_url` 不可以用 `localhost`，因為容器內的 `localhost` 是容器自己。請改成由部署者私下設定的翻譯服務網址，例如 `https://translator.example.test/v1`。
 
 ## Configure
 
@@ -91,14 +91,18 @@ mkdir -p /mnt/user/appdata/anime-subtitle-worker/logs
 ANIME_INPUT_PATH=/anime
 ANIME_WORK_PATH=/work
 ANIME_LOG_PATH=/logs
-ANIME_COMPLETED_HOST_PATH=/mnt/user/jellyfin/anime-completed
+ANIME_INPUT_HOST_PATH=./media
+ANIME_COMPLETED_HOST_PATH=./completed
+QBIT_SUBTITLE_HOST_PATH=./qbit_subtitles
+ANIME_WORK_HOST_PATH=./work
+ANIME_LOG_HOST_PATH=./logs
 COMPLETED_DELIVERY_ENABLED=false
-QBIT_BASE_URL=http://192.168.50.10:8080
+QBIT_BASE_URL=http://qbittorrent.example.test
 QBIT_USERNAME=admin
 QBIT_PASSWORD=your_qbit_password
 QBIT_SAVE_PATH=/anime
 QBIT_REMOTE_ANIME_PATH=/anime
-TRANSLATOR_BASE_URL=http://192.168.50.10:11434/v1
+TRANSLATOR_BASE_URL=https://translator.example.test/v1
 TRANSLATOR_API_KEY=EMPTY
 TRANSLATOR_MODEL=SakuraLLM:latest
 ```
@@ -113,12 +117,12 @@ QBIT_SAVE_PATH=/downloads/anime
 QBIT_REMOTE_ANIME_PATH=/downloads/anime
 ```
 
-`QBIT_SAVE_PATH` / `QBIT_REMOTE_ANIME_PATH` 都是 qBittorrent 容器看到的路徑。如果 qB 容器的 `/anime` 實際掛到主機 `/mnt/user/qbit_subtitle_extractor`，這兩個值仍然要填 `/anime`。
+`QBIT_SAVE_PATH` / `QBIT_REMOTE_ANIME_PATH` 都是 qBittorrent 容器看到的路徑。如果 qB 容器的 `/anime` 實際掛到部署者私下設定的 `${QBIT_SUBTITLE_HOST_PATH}`，這兩個值仍然要填 `/anime`。
 
 worker 容器需要另外掛載同一個主機下載資料夾：
 
 ```yaml
-- /mnt/user/qbit_subtitle_extractor:/qbit_subtitle_extractor
+- ${QBIT_SUBTITLE_HOST_PATH:-./qbit_subtitles}:/qbit_subtitle_extractor
 ```
 
 `config.yaml` 內的 `qbit_path_mappings` 會把 qB 回報的 `/anime` 映射到 worker 看到的 `/qbit_subtitle_extractor`。worker 的 `/anime` 是媒體庫，不是 qB 下載暫存資料夾。
@@ -238,8 +242,8 @@ down.
 
 ```bash
 docker logs -f anime-subtitle-worker
-tail -f /mnt/user/appdata/anime-subtitle-worker/logs/app.log
-tail -f /mnt/user/appdata/anime-subtitle-worker/logs/failed.log
+tail -f ./logs/app.log
+tail -f ./logs/failed.log
 ```
 
 `app.log` 預設每 50 MiB 輪替並保留 4 份，`failed.log` 每 10 MiB 輪替並保留 3 份。可用 `APP_LOG_MAX_BYTES`、`APP_LOG_BACKUP_COUNT`、`FAILURE_LOG_MAX_BYTES`、`FAILURE_LOG_BACKUP_COUNT` 環境變數調整。
@@ -375,7 +379,7 @@ RTX 3060 12 GB 的預設調度如下：AI 維持單影片；翻譯階段可並�
 正式更新請從 WebUI 專案執行整組部署腳本：
 
 ```bash
-cd /mnt/user/appdata/anime-subtitle-worker-webui
+cd /path/to/anime-subtitle-worker-webui
 sh safe-update-stack.sh
 ```
 

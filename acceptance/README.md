@@ -90,27 +90,27 @@ JSON to stdout; collection writes only the new observations path:
 ```powershell
 python run_unattended_acceptance.py `
   --prepare-plan `
-  --config X:\anime-subtitle-worker\config.yaml
+--config .\config.yaml
 
 # Only after reviewing a ready preview; this refuses an existing destination.
 python run_unattended_acceptance.py `
   --prepare-plan `
-  --plan-output X:\acceptance\plan.json `
-  --config X:\anime-subtitle-worker\config.yaml
+--plan-output .\acceptance\plan.json `
+--config .\config.yaml
 
 python run_unattended_acceptance.py `
-  --validate-manifest X:\acceptance\plan.json `
-  --config X:\anime-subtitle-worker\config.yaml
+--validate-manifest .\acceptance\plan.json `
+--config .\config.yaml
 
 python run_unattended_acceptance.py `
-  --collect X:\acceptance\plan.json `
-  --observations X:\acceptance\observations.json `
-  --config X:\anime-subtitle-worker\config.yaml
+--collect .\acceptance\plan.json `
+--observations .\acceptance\observations.json `
+--config .\config.yaml
 
 python run_unattended_acceptance.py `
-  --evaluate X:\acceptance\plan.json `
-  --observations X:\acceptance\observations.json `
-  --config X:\anime-subtitle-worker\config.yaml
+--evaluate .\acceptance\plan.json `
+--observations .\acceptance\observations.json `
+--config .\config.yaml
 ```
 
 The planner is deterministic for an unchanged queue/evidence/media snapshot.

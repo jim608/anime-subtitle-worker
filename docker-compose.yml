@@ -12,11 +12,11 @@ services:
     gpus: all
     shm_size: "2gb"
     volumes:
-      - /mnt/user/jellyfin/anime:/anime
-      - ${ANIME_COMPLETED_HOST_PATH:-/mnt/user/jellyfin/anime-completed}:/completed
-      - /mnt/user/qbit_subtitle_extractor:/qbit_subtitle_extractor
-      - /mnt/user/appdata/anime-subtitle-worker/work:/work
-      - /mnt/user/appdata/anime-subtitle-worker/logs:/logs
+      - ${ANIME_INPUT_HOST_PATH:-./media}:/anime
+      - ${ANIME_COMPLETED_HOST_PATH:-./completed}:/completed
+      - ${QBIT_SUBTITLE_HOST_PATH:-./qbit_subtitles}:/qbit_subtitle_extractor
+      - ${ANIME_WORK_HOST_PATH:-./work}:/work
+      - ${ANIME_LOG_HOST_PATH:-./logs}:/logs
       - ./config.yaml:/app/config.yaml:ro
     environment:
       NVIDIA_VISIBLE_DEVICES: all
@@ -26,12 +26,12 @@ services:
       ANIME_LOG_PATH: /logs
       ANIME_COMPLETED_PATH: /completed
       COMPLETED_DELIVERY_ENABLED: "${COMPLETED_DELIVERY_ENABLED:-false}"
-      QBIT_BASE_URL: "${QBIT_BASE_URL:-http://192.168.50.xxx:8080}"
+      QBIT_BASE_URL: "${QBIT_BASE_URL:-http://qbittorrent.example.test}"
       QBIT_USERNAME: "${QBIT_USERNAME:-admin}"
       QBIT_PASSWORD: "${QBIT_PASSWORD:-CHANGE_ME}"
       QBIT_SAVE_PATH: "${QBIT_SAVE_PATH:-/anime}"
       QBIT_REMOTE_ANIME_PATH: "${QBIT_REMOTE_ANIME_PATH:-/anime}"
-      TRANSLATOR_BASE_URL: "${TRANSLATOR_BASE_URL:-http://192.168.50.xxx:11434/v1}"
+      TRANSLATOR_BASE_URL: "${TRANSLATOR_BASE_URL:-https://translator.example.test/v1}"
       TRANSLATOR_API_KEY: "${TRANSLATOR_API_KEY:-EMPTY}"
       TRANSLATOR_MODEL: "${TRANSLATOR_MODEL:-SakuraLLM:latest}"
     command: ["python", "main.py", "--config", "config.yaml", "--auto-watch"]

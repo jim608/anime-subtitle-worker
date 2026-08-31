@@ -39,8 +39,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Remove only selected contaminated AI subtitle outputs and requeue those videos.",
     )
-    parser.add_argument("--work-path", default="X:/anime-subtitle-worker/work")
-    parser.add_argument("--anime-root", default="Z:/anime")
+    parser.add_argument("--work-path", default="./work")
+    parser.add_argument("--anime-root", default="./media")
     parser.add_argument("--container-anime-root", default="/anime")
     parser.add_argument(
         "--reason",

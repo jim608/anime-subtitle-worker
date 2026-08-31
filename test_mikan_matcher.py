@@ -37,7 +37,7 @@ class MikanMatcherTest(unittest.TestCase):
     def test_mapping_matches_torrent_uses_normalized_tokens(self) -> None:
         mapping = {
             "bangumi_id": 3921,
-            "path": "D:/AnimeSubtitleTest/input/MARRIAGETOXIN",
+            "path": "/example/input/MARRIAGETOXIN",
             "match": [
                 "Marriage Toxin",
                 "マリッジトキシン",
