@@ -498,6 +498,95 @@ class AssUtilsTest(unittest.TestCase):
             "00:00:04,000 --> 00:00:05,000",
         )
 
+    def test_large_orphan_cluster_splits_into_ordered_safe_cues(self) -> None:
+        expected_lines = [
+            f"Orphan {index:02d} unique English text"
+            for index in range(1, 20)
+        ]
+        content = "\n".join(
+            [
+                (
+                    f"Dialogue: 0,0:{minute:02d}:00.00,0:{minute:02d}:05.00,"
+                    f"Default,,0,0,0,,English dialogue {minute + 1}"
+                )
+                for minute in range(20)
+            ]
+            + [
+                (
+                    "Dialogue: 0,0:00:20.00,0:00:21.00,italics,,0,0,0,,"
+                    + line
+                )
+                for line in expected_lines
+            ]
+        )
+
+        blocks = ass_dialogue_style_to_srt_blocks(content, "Default")
+        orphan_blocks = [
+            block
+            for block in blocks
+            if any(line.startswith("Orphan ") for line in block.text)
+        ]
+
+        self.assertEqual(len(orphan_blocks), 10)
+        self.assertEqual(
+            [line for block in orphan_blocks for line in block.text],
+            expected_lines,
+        )
+        self.assertTrue(all(len(block.text) <= 2 for block in orphan_blocks))
+        self.assertTrue(
+            all(
+                len("".join(block.text).replace(" ", "")) <= 80
+                for block in orphan_blocks
+            )
+        )
+
+        def milliseconds(timestamp: str) -> int:
+            hours, minutes, remainder = timestamp.split(":", 2)
+            seconds, millis = remainder.split(",", 1)
+            return ((int(hours) * 60 + int(minutes)) * 60 + int(seconds)) * 1000 + int(millis)
+
+        pairs = [block.timing.split(" --> ", 1) for block in orphan_blocks]
+        self.assertGreaterEqual(milliseconds(pairs[0][0]), 5_000)
+        self.assertLessEqual(milliseconds(pairs[-1][1]), 60_000)
+        self.assertTrue(
+            all(previous[1] == current[0] for previous, current in zip(pairs, pairs[1:]))
+        )
+        for block, (start, end) in zip(orphan_blocks, pairs, strict=True):
+            characters = len("".join(block.text).replace(" ", ""))
+            duration_ms = milliseconds(end) - milliseconds(start)
+            self.assertLessEqual(characters * 1000, 24 * duration_ms)
+        self.assertEqual(
+            blocks,
+            ass_dialogue_style_to_srt_blocks(content, "Default"),
+        )
+
+    def test_orphan_cluster_keeps_repeated_text_at_distinct_times(self) -> None:
+        dominant = [
+            (
+                f"Dialogue: 0,0:{minute:02d}:00.00,0:{minute:02d}:05.00,"
+                f"Default,,0,0,0,,English dialogue {minute + 1}"
+            )
+            for minute in range(20)
+        ]
+        repeated = (
+            "Dialogue: 0,0:00:20.00,0:00:21.50,italics,,0,0,0,,No"
+        )
+        content = "\n".join(
+            dominant
+            + [
+                repeated,
+                repeated,
+                "Dialogue: 0,0:00:21.00,0:00:22.50,italics,,0,0,0,,No",
+            ]
+        )
+
+        blocks = ass_dialogue_style_to_srt_blocks(content, "Default")
+
+        self.assertEqual(
+            [line for block in blocks for line in block.text if line == "No"],
+            ["No", "No"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

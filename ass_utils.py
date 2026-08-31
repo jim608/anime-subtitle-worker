@@ -20,6 +20,8 @@ ASS_TIMESTAMP_RE = re.compile(
 ASS_VECTOR_DRAWING_MODE_RE = re.compile(r"\\p\s*(?P<scale>\d+)", re.IGNORECASE)
 ASS_SECONDARY_HARD_CPS = 25
 ASS_SECONDARY_TARGET_CPS = 24
+ASS_SECONDARY_MAX_VISUAL_LINES = 2
+ASS_SECONDARY_MAX_NONSPACE_CHARS = 80
 GENERATED_SECONDARY_STYLE_RE = re.compile(
     r"\{\\fs[^\\{}]+\\c&H[0-9A-Fa-f]+&\\alpha&H[0-9A-Fa-f]+&\\bord[^\\{}]+\\shad[^\\{}]+\}"
 )
@@ -341,13 +343,14 @@ def ass_dialogue_style_to_srt_blocks(content: str, style: str) -> list[SrtBlock]
             cluster["end"] = end
             cluster["end_ms"] = end_ms
         normalized_text = " ".join(" ".join(text_lines).split()).casefold()
+        duplicate_key = (start, end, normalized_text)
         cluster_seen = cluster["seen"]
         cluster_text = cluster["text"]
         if not isinstance(cluster_seen, set) or not isinstance(cluster_text, list):
             raise AssExportError("Invalid internal ASS secondary cluster state")
-        if normalized_text not in cluster_seen:
+        if duplicate_key not in cluster_seen:
             cluster_text.extend(text_lines)
-            cluster_seen.add(normalized_text)
+            cluster_seen.add(duplicate_key)
 
     dominant_start_ms = [_srt_timestamp_milliseconds(start) for start, _end in dominant_timings]
     dominant_end_ms = [_srt_timestamp_milliseconds(end) for _start, end in dominant_timings]
@@ -357,14 +360,24 @@ def ass_dialogue_style_to_srt_blocks(content: str, style: str) -> list[SrtBlock]
         cluster_text = cluster["text"]
         if not isinstance(cluster_text, list):
             raise AssExportError("Invalid internal ASS secondary cluster text")
-        character_count = len(re.sub(r"\s+", "", "".join(cluster_text)))
+        chunks = _chunk_secondary_text(cluster_text)
+        if not chunks:
+            raise AssExportError("ASS secondary Dialogue cluster has no usable text chunks")
+        cluster["chunks"] = chunks
+        character_count = sum(_nonspace_character_count(chunk) for chunk in chunks)
         duration_ms = end_ms - start_ms
-        if character_count * 1000 <= ASS_SECONDARY_HARD_CPS * duration_ms:
+        required_ms = sum(
+            (
+                _nonspace_character_count(chunk) * 1000
+                + ASS_SECONDARY_TARGET_CPS
+                - 1
+            )
+            // ASS_SECONDARY_TARGET_CPS
+            for chunk in chunks
+        )
+        if required_ms <= duration_ms:
             continue
 
-        required_ms = (
-            character_count * 1000 + ASS_SECONDARY_TARGET_CPS - 1
-        ) // ASS_SECONDARY_TARGET_CPS
         extra_ms = required_ms - duration_ms
         previous_boundaries = [value for value in dominant_end_ms if value <= start_ms]
         if position > 0:
@@ -470,12 +483,27 @@ def ass_dialogue_style_to_srt_blocks(content: str, style: str) -> list[SrtBlock]
         for timing in dominant_timings
     ]
     for cluster in secondary_clusters:
-        start = cluster["start"]
-        end = cluster["end"]
-        text = cluster["text"]
-        if not isinstance(start, str) or not isinstance(end, str) or not isinstance(text, list):
+        start_ms = int(cluster["start_ms"])
+        end_ms = int(cluster["end_ms"])
+        chunks = cluster.get("chunks")
+        if not isinstance(chunks, list):
             raise AssExportError("Invalid internal ASS secondary cluster output")
-        cues.append((start, end, list(text)))
+        durations = _allocate_secondary_chunk_durations(chunks, end_ms - start_ms)
+        cursor_ms = start_ms
+        for chunk, duration_ms in zip(chunks, durations, strict=True):
+            if not isinstance(chunk, list):
+                raise AssExportError("Invalid internal ASS secondary chunk output")
+            next_ms = cursor_ms + duration_ms
+            cues.append(
+                (
+                    _milliseconds_to_srt_timestamp(cursor_ms),
+                    _milliseconds_to_srt_timestamp(next_ms),
+                    list(chunk),
+                )
+            )
+            cursor_ms = next_ms
+        if cursor_ms != end_ms:
+            raise AssExportError("ASS secondary chunk allocation did not fill its safe window")
     cues.sort(
         key=lambda cue: (
             _srt_timestamp_milliseconds(cue[0]),
@@ -734,6 +762,93 @@ def _milliseconds_to_srt_timestamp(milliseconds: int) -> str:
     total_minutes, seconds = divmod(total_seconds, 60)
     hours, minutes = divmod(total_minutes, 60)
     return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
+
+
+def _nonspace_character_count(lines: list[str]) -> int:
+    return len(re.sub(r"\s+", "", "".join(lines)))
+
+
+def _split_secondary_text_line(line: str) -> list[str]:
+    pieces: list[str] = []
+    buffer: list[str] = []
+    nonspace_count = 0
+    for character in str(line or "").strip():
+        if not character.isspace() and nonspace_count >= ASS_SECONDARY_MAX_NONSPACE_CHARS:
+            piece = "".join(buffer).strip()
+            if piece:
+                pieces.append(piece)
+            buffer = []
+            nonspace_count = 0
+        buffer.append(character)
+        if not character.isspace():
+            nonspace_count += 1
+    piece = "".join(buffer).strip()
+    if piece:
+        pieces.append(piece)
+    return pieces
+
+
+def _chunk_secondary_text(lines: list[str]) -> list[list[str]]:
+    ordered_lines: list[str] = []
+    for line in lines:
+        normalized = " ".join(str(line or "").split()).casefold()
+        if not normalized:
+            continue
+        ordered_lines.extend(_split_secondary_text_line(line))
+
+    chunks: list[list[str]] = []
+    current: list[str] = []
+    current_characters = 0
+    for line in ordered_lines:
+        line_characters = _nonspace_character_count([line])
+        if current and (
+            len(current) >= ASS_SECONDARY_MAX_VISUAL_LINES
+            or current_characters + line_characters > ASS_SECONDARY_MAX_NONSPACE_CHARS
+        ):
+            chunks.append(current)
+            current = []
+            current_characters = 0
+        current.append(line)
+        current_characters += line_characters
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _allocate_secondary_chunk_durations(
+    chunks: list[list[str]],
+    total_duration_ms: int,
+) -> list[int]:
+    character_counts = [_nonspace_character_count(chunk) for chunk in chunks]
+    minimums = [
+        (count * 1000 + ASS_SECONDARY_TARGET_CPS - 1)
+        // ASS_SECONDARY_TARGET_CPS
+        for count in character_counts
+    ]
+    required_ms = sum(minimums)
+    if not chunks or required_ms > total_duration_ms:
+        raise AssExportError(
+            "ASS secondary Dialogue chunks do not fit their safe CPS window: "
+            f"required_ms={required_ms} available_ms={total_duration_ms}"
+        )
+    allocations = list(minimums)
+    extra_ms = total_duration_ms - required_ms
+    total_characters = sum(character_counts)
+    if extra_ms <= 0 or total_characters <= 0:
+        return allocations
+    remainders: list[tuple[int, int]] = []
+    distributed = 0
+    for index, character_count in enumerate(character_counts):
+        numerator = extra_ms * character_count
+        quotient, remainder = divmod(numerator, total_characters)
+        allocations[index] += quotient
+        distributed += quotient
+        remainders.append((remainder, index))
+    for _remainder, index in sorted(remainders, key=lambda item: (-item[0], item[1]))[
+        : extra_ms - distributed
+    ]:
+        allocations[index] += 1
+    return allocations
 
 
 def _unescape_generated_ass_text(text: str) -> list[str]:
