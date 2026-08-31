@@ -22,6 +22,9 @@ ASS_SECONDARY_HARD_CPS = 25
 ASS_SECONDARY_TARGET_CPS = 24
 ASS_SECONDARY_MAX_VISUAL_LINES = 2
 ASS_SECONDARY_MAX_NONSPACE_CHARS = 80
+# One millisecond above the 0.12-second hard floor avoids float round-off
+# classifying an exactly 120 ms SRT cue as too short.
+ASS_SECONDARY_MIN_CUE_DURATION_MS = 121
 GENERATED_SECONDARY_STYLE_RE = re.compile(
     r"\{\\fs[^\\{}]+\\c&H[0-9A-Fa-f]+&\\alpha&H[0-9A-Fa-f]+&\\bord[^\\{}]+\\shad[^\\{}]+\}"
 )
@@ -367,12 +370,15 @@ def ass_dialogue_style_to_srt_blocks(content: str, style: str) -> list[SrtBlock]
         character_count = sum(_nonspace_character_count(chunk) for chunk in chunks)
         duration_ms = end_ms - start_ms
         required_ms = sum(
-            (
-                _nonspace_character_count(chunk) * 1000
-                + ASS_SECONDARY_TARGET_CPS
-                - 1
+            max(
+                ASS_SECONDARY_MIN_CUE_DURATION_MS,
+                (
+                    _nonspace_character_count(chunk) * 1000
+                    + ASS_SECONDARY_TARGET_CPS
+                    - 1
+                )
+                // ASS_SECONDARY_TARGET_CPS,
             )
-            // ASS_SECONDARY_TARGET_CPS
             for chunk in chunks
         )
         if required_ms <= duration_ms:
@@ -821,8 +827,11 @@ def _allocate_secondary_chunk_durations(
 ) -> list[int]:
     character_counts = [_nonspace_character_count(chunk) for chunk in chunks]
     minimums = [
-        (count * 1000 + ASS_SECONDARY_TARGET_CPS - 1)
-        // ASS_SECONDARY_TARGET_CPS
+        max(
+            ASS_SECONDARY_MIN_CUE_DURATION_MS,
+            (count * 1000 + ASS_SECONDARY_TARGET_CPS - 1)
+            // ASS_SECONDARY_TARGET_CPS,
+        )
         for count in character_counts
     ]
     required_ms = sum(minimums)

@@ -15,7 +15,8 @@ from ass_utils import (
     format_bilingual_ass,
     restyle_ass_file,
 )
-from srt_utils import SrtBlock, read_srt
+from srt_utils import SrtBlock, read_srt, write_srt
+from subtitle_quality import analyze_subtitle_file
 
 
 class AssUtilsTest(unittest.TestCase):
@@ -586,6 +587,41 @@ class AssUtilsTest(unittest.TestCase):
             [line for block in blocks for line in block.text if line == "No"],
             ["No", "No"],
         )
+
+    def test_short_orphan_chunks_meet_source_quality_hard_minimum(self) -> None:
+        dominant = [
+            (
+                f"Dialogue: 0,0:00:{index * 2:02d}.00,"
+                f"0:00:{index * 2 + 1:02d}.00,Default,,0,0,0,,"
+                f"English dialogue {index}"
+            )
+            for index in range(1, 21)
+        ]
+        secondary = [
+            (
+                "Dialogue: 0,0:00:03.10,0:00:03.60,italics,,0,0,0,,"
+                + character
+            )
+            for character in "ABCDEFGHIJ"
+        ]
+
+        blocks = ass_dialogue_style_to_srt_blocks(
+            "\n".join(dominant + secondary),
+            "Default",
+        )
+        short_blocks = [
+            block
+            for block in blocks
+            if any(line in "ABCDEFGHIJ" for line in block.text)
+        ]
+        self.assertEqual(len(short_blocks), 5)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "source.srt"
+            write_srt(output, blocks)
+            report = analyze_subtitle_file(output, role="source")
+
+        self.assertNotIn("too_short", {issue.code for issue in report.issues})
 
 
 if __name__ == "__main__":
