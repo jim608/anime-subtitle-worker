@@ -166,6 +166,7 @@ SQLITE_TRANSIENT_MARKERS = (
     "database is locked",
     "database table is locked",
     "database is busy",
+    "locking protocol",
     "disk i/o error",
 )
 

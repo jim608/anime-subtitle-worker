@@ -2012,6 +2012,51 @@ def _validate_transcription_quality(
         raise TranscriptionError(message)
 
 
+def _japanese_recovery_fragment_gate_enabled(config: AppConfig) -> bool:
+    language = str(getattr(config, "whisper_language", "") or "")
+    language = language.strip().replace("_", "-").casefold().split("-", 1)[0]
+    if language not in {"ja", "jpn"} or not bool(
+        getattr(config, "asr_prompt_free_allow_recovered_primary_artifacts", False)
+    ):
+        return False
+    if str(getattr(config, "whisper_initial_prompt", "") or "").strip():
+        return False
+    if str(getattr(config, "op_ed_initial_prompt", "") or "").strip():
+        return False
+    return not bool(getattr(config, "whisper_condition_on_previous_text", True))
+
+
+def _raise_for_japanese_recovery_fragments(
+    chunks: list[tuple[float, float, str]],
+    config: AppConfig,
+) -> None:
+    """Reject unsafe fragments only at the Japanese prompt-free recovery gate."""
+
+    if not _japanese_recovery_fragment_gate_enabled(config):
+        return
+
+    review_ranges = _normalize_review_ranges(
+        [
+            (start, end)
+            for start, end, text in chunks
+            if _display_length(text) == 1 or not MEANINGFUL_TEXT_RE.search(text)
+        ]
+    )
+    if not review_ranges:
+        return
+
+    formatted = ",".join(
+        f"{start:.2f}-{end:.2f}s" for start, end in review_ranges[:12]
+    )
+    raise LowConfidenceTranscriptionError(
+        "Japanese prompt-free ASR recovery produced one-character or "
+        "punctuation-only subtitle fragments; selective audio repair is required: "
+        f"ranges={formatted}",
+        review_ranges,
+        reason_code="short_fragment",
+    )
+
+
 def validate_transcription_srt_quality(
     audio_path: str | Path,
     srt_path: str | Path,
@@ -2026,7 +2071,10 @@ def validate_transcription_srt_quality(
     density.
     """
 
-    if not config.transcription_quality_check_enabled:
+    if (
+        not config.transcription_quality_check_enabled
+        and not _japanese_recovery_fragment_gate_enabled(config)
+    ):
         return
 
     output = Path(srt_path)
@@ -2055,6 +2103,7 @@ def validate_transcription_srt_quality(
             )
         chunks.append((start, end, text))
 
+    _raise_for_japanese_recovery_fragments(chunks, config)
     _validate_transcription_quality(audio_path, chunks, config, logger)
 
 
@@ -2426,6 +2475,7 @@ def finalize_repaired_transcription(
         _selective_silence_evidence_from_diagnostics(output, config)
     )
     try:
+        _raise_for_japanese_recovery_fragments(chunks, config)
         if require_confidence:
             observed = [item for item in confidences if item.avg_logprob is not None]
             required = max(

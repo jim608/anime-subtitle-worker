@@ -413,6 +413,92 @@ class TranscriberFilterTest(unittest.TestCase):
                     logging.getLogger("test.transcriber.unresolved-primary"),
                 )
 
+    def test_final_gate_rejects_short_fragments_only_for_japanese_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            audio = root / "episode.wav"
+            audio.write_bytes(b"not-a-real-wave")
+            output = root / "episode.srt"
+            write_srt(
+                output,
+                [
+                    SrtBlock(1, "00:00:00,600 --> 00:00:02,000", ["通常の台詞"]),
+                    SrtBlock(2, "00:00:02,100 --> 00:00:03,000", ["な"]),
+                    SrtBlock(3, "00:00:03,100 --> 00:00:04,000", ["……"]),
+                ],
+            )
+            config = _final_quality_config(root)
+            config.transcription_quality_check_enabled = False
+            config.whisper_language = "ja"
+            config.asr_prompt_free_allow_recovered_primary_artifacts = True
+            config.whisper_initial_prompt = None
+            config.op_ed_initial_prompt = None
+            config.whisper_condition_on_previous_text = False
+
+            with self.assertRaises(LowConfidenceTranscriptionError) as caught:
+                validate_transcription_srt_quality(
+                    audio,
+                    output,
+                    config,
+                    logging.getLogger("test.transcriber.recovery-short-fragment"),
+                )
+
+            self.assertEqual(caught.exception.reason_code, "short_fragment")
+            self.assertEqual(
+                caught.exception.review_ranges,
+                [(2.1, 3.0), (3.1, 4.0)],
+            )
+
+            write_srt(
+                output,
+                [SrtBlock(1, "00:00:00,600 --> 00:00:02,000", ["はい"])],
+            )
+            validate_transcription_srt_quality(
+                audio,
+                output,
+                config,
+                logging.getLogger("test.transcriber.recovery-two-character"),
+            )
+
+            write_srt(
+                output,
+                [SrtBlock(1, "00:00:00,600 --> 00:00:02,000", ["何"])],
+            )
+            config.asr_prompt_free_allow_recovered_primary_artifacts = False
+            validate_transcription_srt_quality(
+                audio,
+                output,
+                config,
+                logging.getLogger("test.transcriber.primary-one-character"),
+            )
+
+            config.asr_prompt_free_allow_recovered_primary_artifacts = True
+            config.whisper_language = "en"
+            validate_transcription_srt_quality(
+                audio,
+                output,
+                config,
+                logging.getLogger("test.transcriber.non-japanese-recovery"),
+            )
+
+            config.whisper_language = "ja"
+            config.whisper_initial_prompt = "普通的提示詞"
+            validate_transcription_srt_quality(
+                audio,
+                output,
+                config,
+                logging.getLogger("test.transcriber.prompted-japanese"),
+            )
+
+            config.whisper_initial_prompt = None
+            config.whisper_condition_on_previous_text = True
+            validate_transcription_srt_quality(
+                audio,
+                output,
+                config,
+                logging.getLogger("test.transcriber.conditioned-japanese"),
+            )
+
     def test_selective_repair_final_gate_rejects_an_unresolved_opening_gap(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

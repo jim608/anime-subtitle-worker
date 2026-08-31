@@ -6508,6 +6508,194 @@ class VideoWorker:
             )
         return f"Japanese SRT created by {route.backend} model={route.model}"
 
+    def _try_japanese_recovery_fragment_repair(
+        self,
+        audio_path: Path,
+        output_srt: Path,
+        active_config: AppConfig,
+        rejection: LowConfidenceTranscriptionError,
+    ) -> bool:
+        """Repair recovery-only short fragments without mutating the rejected SRT."""
+
+        language = str(getattr(active_config, "whisper_language", "") or "")
+        language = language.strip().replace("_", "-").casefold().split("-", 1)[0]
+        if (
+            language not in {"ja", "jpn"}
+            or not bool(
+                getattr(
+                    active_config,
+                    "asr_prompt_free_allow_recovered_primary_artifacts",
+                    False,
+                )
+            )
+            or str(getattr(rejection, "reason_code", "")) != "short_fragment"
+            or not bool(getattr(active_config, "asr_selective_retry_enabled", True))
+        ):
+            return False
+
+        review_ranges = _normalize_review_ranges(list(rejection.review_ranges))
+        if not review_ranges or not output_srt.is_file():
+            return False
+
+        repair_base_config = active_config
+        if str(
+            getattr(repair_base_config, "transcription_backend", "") or ""
+        ).casefold() != "faster-whisper":
+            repair_base_config = self._prompt_free_fallback_asr_config()
+        if str(
+            getattr(repair_base_config, "transcription_backend", "") or ""
+        ).casefold() != "faster-whisper":
+            return False
+
+        repair_root = Path(self.config.work_path) / "asr_recovery"
+        repair_root.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha1(str(output_srt.resolve()).encode("utf-8")).hexdigest()[:16]
+        token = time.time_ns()
+        temporary = repair_root / f"fragment-{digest}-{token}.srt"
+        original_snapshot = repair_root / f"fragment-original-{digest}-{token}.srt"
+        temporary_diagnostics = asr_diagnostics_path(temporary, active_config)
+        live_diagnostics = asr_diagnostics_path(output_srt, active_config)
+        original_diagnostics_snapshot = original_snapshot.with_suffix(
+            ".diagnostics.json"
+        )
+        before_sha256 = sha256_file(output_srt)
+        live_published = False
+        try:
+            verified_copy_replace(output_srt, original_snapshot)
+            if live_diagnostics.is_file():
+                verified_copy_replace(
+                    live_diagnostics,
+                    original_diagnostics_snapshot,
+                )
+            verified_copy_replace(output_srt, temporary)
+            repair_config = _config_with_overrides(
+                repair_base_config,
+                transcription_quality_check_enabled=False,
+                enable_gap_rescue=False,
+                enable_leading_gap_rescue=False,
+                op_ed_transcription_enabled=False,
+                write_gap_report=False,
+                asr_diagnostics_enabled=False,
+            )
+            self._set_active_transcription_stage(
+                "running",
+                f"Repairing {len(review_ranges)} Japanese recovery fragment(s) "
+                "with prompt-free selective audio ASR",
+            )
+            repair_result = repair_low_confidence_ranges(
+                audio_path,
+                temporary,
+                review_ranges,
+                repair_config,
+                self.logger,
+            )
+            finalize_repaired_transcription(
+                audio_path,
+                temporary,
+                review_ranges,
+                active_config,
+                self.logger,
+                segment_confidences=getattr(
+                    repair_result,
+                    "segment_confidences",
+                    (),
+                ),
+                require_confidence=False,
+            )
+            if sha256_file(temporary) == before_sha256:
+                raise TranscriptionError(
+                    "Prompt-free selective ASR did not change the rejected "
+                    "Japanese recovery fragments"
+                )
+
+            verified_copy_replace(temporary, output_srt)
+            live_published = True
+            validate_transcription_srt_quality(
+                audio_path,
+                output_srt,
+                active_config,
+                self.logger,
+            )
+            promoted_diagnostics = promote_asr_diagnostics(
+                temporary,
+                output_srt,
+                active_config,
+            )
+            if promoted_diagnostics is None:
+                promoted_diagnostics = write_asr_acceptance_diagnostics(
+                    output_srt,
+                    audio_path,
+                    active_config,
+                    status="accepted_after_selective_retry",
+                    repaired_ranges=review_ranges,
+                    segment_confidences=getattr(
+                        repair_result,
+                        "segment_confidences",
+                        (),
+                    ),
+                )
+            if (
+                bool(getattr(active_config, "asr_diagnostics_enabled", True))
+                and promoted_diagnostics is None
+            ):
+                raise TranscriptionError(
+                    "Japanese recovery fragment diagnostics could not be promoted"
+                )
+        except Exception as repair_error:  # noqa: BLE001 - keep the rejected SRT fail-closed.
+            if live_published:
+                try:
+                    if (
+                        not original_snapshot.is_file()
+                        or sha256_file(original_snapshot) != before_sha256
+                    ):
+                        raise TranscriptionError(
+                            "original Japanese recovery SRT snapshot checksum mismatch"
+                        )
+                    verified_copy_replace(original_snapshot, output_srt)
+                    if original_diagnostics_snapshot.is_file():
+                        verified_copy_replace(
+                            original_diagnostics_snapshot,
+                            live_diagnostics,
+                        )
+                    else:
+                        live_diagnostics.unlink(missing_ok=True)
+                except Exception as rollback_error:
+                    self._fail_closed_asr_output(
+                        output_srt,
+                        reason=(
+                            "Japanese recovery fragment rollback failed: "
+                            f"{_compact_error_message(rollback_error)}"
+                        ),
+                    )
+                    self.logger.error(
+                        "Japanese recovery fragment rollback failed: srt=%s error=%s",
+                        output_srt,
+                        rollback_error,
+                    )
+            self.logger.warning(
+                "Japanese recovery fragments remained unresolved after prompt-free "
+                "selective audio ASR: srt=%s ranges=%s error=%s",
+                output_srt,
+                review_ranges,
+                repair_error,
+            )
+            return False
+        finally:
+            temporary.unlink(missing_ok=True)
+            temporary_diagnostics.unlink(missing_ok=True)
+            asr_diagnostics_path(temporary, repair_base_config).unlink(missing_ok=True)
+            original_snapshot.unlink(missing_ok=True)
+            original_diagnostics_snapshot.unlink(missing_ok=True)
+
+        self.logger.warning(
+            "Recovered Japanese prompt-free ASR fragments with selective audio ASR: "
+            "srt=%s ranges=%s model=%s",
+            output_srt,
+            review_ranges,
+            repair_base_config.whisper_model,
+        )
+        return True
+
     def _transcribe_with_config(self, audio_path: Path, ja_srt: Path, config: AppConfig) -> None:
         config = self._resource_adjusted_asr_config(config)
         backend = str(getattr(config, "transcription_backend", "") or "faster-whisper")
@@ -6534,12 +6722,21 @@ class VideoWorker:
                 f"{_compact_error_message(exc)}"
             ) from exc
 
-        validate_transcription_srt_quality(
-            audio_path,
-            ja_srt,
-            config,
-            self.logger,
-        )
+        try:
+            validate_transcription_srt_quality(
+                audio_path,
+                ja_srt,
+                config,
+                self.logger,
+            )
+        except LowConfidenceTranscriptionError as rejection:
+            if not self._try_japanese_recovery_fragment_repair(
+                audio_path,
+                ja_srt,
+                config,
+                rejection,
+            ):
+                raise
 
     def _postprocess_ja_srt(self, ja_srt: Path) -> list[SrtBlock]:
         blocks = read_srt(ja_srt)

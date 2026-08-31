@@ -1200,6 +1200,178 @@ class VideoWorkerTest(unittest.TestCase):
             self.assertIn("rejected cache must not survive", archived_text)
             self.assertIn("stale translation must not survive", archived_text)
 
+    def test_japanese_recovery_short_fragment_runs_selective_audio_repair(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            audio = root / "episode.wav"
+            audio.write_bytes(b"audio")
+            output = root / "episode.srt"
+            config = _config(
+                root,
+                transcription_quality_check_enabled=False,
+                asr_prompt_free_allow_recovered_primary_artifacts=True,
+                asr_selective_retry_enabled=True,
+                gap_rescue_min_chars=2,
+                whisper_initial_prompt=None,
+                op_ed_initial_prompt=None,
+                whisper_condition_on_previous_text=False,
+            )
+            worker = VideoWorker(config, _logger())
+
+            def transcribe(_audio, srt_path, _config, _logger) -> None:
+                write_srt(
+                    srt_path,
+                    [SrtBlock(1, "00:00:02,100 --> 00:00:03,000", ["な"])],
+                )
+
+            def selective_repair(
+                _audio,
+                candidate,
+                ranges,
+                _repair_config,
+                _logger,
+            ) -> SimpleNamespace:
+                self.assertEqual(ranges, [(2.1, 3.0)])
+                write_srt(
+                    candidate,
+                    [SrtBlock(1, "00:00:02,100 --> 00:00:03,000", ["はい"])],
+                )
+                return SimpleNamespace(segment_confidences=())
+
+            with (
+                patch("worker.transcribe_to_srt", side_effect=transcribe),
+                patch(
+                    "worker.repair_low_confidence_ranges",
+                    side_effect=selective_repair,
+                ) as repair,
+            ):
+                worker._transcribe_with_config(audio, output, config)
+
+            repair.assert_called_once()
+            self.assertEqual(read_srt(output)[0].text, ["はい"])
+
+    def test_japanese_recovery_unreliable_fragment_repair_preserves_rejected_srt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            audio = root / "episode.wav"
+            audio.write_bytes(b"audio")
+            output = root / "episode.srt"
+            config = _config(
+                root,
+                transcription_quality_check_enabled=False,
+                asr_prompt_free_allow_recovered_primary_artifacts=True,
+                asr_selective_retry_enabled=True,
+                gap_rescue_min_chars=2,
+                whisper_initial_prompt=None,
+                op_ed_initial_prompt=None,
+                whisper_condition_on_previous_text=False,
+            )
+            worker = VideoWorker(config, _logger())
+            rejected_bytes: dict[str, bytes] = {}
+
+            def transcribe(_audio, srt_path, _config, _logger) -> None:
+                write_srt(
+                    srt_path,
+                    [SrtBlock(1, "00:00:02,100 --> 00:00:03,000", ["な"])],
+                )
+                rejected_bytes["content"] = srt_path.read_bytes()
+
+            def unreliable_repair(
+                _audio,
+                candidate,
+                _ranges,
+                _repair_config,
+                _logger,
+            ) -> SimpleNamespace:
+                write_srt(
+                    candidate,
+                    [SrtBlock(1, "00:00:02,100 --> 00:00:03,000", ["……"])],
+                )
+                return SimpleNamespace(segment_confidences=())
+
+            with (
+                patch("worker.transcribe_to_srt", side_effect=transcribe),
+                patch(
+                    "worker.repair_low_confidence_ranges",
+                    side_effect=unreliable_repair,
+                ),
+                self.assertRaises(LowConfidenceTranscriptionError),
+            ):
+                worker._transcribe_with_config(audio, output, config)
+
+            self.assertEqual(output.read_bytes(), rejected_bytes["content"])
+            self.assertEqual(read_srt(output)[0].text, ["な"])
+            self.assertEqual(list((root / "asr_recovery").glob("fragment-*.srt")), [])
+
+    def test_japanese_recovery_post_publish_failure_rolls_back_srt_and_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            audio = root / "episode.wav"
+            audio.write_bytes(b"audio")
+            output = root / "episode.srt"
+            config = _config(
+                root,
+                transcription_quality_check_enabled=False,
+                asr_prompt_free_allow_recovered_primary_artifacts=True,
+                asr_selective_retry_enabled=True,
+                gap_rescue_min_chars=2,
+                whisper_initial_prompt=None,
+                op_ed_initial_prompt=None,
+                whisper_condition_on_previous_text=False,
+            )
+            worker = VideoWorker(config, _logger())
+            original: dict[str, bytes] = {}
+            diagnostic = asr_diagnostics_path(output, config)
+
+            def transcribe(_audio, srt_path, _config, _logger) -> None:
+                write_srt(
+                    srt_path,
+                    [SrtBlock(1, "00:00:02,100 --> 00:00:03,000", ["な"])],
+                )
+                original["srt"] = srt_path.read_bytes()
+                diagnostic.parent.mkdir(parents=True, exist_ok=True)
+                diagnostic.write_text('{"status":"original"}', encoding="utf-8")
+                original["diagnostic"] = diagnostic.read_bytes()
+
+            def selective_repair(
+                _audio,
+                candidate,
+                _ranges,
+                _repair_config,
+                _logger,
+            ) -> SimpleNamespace:
+                write_srt(
+                    candidate,
+                    [SrtBlock(1, "00:00:02,100 --> 00:00:03,000", ["はい"])],
+                )
+                return SimpleNamespace(segment_confidences=())
+
+            rejection = LowConfidenceTranscriptionError(
+                "short fragment",
+                [(2.1, 3.0)],
+                reason_code="short_fragment",
+            )
+            with (
+                patch("worker.transcribe_to_srt", side_effect=transcribe),
+                patch(
+                    "worker.repair_low_confidence_ranges",
+                    side_effect=selective_repair,
+                ),
+                patch(
+                    "worker.validate_transcription_srt_quality",
+                    side_effect=[
+                        rejection,
+                        TranscriptionError("post-publication validation failed"),
+                    ],
+                ),
+                self.assertRaises(LowConfidenceTranscriptionError),
+            ):
+                worker._transcribe_with_config(audio, output, config)
+
+            self.assertEqual(output.read_bytes(), original["srt"])
+            self.assertEqual(diagnostic.read_bytes(), original["diagnostic"])
+            self.assertEqual(list((root / "asr_recovery").glob("fragment-*.srt")), [])
+
     def test_full_prompt_free_fallback_cuda_oom_retries_once_with_lower_memory_compute(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

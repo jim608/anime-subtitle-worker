@@ -1711,67 +1711,68 @@ class VideoScannerTest(unittest.TestCase):
             self.assertEqual(extract_deadlines, [None])
             scanner._close_state()
 
-    def test_batched_reconciliation_retries_locked_path_without_failing_or_skipping(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            videos = [root / f"Anime S01E{episode:02d}.mkv" for episode in (1, 2)]
-            for episode, video in enumerate(videos, start=1):
-                video.write_bytes(str(episode).encode())
-            config = _config(root, scanner_reconcile_batch_size=10, scanner_reconcile_budget_seconds=60)
-            scanner = VideoScanner(config, _logger())
-            original_record = ScanStateStore.record_ai_inventory_observation
-            attempted_paths: list[Path] = []
+    def test_batched_reconciliation_retries_transient_locks_without_failing_or_skipping(self) -> None:
+        for error_message in ("database is locked", "locking protocol"):
+            with self.subTest(error_message=error_message), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                videos = [root / f"Anime S01E{episode:02d}.mkv" for episode in (1, 2)]
+                for episode, video in enumerate(videos, start=1):
+                    video.write_bytes(str(episode).encode())
+                config = _config(root, scanner_reconcile_batch_size=10, scanner_reconcile_budget_seconds=60)
+                scanner = VideoScanner(config, _logger())
+                original_record = ScanStateStore.record_ai_inventory_observation
+                attempted_paths: list[Path] = []
 
-            def record_with_one_lock(
-                state: ScanStateStore,
-                epoch_id: str,
-                path: Path,
-                **kwargs: object,
-            ) -> dict[str, object]:
-                attempted_paths.append(path)
-                if len(attempted_paths) == 1:
-                    raise sqlite3.OperationalError("database is locked")
-                return original_record(state, epoch_id, path, **kwargs)
+                def record_with_one_lock(
+                    state: ScanStateStore,
+                    epoch_id: str,
+                    path: Path,
+                    **kwargs: object,
+                ) -> dict[str, object]:
+                    attempted_paths.append(path)
+                    if len(attempted_paths) == 1:
+                        raise sqlite3.OperationalError(error_message)
+                    return original_record(state, epoch_id, path, **kwargs)
 
-            with (
-                patch("scanner.extract_available_subtitles", return_value=[]),
-                patch.object(
-                    ScanStateStore,
-                    "record_ai_inventory_observation",
-                    new=record_with_one_lock,
-                ),
-            ):
-                self.assertEqual(scanner.refresh_queue(reconcile_batch=True), 0)
-                self.assertFalse(scanner.reconcile_cycle_complete)
-                self.assertEqual(scanner._reconcile_pending_item[0], videos[0])
+                with (
+                    patch("scanner.extract_available_subtitles", return_value=[]),
+                    patch.object(
+                        ScanStateStore,
+                        "record_ai_inventory_observation",
+                        new=record_with_one_lock,
+                    ),
+                ):
+                    self.assertEqual(scanner.refresh_queue(reconcile_batch=True), 0)
+                    self.assertFalse(scanner.reconcile_cycle_complete)
+                    self.assertEqual(scanner._reconcile_pending_item[0], videos[0])
+                    connection = sqlite3.connect(config.scanner_state_path)
+                    try:
+                        self.assertEqual(
+                            connection.execute(
+                                "SELECT state, observed_count FROM ai_inventory_epochs"
+                            ).fetchone(),
+                            ("running", 0),
+                        )
+                    finally:
+                        connection.close()
+
+                    self.assertEqual(scanner.refresh_queue(reconcile_batch=True), 2)
+
+                self.assertEqual(attempted_paths, [videos[0], videos[0], videos[1]])
                 connection = sqlite3.connect(config.scanner_state_path)
                 try:
                     self.assertEqual(
                         connection.execute(
                             "SELECT state, observed_count FROM ai_inventory_epochs"
                         ).fetchone(),
-                        ("running", 0),
+                        ("completed", 2),
+                    )
+                    self.assertEqual(
+                        connection.execute("SELECT COUNT(*) FROM ai_media_inventory").fetchone()[0],
+                        2,
                     )
                 finally:
                     connection.close()
-
-                self.assertEqual(scanner.refresh_queue(reconcile_batch=True), 2)
-
-            self.assertEqual(attempted_paths, [videos[0], videos[0], videos[1]])
-            connection = sqlite3.connect(config.scanner_state_path)
-            try:
-                self.assertEqual(
-                    connection.execute(
-                        "SELECT state, observed_count FROM ai_inventory_epochs"
-                    ).fetchone(),
-                    ("completed", 2),
-                )
-                self.assertEqual(
-                    connection.execute("SELECT COUNT(*) FROM ai_media_inventory").fetchone()[0],
-                    2,
-                )
-            finally:
-                connection.close()
 
     def test_batched_reconciliation_avoids_wal_snapshot_upgrade_race(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
