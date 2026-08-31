@@ -1,0 +1,45 @@
+# M0/M1 ingestion and durable-state settings only.
+# Merge these keys into the existing deployment config; do not replace model,
+# path, subtitle, or delivery settings with this fragment.
+
+scanner_cache_enabled: true
+scanner_queue_enabled: true
+scanner_state_path: scanner_state.sqlite3
+pipeline_job_store_required: true
+
+# Event-first ingestion and durable write-complete stabilization.
+scanner_event_watch_enabled: true
+scanner_event_stability_interval_seconds: 2.0
+scanner_event_quiet_window_seconds: 5.0
+scanner_event_stable_observations_required: 2
+scanner_event_watch_health_interval_seconds: 30.0
+# close-write is accepted as strong evidence. Events without close-write are
+# parsed end-to-end by ffprobe in the debounce worker before they can queue.
+scanner_event_ffprobe_path: ffprobe
+scanner_event_media_probe_timeout_seconds: 30.0
+# Full-container timeout grows from file size / conservative minimum throughput,
+# capped to prevent one corrupt file from holding the watcher indefinitely.
+scanner_event_media_probe_min_throughput_mib_per_second: 8.0
+scanner_event_media_probe_max_timeout_seconds: 1800.0
+# Failed probes back off exponentially and then remain durably quarantined until
+# a new filesystem event supplies fresh evidence; they never hot-loop forever.
+scanner_event_media_probe_max_attempts: 4
+scanner_event_media_probe_max_retry_seconds: 900.0
+
+# One delayed startup reconciliation, then low-frequency bounded fallback.
+scanner_background_scan_startup_delay_seconds: 600
+scanner_background_scan_interval_seconds: 21600
+scanner_fallback_scan_interval_seconds: 21600
+scanner_reconcile_batch_size: 250
+scanner_reconcile_budget_seconds: 15
+scanner_reconcile_batch_interval_seconds: 300
+
+# Mikan normally reads its persistent episode index. TTL reconciliation is
+# incremental: each cooled cycle replaces at most N roots and preserves every
+# unselected root; it never starts with a full recursive rebuild.
+mikan_library_fallback_scan_interval_seconds: 3600
+mikan_library_fallback_scan_max_series_per_cycle: 8
+
+# Metadata identity is always checked. Enable full SHA-256 only where the two
+# additional sequential reads per video are acceptable.
+source_integrity_sha256_enabled: false

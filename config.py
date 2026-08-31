@@ -122,6 +122,8 @@ class AppConfig:
     scanner_state_path: str = "scanner_state.sqlite3"
     scanner_recent_first: bool = True
     scanner_queue_enabled: bool = True
+    pipeline_job_store_required: bool = True
+    source_integrity_sha256_enabled: bool = False
     ai_canary_once_enabled: bool = False
     acceptance_queue_lane_enabled: bool = False
     acceptance_queue_lane_plan_path: str = "acceptance/plan.json"
@@ -130,7 +132,15 @@ class AppConfig:
     acceptance_fault_execution_plan_sha256: str = ""
     scanner_event_watch_enabled: bool = False
     scanner_event_stability_interval_seconds: float = 2.0
+    scanner_event_quiet_window_seconds: float = 5.0
+    scanner_event_stable_observations_required: int = 2
     scanner_event_watch_health_interval_seconds: float = 30.0
+    scanner_event_ffprobe_path: str = "ffprobe"
+    scanner_event_media_probe_timeout_seconds: float = 30.0
+    scanner_event_media_probe_min_throughput_mib_per_second: float = 8.0
+    scanner_event_media_probe_max_timeout_seconds: float = 1800.0
+    scanner_event_media_probe_max_attempts: int = 4
+    scanner_event_media_probe_max_retry_seconds: float = 900.0
     scanner_skip_standalone_op_ed: bool = True
     scanner_candidate_min_age_seconds: int = 0
     scanner_incremental_scan_enabled: bool = False
@@ -138,9 +148,11 @@ class AppConfig:
     scanner_quick_scan_recent_days: int = 0
     scanner_full_scan_interval_seconds: int = 0
     scanner_background_scan_interval_seconds: int = 21600
+    scanner_fallback_scan_interval_seconds: int = 21600
     scanner_background_scan_startup_delay_seconds: int = 600
     scanner_reconcile_batch_size: int = 1000
     scanner_reconcile_budget_seconds: int = 60
+    scanner_reconcile_batch_interval_seconds: int = 60
     scanner_active_queue_ledger_backfill_enabled: bool = True
     scanner_active_queue_ledger_backfill_interval_seconds: int = 10
     scanner_active_queue_ledger_backfill_batch_size: int = 250
@@ -396,6 +408,8 @@ class AppConfig:
     mikan_library_scan_recent_series_per_cycle: int = 20
     mikan_library_scan_max_series_per_cycle: int = 80
     mikan_episode_index_ttl_seconds: int = 21600
+    mikan_library_fallback_scan_interval_seconds: int = 3600
+    mikan_library_fallback_scan_max_series_per_cycle: int = 8
     mikan_seen_path: str = "mikan_seen.json"
     mikan_pending_path: str = "mikan_pending.json"
     mikan_sqlite_authoritative_state: bool = True
@@ -766,6 +780,16 @@ def load_config(config_path: str | Path) -> AppConfig:
         scanner_state_path=_as_optional_str(raw, "scanner_state_path", "scanner_state.sqlite3"),
         scanner_recent_first=_optional_bool(raw, "scanner_recent_first", True),
         scanner_queue_enabled=_optional_bool(raw, "scanner_queue_enabled", True),
+        pipeline_job_store_required=_optional_bool(
+            raw,
+            "pipeline_job_store_required",
+            True,
+        ),
+        source_integrity_sha256_enabled=_optional_bool(
+            raw,
+            "source_integrity_sha256_enabled",
+            False,
+        ),
         ai_canary_once_enabled=_optional_bool(raw, "ai_canary_once_enabled", False),
         acceptance_queue_lane_enabled=_optional_bool(
             raw,
@@ -798,10 +822,42 @@ def load_config(config_path: str | Path) -> AppConfig:
             "scanner_event_stability_interval_seconds",
             2.0,
         ),
+        scanner_event_quiet_window_seconds=_optional_positive_float(
+            raw,
+            "scanner_event_quiet_window_seconds",
+            5.0,
+        ),
+        scanner_event_stable_observations_required=_optional_positive_int(
+            raw,
+            "scanner_event_stable_observations_required",
+            2,
+        ),
         scanner_event_watch_health_interval_seconds=_optional_positive_float(
             raw,
             "scanner_event_watch_health_interval_seconds",
             30.0,
+        ),
+        scanner_event_ffprobe_path=_as_optional_str(
+            raw,
+            "scanner_event_ffprobe_path",
+            "ffprobe",
+        ),
+        scanner_event_media_probe_timeout_seconds=_optional_positive_float(
+            raw,
+            "scanner_event_media_probe_timeout_seconds",
+            30.0,
+        ),
+        scanner_event_media_probe_min_throughput_mib_per_second=_optional_positive_float(
+            raw, "scanner_event_media_probe_min_throughput_mib_per_second", 8.0
+        ),
+        scanner_event_media_probe_max_timeout_seconds=_optional_positive_float(
+            raw, "scanner_event_media_probe_max_timeout_seconds", 1800.0
+        ),
+        scanner_event_media_probe_max_attempts=_optional_positive_int(
+            raw, "scanner_event_media_probe_max_attempts", 4
+        ),
+        scanner_event_media_probe_max_retry_seconds=_optional_positive_float(
+            raw, "scanner_event_media_probe_max_retry_seconds", 900.0
         ),
         scanner_skip_standalone_op_ed=_optional_bool(raw, "scanner_skip_standalone_op_ed", True),
         scanner_candidate_min_age_seconds=_optional_non_negative_int(
@@ -826,6 +882,11 @@ def load_config(config_path: str | Path) -> AppConfig:
             "scanner_background_scan_interval_seconds",
             21600,
         ),
+        scanner_fallback_scan_interval_seconds=_optional_positive_int(
+            raw,
+            "scanner_fallback_scan_interval_seconds",
+            21600,
+        ),
         scanner_background_scan_startup_delay_seconds=_optional_non_negative_int(
             raw,
             "scanner_background_scan_startup_delay_seconds",
@@ -833,6 +894,11 @@ def load_config(config_path: str | Path) -> AppConfig:
         ),
         scanner_reconcile_batch_size=_optional_positive_int(raw, "scanner_reconcile_batch_size", 1000),
         scanner_reconcile_budget_seconds=_optional_positive_int(raw, "scanner_reconcile_budget_seconds", 60),
+        scanner_reconcile_batch_interval_seconds=_optional_positive_int(
+            raw,
+            "scanner_reconcile_batch_interval_seconds",
+            60,
+        ),
         scanner_active_queue_ledger_backfill_enabled=_optional_bool(
             raw,
             "scanner_active_queue_ledger_backfill_enabled",
@@ -1336,6 +1402,16 @@ def load_config(config_path: str | Path) -> AppConfig:
             80,
         ),
         mikan_episode_index_ttl_seconds=_optional_positive_int(raw, "mikan_episode_index_ttl_seconds", 21600),
+        mikan_library_fallback_scan_interval_seconds=_optional_positive_int(
+            raw,
+            "mikan_library_fallback_scan_interval_seconds",
+            3600,
+        ),
+        mikan_library_fallback_scan_max_series_per_cycle=_optional_positive_int(
+            raw,
+            "mikan_library_fallback_scan_max_series_per_cycle",
+            8,
+        ),
         mikan_seen_path=_as_optional_str(raw, "mikan_seen_path", "mikan_seen.json"),
         mikan_pending_path=_as_optional_str(raw, "mikan_pending_path", "mikan_pending.json"),
         mikan_sqlite_authoritative_state=_optional_bool(raw, "mikan_sqlite_authoritative_state", True),

@@ -11,6 +11,8 @@ import shutil
 import time
 from types import SimpleNamespace
 
+from source_integrity import capture_source_snapshot, verify_source_snapshot
+
 from ai_failure_markers import clear_ai_failure_marker, mark_ai_failure
 from audio import (
     AudioStreamInfo,
@@ -54,6 +56,7 @@ from logger import log_failure
 from metadata_context import MetadataContext, build_series_metadata_context
 from notifications import notify_event
 from opencc_convert import convert_ass_to_zh_tw, convert_srt_to_zh_tw
+from pipeline_event_log import append_pipeline_event
 from output_manifest import (
     ADOPTED_ZH_TW_PUBLICATION_KIND,
     CONVERTED_ZH_CN_PUBLICATION_KIND,
@@ -162,6 +165,7 @@ from subtitle_paths import (
     has_ai_finished_subtitle,
     has_finished_subtitle,
     paths_for_video,
+    source_transcript_artifacts_for_video,
     source_transcript_paths_for_video,
 )
 from transcriber import (
@@ -203,6 +207,10 @@ from acceptance_runtime import AcceptanceAttemptContext
 
 
 LEADING_GAP_CACHE_POLICY_VERSION = 1
+_PIPELINE_CHECKPOINT_MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
+_PIPELINE_SUCCESS_STATUSES = frozenset(
+    {"ok", "succeeded", "success", "complete", "completed", "skipped"}
+)
 
 
 @dataclass(frozen=True)
@@ -245,6 +253,7 @@ class VideoWorker:
         self._translation_memory_manual_run = False
         self._resource_launch_plan: dict[str, object] | None = None
         self._acceptance_attempt_context = acceptance_attempt_context
+        self._source_snapshot = None
 
     @property
     def acceptance_attempt_context(self) -> AcceptanceAttemptContext | None:
@@ -260,6 +269,7 @@ class VideoWorker:
         self._subtitle_source_decision = None
         self._translation_memory_manual_run = False
         self._resource_launch_plan = self._load_resource_launch_plan(video)
+        self._source_snapshot = None
         lock = VideoLock(video)
         if not lock.acquire():
             try:
@@ -283,9 +293,25 @@ class VideoWorker:
         audio_path = self._audio_path(video)
         separated_audio_path = self._separated_audio_path(video)
         resource_lease = None
+        source_snapshot = None
         try:
+            source_snapshot = capture_source_snapshot(
+                video,
+                hash_content=bool(
+                    getattr(self.config, "source_integrity_sha256_enabled", False)
+                ),
+            )
+            self._source_snapshot = source_snapshot
             try:
                 self._provenance = ProvenanceRecorder(self.config, video)
+                self._provenance.update(
+                    "source_integrity",
+                    {
+                        **source_snapshot.as_evidence(),
+                        "verified": False,
+                        "source_policy": "read_only_retain",
+                    },
+                )
                 self._provenance.merge(
                     translation={
                         "model": getattr(self.config, "translator_model", ""),
@@ -347,7 +373,9 @@ class VideoWorker:
             self._deliver_completed_media_if_required(video)
             self._set_stage(video, outcome.stage, outcome.status, outcome.message)
             clear_ai_failure_marker(self.config, video)
+            source_evidence = verify_source_snapshot(source_snapshot)
             if self._provenance is not None:
+                self._provenance.update("source_integrity", source_evidence)
                 self._provenance.finish(ok=True, outcome=outcome)
             self._resolve_completed_ai_quality_reviews(video, outcome)
             return True
@@ -434,6 +462,9 @@ class VideoWorker:
             )
             if self._provenance is not None:
                 try:
+                    if source_snapshot is not None:
+                        source_evidence = verify_source_snapshot(source_snapshot)
+                        self._provenance.update("source_integrity", source_evidence)
                     self._provenance.finish(ok=False, error=exc)
                 except OSError:
                     pass
@@ -446,6 +477,12 @@ class VideoWorker:
             self._release_translator_models()
             if resource_lease is not None and resource_lease.acquired:
                 self._release_resource_lease(resource_lease)
+            if source_snapshot is not None:
+                # Always repeat the cheap descriptor/path identity check at the
+                # final authority boundary.  Full SHA-256, when configured, was
+                # already checked above and is not repeated while tearing down.
+                verify_source_snapshot(source_snapshot, hash_content=False)
+            self._source_snapshot = None
             self._close_stage_state()
             lock.release()
 
@@ -473,7 +510,11 @@ class VideoWorker:
             resource_lease.release()
 
     def _deliver_completed_media_if_required(self, video: Path) -> None:
-        from completed_delivery import completed_delivery_enabled, deliver_completed_mkv
+        from completed_delivery import (
+            completed_delivery_enabled,
+            deliver_completed_mkv,
+            validate_completed_delivery,
+        )
 
         if not completed_delivery_enabled(self.config):
             return
@@ -482,6 +523,22 @@ class VideoWorker:
         # if they satisfied the Chinese product contract.
         if not self._has_strict_chinese_publication(video, force_ai=False):
             return
+        if (
+            self._pipeline_stage_reusable_before_execution(video, "MUXING")
+            and validate_completed_delivery(video, self.config, verify_streams=False)
+        ):
+            self._set_stage(
+                video,
+                "move_completed",
+                "ok",
+                "Verified durable completed-delivery checkpoint reused",
+            )
+            self.logger.info(
+                "Verified completed-delivery checkpoint; skip mux execution: %s",
+                video,
+            )
+            return
+        self._verify_source_before_publication(video)
         self._set_stage(video, "mux", "running", "Muxing verified subtitles into completed MKV")
         result = deliver_completed_mkv(video, self.config, logger=self.logger)
         if self._provenance is not None:
@@ -599,6 +656,13 @@ class VideoWorker:
         return stats
 
     def _process_locked(self, video: Path, audio_path: Path, separated_audio_path: Path) -> ProcessOutcome:
+        if self._source_snapshot is None:
+            self._source_snapshot = capture_source_snapshot(
+                video,
+                hash_content=bool(
+                    getattr(self.config, "source_integrity_sha256_enabled", False)
+                ),
+            )
         paths = paths_for_video(video, self.config)
         force_ai = self._force_ai_requested(video)
         self._translation_memory_manual_run = force_ai or self._manual_ai_requested(video)
@@ -770,6 +834,10 @@ class VideoWorker:
         else:
             self._quarantine_unverifiable_translation_cache(video, paths)
 
+        durable_asr_reuse = bool(
+            paths.ja_srt.exists()
+            and self._pipeline_stage_reusable_before_execution(video, "ASR")
+        )
         if not paths.ja_srt.exists() and not paths.zh_cn_srt.exists():
             if not audio_ready:
                 self._set_stage(video, "audio", "running", "Extracting audio")
@@ -836,7 +904,8 @@ class VideoWorker:
             self._validate_srt_output(paths.ja_srt, "Japanese transcription")
             self._set_stage(video, "transcription", "ok", self._japanese_srt_created_message())
         elif paths.ja_srt.exists():
-            self._set_stage(video, "transcription", "ok", "Japanese SRT cache hit")
+            if not durable_asr_reuse:
+                self._set_stage(video, "transcription", "ok", "Japanese SRT cache hit")
             self.logger.info("Japanese SRT exists, skip Whisper: %s", paths.ja_srt)
         else:
             self._set_stage(video, "transcription", "ok", "zh-CN SRT cache hit")
@@ -854,6 +923,10 @@ class VideoWorker:
         translation_recovery_attempted = translation_cache_repaired
         translation_asr_escalated = (
             translation_cache_repaired and not paths.zh_cn_srt.exists()
+        )
+        durable_translation_reuse = bool(
+            paths.zh_cn_srt.exists()
+            and self._pipeline_stage_reusable_before_execution(video, "TRANSLATING")
         )
 
         zh_cn_created = False
@@ -995,7 +1068,8 @@ class VideoWorker:
             break
 
         if not zh_cn_created:
-            self._set_stage(video, "translation", "ok", "zh-CN SRT cache hit")
+            if not durable_translation_reuse:
+                self._set_stage(video, "translation", "ok", "zh-CN SRT cache hit")
             self.logger.info("zh-CN SRT exists, skip translation: %s", paths.zh_cn_srt)
 
         # A hold is allowed only while the matching zh-TW derivative is about
@@ -1088,7 +1162,7 @@ class VideoWorker:
                 manifest,
                 tm_origin,
             )
-            finish_output_publication(video, self.config)
+            self._commit_output_publication(video)
             identity = delivery_identity(video, self.config)
             if not validate_output_manifest(
                 video,
@@ -1148,6 +1222,34 @@ class VideoWorker:
         return publication_is_traditional_chinese_delivery(
             manifest_publication_semantics(payload)
         )
+
+    def _verify_source_before_publication(self, video: Path) -> dict[str, object]:
+        """Fail closed immediately before a publication authority boundary."""
+
+        resolved = video.resolve()
+        snapshot = self._source_snapshot
+        if snapshot is None:
+            snapshot = capture_source_snapshot(
+                resolved,
+                hash_content=bool(
+                    getattr(self.config, "source_integrity_sha256_enabled", False)
+                ),
+            )
+            self._source_snapshot = snapshot
+        if Path(str(snapshot.canonical_path)) != resolved:
+            raise RuntimeError(
+                "source snapshot belongs to a different media item; refusing publication"
+            )
+        evidence = verify_source_snapshot(snapshot)
+        if self._provenance is not None:
+            self._provenance.update("source_integrity", evidence)
+        return evidence
+
+    def _commit_output_publication(self, video: Path) -> None:
+        """Remove the fail-closed marker only while the source is unchanged."""
+
+        self._verify_source_before_publication(video)
+        finish_output_publication(video, self.config)
 
     def _recover_interrupted_output_publication(
         self,
@@ -1210,7 +1312,7 @@ class VideoWorker:
             origin,
         )
 
-        finish_output_publication(video, self.config)
+        self._commit_output_publication(video)
         if not validate_output_manifest(
             video,
             self.config,
@@ -1293,7 +1395,7 @@ class VideoWorker:
             publication_kind=ADOPTED_ZH_TW_PUBLICATION_KIND,
             output_languages=("zh-TW",),
         )
-        finish_output_publication(video, self.config)
+        self._commit_output_publication(video)
         self.logger.info(
             "Adopted validated Traditional-Chinese subtitle without audio or AI: video=%s source=%s manifest=%s",
             video,
@@ -1348,7 +1450,7 @@ class VideoWorker:
             publication_kind=CONVERTED_ZH_CN_PUBLICATION_KIND,
             output_languages=("zh-TW",),
         )
-        finish_output_publication(video, self.config)
+        self._commit_output_publication(video)
         self._set_stage(
             video,
             "opencc_source",
@@ -1983,7 +2085,7 @@ class VideoWorker:
                 publication_kind="source_language",
                 output_languages=(source_paths.language,),
             )
-            finish_output_publication(video, self.config)
+            self._commit_output_publication(video)
             self._set_stage(
                 video,
                 "source_ass_export",
@@ -2252,7 +2354,7 @@ class VideoWorker:
                     "Staged source-language translation manifest failed strict "
                     f"verification before publication commit: {manifest}"
                 )
-            finish_output_publication(video, self.config)
+            self._commit_output_publication(video)
             if not validate_output_manifest(
                 video,
                 self.config,
@@ -2687,6 +2789,12 @@ class VideoWorker:
             return False
 
         try:
+            self._source_snapshot = capture_source_snapshot(
+                video,
+                hash_content=bool(
+                    getattr(self.config, "source_integrity_sha256_enabled", False)
+                ),
+            )
             paths = paths_for_video(video, self.config)
             self._validate_translation_cache_chain(video, paths)
             if not self.config.export_ai_ass:
@@ -2704,7 +2812,7 @@ class VideoWorker:
                     publication_kind="translated_trilingual",
                     output_languages=("ja", "zh-CN", "zh-TW"),
                 )
-                finish_output_publication(video, self.config)
+                self._commit_output_publication(video)
                 if not self.config.keep_intermediate_files:
                     # Keep the verified Japanese transcript as the durable ASR
                     # source of truth.  ASS refreshes must follow the same
@@ -2754,7 +2862,7 @@ class VideoWorker:
                     publication_kind="translated_trilingual",
                     output_languages=("ja", "zh-CN", "zh-TW"),
                 )
-                finish_output_publication(video, self.config)
+                self._commit_output_publication(video)
             self.logger.info(
                 "Refreshed existing ASS files safely: %s normalized=%s restyled=%s",
                 video,
@@ -2766,6 +2874,7 @@ class VideoWorker:
             log_failure(self.config.log_path, video, self._stage_for_exception(exc), exc)
             return False
         finally:
+            self._source_snapshot = None
             self._close_stage_state()
             lock.release()
 
@@ -5363,6 +5472,11 @@ class VideoWorker:
                 json.dumps(prepared_manifest, ensure_ascii=False, indent=2) + "\n",
             )
             for staged, destination in zip(staged_outputs, destinations, strict=True):
+                # Staging/QC may take minutes. Revalidate the original media at
+                # the last possible authority boundary before *each* formal
+                # sidecar replacement so a same-size/mtime path swap cannot
+                # publish outputs for a different inode/media revision.
+                self._verify_source_before_publication(video)
                 # Publish the verified copy before removing the staging source.
                 # Tracking the destination first guarantees that even a source
                 # cleanup failure participates in the all-or-nothing rollback.
@@ -7435,20 +7549,533 @@ class VideoWorker:
                 self._provenance.record_stage(stage, status, message)
             except OSError as exc:
                 self.logger.debug("Failed to update processing provenance for %s: %s", video, exc)
-        if not getattr(self.config, "scanner_cache_enabled", True):
+        pipeline_required = bool(
+            getattr(self.config, "pipeline_job_store_required", False)
+        )
+        if not getattr(self.config, "scanner_cache_enabled", True) and not pipeline_required:
             return
-        if not getattr(self.config, "scanner_queue_enabled", True):
+        if not getattr(self.config, "scanner_queue_enabled", True) and not pipeline_required:
             return
+        pipeline_event: dict[str, object] | None = None
         try:
             if self._stage_state is None:
                 from scan_state import ScanStateStore
 
                 self._stage_state = ScanStateStore.from_config(self.config)
             self._stage_state.update_ai_job_stage(video, stage, status, message)
+            try:
+                from scan_state import ScanStateStore
+
+                if isinstance(self._stage_state, ScanStateStore):
+                    pipeline_event = self._transition_durable_pipeline_stage(
+                        self._stage_state,
+                        video,
+                        stage,
+                        status,
+                        message,
+                    )
+                elif pipeline_required:
+                    raise RuntimeError(
+                        "required ScanStateStore does not expose the formal pipeline job store"
+                    )
+            except Exception as pipeline_exc:  # noqa: BLE001 - optional M1 compatibility boundary.
+                if pipeline_required:
+                    raise
+                self.logger.debug(
+                    "Failed to update optional durable pipeline stage for %s: %s",
+                    video,
+                    pipeline_exc,
+                )
             self._stage_state.commit()
-        except Exception as exc:  # noqa: BLE001 - stage tracking must not break subtitle generation.
+        except Exception as exc:  # noqa: BLE001 - required durable tracking is fail closed.
             self._discard_stage_state()
+            if pipeline_required:
+                raise RuntimeError(
+                    f"Required durable pipeline stage update failed: stage={stage} status={status}"
+                ) from exc
             self.logger.debug("Failed to update AI job stage for %s: %s", video, exc)
+            return
+
+        if pipeline_event is None:
+            return
+        try:
+            append_pipeline_event(
+                self._pipeline_event_log_root(),
+                str(pipeline_event["event"]),
+                job_id=str(pipeline_event["job_id"]),
+                media_revision=str(pipeline_event.get("media_revision") or ""),
+                state=str(pipeline_event["state"]),
+                stage=str(pipeline_event["stage"]),
+                attempt=(
+                    int(pipeline_event["attempt"])
+                    if pipeline_event.get("attempt") is not None
+                    else None
+                ),
+                reason_code=str(pipeline_event["reason_code"]),
+                confidence=1.0,
+                evidence=dict(pipeline_event.get("evidence") or {}),
+            )
+        except Exception as exc:  # noqa: BLE001 - secondary JSONL cannot override committed DB state.
+            # SQLite is the authority. The append-only JSONL is a secondary
+            # operator aid and must never reverse an already committed stage.
+            self.logger.warning("Failed to append pipeline event for %s: %s", video, exc)
+
+    def _transition_durable_pipeline_stage(
+        self,
+        state,
+        video: Path,
+        stage: str,
+        status: str,
+        message: str,
+    ) -> dict[str, object]:
+        from pipeline_state import legacy_stage_to_pipeline_state
+
+        pipeline = state.pipeline_jobs()
+        inputs = self._pipeline_stage_inputs(video)
+        job = pipeline.job_for_path(
+            video,
+            size=int(inputs["media_size"]),
+            mtime_ns=int(inputs["media_mtime_ns"]),
+            create=True,
+            initial_state="QUEUED",
+            reason_code="legacy_worker_job_adopted",
+            evidence={"source": "worker_stage_bridge"},
+            confidence=1.0,
+        )
+        if not isinstance(job, dict) or not job.get("job_id"):
+            raise RuntimeError("formal pipeline job could not be resolved for worker stage")
+
+        normalized_status = str(status or "").strip().casefold()
+        formal_stage = legacy_stage_to_pipeline_state(stage, status)
+        outputs: dict[str, object] = {}
+        checkpoint: dict[str, object] = {}
+        outputs_verified = False
+        if normalized_status in _PIPELINE_SUCCESS_STATUSES:
+            outputs, checkpoint, outputs_verified = self._pipeline_stage_outputs(
+                video,
+                formal_stage,
+            )
+
+        job_id = str(job["job_id"])
+        active_attempt_id = str(job.get("active_stage_attempt_id") or "")
+        if outputs_verified and not active_attempt_id:
+            reusable = pipeline.reusable_stage_attempt(
+                job_id,
+                formal_stage,
+                inputs=inputs,
+                verify_outputs=True,
+            )
+            if reusable is not None:
+                current_job = pipeline.get_job(job_id) or job
+                return self._pipeline_event_payload(
+                    current_job,
+                    reusable,
+                    event="STAGE_REUSED",
+                    reason_code="verified_stage_checkpoint_reused",
+                    message=message,
+                    outputs_verified=True,
+                )
+
+        evidence = {
+            "source": "worker_stage_bridge",
+            "message": str(message or ""),
+            "media_size": int(inputs["media_size"]),
+            "media_mtime_ns": int(inputs["media_mtime_ns"]),
+        }
+        reason_code = self._pipeline_stage_reason_code(stage, normalized_status)
+        if outputs_verified and active_attempt_id:
+            active = next(
+                (
+                    attempt
+                    for attempt in pipeline.list_stage_attempts(job_id, formal_stage)
+                    if str(attempt.get("stage_attempt_id") or "") == active_attempt_id
+                    and str(attempt.get("status") or "").upper() == "RUNNING"
+                ),
+                None,
+            )
+            if active is not None:
+                pipeline.checkpoint_stage(
+                    active_attempt_id,
+                    checkpoint,
+                    outputs=outputs,
+                    reason_code="verified_stage_artifact_checkpoint",
+                    evidence=evidence,
+                    confidence=1.0,
+                )
+
+        review_required = (
+            normalized_status not in _PIPELINE_SUCCESS_STATUSES
+            and (
+                str(stage or "").strip().casefold() == "transcription_review"
+                or "quality" in str(stage or "").casefold()
+            )
+        )
+        error_class = "quality" if review_required else "transient"
+        error_code = (
+            "legacy_stage_review_required"
+            if review_required
+            else "legacy_stage_retryable_failure"
+        )
+        attempt = pipeline.transition_legacy_stage(
+            job_id,
+            stage,
+            status,
+            inputs=inputs,
+            outputs=outputs,
+            model=self._pipeline_stage_model(formal_stage, stage),
+            retry_limit=max(
+                0,
+                int(getattr(self.config, "auto_ai_max_attempts", 3) or 0) - 1,
+            ),
+            timeout_seconds=max(
+                0.0,
+                float(getattr(self.config, "ai_subprocess_timeout_seconds", 0) or 0),
+            ),
+            checkpoint=checkpoint,
+            error_class=(error_class if normalized_status not in _PIPELINE_SUCCESS_STATUSES else ""),
+            error_code=(error_code if normalized_status not in _PIPELINE_SUCCESS_STATUSES else ""),
+            error=(
+                {"message": str(message or ""), "legacy_stage": str(stage)}
+                if normalized_status not in _PIPELINE_SUCCESS_STATUSES
+                else None
+            ),
+            reason_code=reason_code,
+            evidence=evidence,
+            confidence=1.0,
+            outputs_verified=outputs_verified,
+        )
+        current_job = pipeline.get_job(job_id) or job
+        return self._pipeline_event_payload(
+            current_job,
+            attempt,
+            event="STAGE_FINISHED" if normalized_status not in {"running", "started", "start"} else "STAGE_STARTED",
+            reason_code=reason_code,
+            message=message,
+            outputs_verified=bool(attempt.get("outputs_verified")),
+        )
+
+    def _pipeline_stage_reusable_before_execution(
+        self,
+        video: Path,
+        formal_stage: str,
+    ) -> bool:
+        """Verify a durable checkpoint at the existing cache gate.
+
+        The checkpoint is never used to reconstruct in-memory state.  It only
+        authorizes reuse when the normal stage artifact is already present and
+        its persisted size/hash still match, so legacy cache semantics remain
+        intact while expensive ASR/translation/mux execution is avoided.
+        """
+
+        pipeline_required = bool(
+            getattr(self.config, "pipeline_job_store_required", False)
+        )
+        if (
+            not getattr(self.config, "scanner_cache_enabled", True)
+            or not getattr(self.config, "scanner_queue_enabled", True)
+        ) and not pipeline_required:
+            return False
+        owned_state = None
+        try:
+            state = self._stage_state
+            if state is None:
+                from scan_state import ScanStateStore
+
+                owned_state = ScanStateStore.from_config(self.config)
+                state = owned_state
+            pipeline = state.pipeline_jobs()
+            inputs = self._pipeline_stage_inputs(video)
+            job = pipeline.job_for_path(
+                video,
+                size=int(inputs["media_size"]),
+                mtime_ns=int(inputs["media_mtime_ns"]),
+                create=False,
+            )
+            if not isinstance(job, dict):
+                return False
+            reusable = pipeline.reusable_stage_attempt(
+                str(job["job_id"]),
+                str(formal_stage).upper(),
+                inputs=inputs,
+                verify_outputs=True,
+            )
+            if not isinstance(reusable, dict):
+                return False
+            expected = {
+                str(path.resolve())
+                for path in self._pipeline_artifact_candidates(
+                    video,
+                    str(formal_stage).upper(),
+                )
+            }
+            artifacts = reusable.get("output", {}).get("artifacts", [])
+            recorded = {
+                str(Path(str(item["path"])).resolve())
+                for item in artifacts
+                if isinstance(item, dict) and item.get("path")
+            }
+            if not expected or not expected.issubset(recorded):
+                return False
+            self.logger.info(
+                "Verified durable stage checkpoint before execution: video=%s stage=%s attempt=%s",
+                video,
+                str(formal_stage).upper(),
+                reusable.get("stage_attempt_id"),
+            )
+            try:
+                append_pipeline_event(
+                    self._pipeline_event_log_root(),
+                    "STAGE_REUSED",
+                    job_id=str(job["job_id"]),
+                    media_revision=str(job.get("media_revision") or ""),
+                    state=str(job.get("state") or ""),
+                    stage=str(formal_stage).upper(),
+                    attempt=int(reusable.get("attempt_number") or 0) or None,
+                    reason_code="verified_stage_checkpoint_reused_before_execution",
+                    confidence=1.0,
+                    evidence={
+                        "outputs_verified": True,
+                        "stage_attempt_id": str(
+                            reusable.get("stage_attempt_id") or ""
+                        ),
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001 - database checkpoint remains authoritative.
+                self.logger.warning(
+                    "Failed to append durable stage reuse event for %s: %s",
+                    video,
+                    exc,
+                )
+            return True
+        except Exception as exc:  # noqa: BLE001 - required mode remains fail closed.
+            if pipeline_required:
+                raise RuntimeError(
+                    "Required durable stage reuse check failed: "
+                    f"stage={str(formal_stage).upper()}"
+                ) from exc
+            self.logger.debug(
+                "Optional durable stage reuse check failed for %s stage=%s: %s",
+                video,
+                formal_stage,
+                exc,
+            )
+            return False
+        finally:
+            if owned_state is not None:
+                owned_state.close()
+
+    @staticmethod
+    def _pipeline_stage_inputs(video: Path) -> dict[str, object]:
+        resolved = video.resolve()
+        stat = resolved.stat()
+        return {
+            "canonical_path": str(resolved),
+            "media_size": int(stat.st_size),
+            "media_mtime_ns": int(stat.st_mtime_ns),
+        }
+
+    def _pipeline_stage_model(
+        self,
+        formal_stage: str,
+        legacy_stage: str,
+    ) -> dict[str, object] | None:
+        if formal_stage == "ASR":
+            if self._last_asr_route is not None:
+                return {
+                    "adapter": self._last_asr_route.backend,
+                    "name": self._last_asr_route.model,
+                }
+            source_asr = str(legacy_stage or "").strip().casefold() == "source_transcription"
+            return {
+                "adapter": (
+                    _non_japanese_transcription_backend(self.config)
+                    if source_asr
+                    else _japanese_transcription_backend(self.config)
+                ),
+                "name": str(
+                    (
+                        getattr(self.config, "non_japanese_transcription_model", None)
+                        or getattr(self.config, "language_detect_model", None)
+                        or getattr(self.config, "whisper_model", "")
+                    )
+                    if source_asr
+                    else _japanese_transcription_model(self.config)
+                ),
+            }
+        if formal_stage == "TRANSLATING":
+            return {
+                "adapter": "translator_adapter",
+                "name": str(getattr(self.config, "translator_model", "") or ""),
+            }
+        if formal_stage == "POST_PROCESSING" and str(legacy_stage).casefold() == "opencc":
+            return {
+                "adapter": "opencc",
+                "name": str(getattr(self.config, "opencc_config", "") or ""),
+            }
+        return None
+
+    def _pipeline_stage_outputs(
+        self,
+        video: Path,
+        formal_stage: str,
+    ) -> tuple[dict[str, object], dict[str, object], bool]:
+        candidates = self._pipeline_artifact_candidates(video, formal_stage)
+        if not candidates:
+            return {}, {}, False
+        artifacts: list[dict[str, object]] = []
+        for candidate in candidates:
+            artifact = self._verified_small_artifact(candidate)
+            if artifact is None:
+                return {}, {}, False
+            artifacts.append(artifact)
+        outputs: dict[str, object] = {"artifacts": artifacts}
+        checkpoint: dict[str, object] = {
+            "artifacts": artifacts,
+            "outputs_verified": True,
+            "verified_at": time.time(),
+        }
+        return outputs, checkpoint, True
+
+    def _pipeline_artifact_candidates(self, video: Path, formal_stage: str) -> list[Path]:
+        if formal_stage == "MUXING":
+            try:
+                from completed_delivery import completed_delivery_receipt_path
+
+                receipt = completed_delivery_receipt_path(video, self.config)
+            except (AttributeError, OSError, TypeError, ValueError):
+                return []
+            return [receipt] if receipt.is_file() else []
+        if formal_stage not in {"ASR", "TRANSLATING", "POST_PROCESSING", "QC"}:
+            return []
+
+        paths = paths_for_video(video, self.config)
+        if formal_stage == "ASR":
+            if paths.ja_srt.is_file():
+                return [paths.ja_srt]
+            dynamic = self._dynamic_pipeline_artifacts(video)
+            return self._unique_paths(
+                [path for path in dynamic if path.suffix.casefold() == ".srt"]
+            )
+        if formal_stage == "TRANSLATING":
+            return [paths.zh_cn_srt] if paths.zh_cn_srt.is_file() else []
+
+        manifest_candidates = self._pipeline_manifest_artifacts(video)
+        if manifest_candidates:
+            return manifest_candidates
+        canonical_ass = [paths.ai_ja_ass, paths.ai_zh_cn_ass, paths.ai_zh_tw_ass]
+        if all(path.is_file() for path in canonical_ass):
+            return canonical_ass
+        if paths.zh_tw_srt.is_file():
+            return [paths.zh_tw_srt]
+        return self._unique_paths(
+            [
+                path
+                for path in self._dynamic_pipeline_artifacts(video)
+                if path.suffix.casefold() == ".ass"
+            ]
+        )
+
+    def _dynamic_pipeline_artifacts(self, video: Path) -> list[Path]:
+        try:
+            return source_transcript_artifacts_for_video(video, self.config)
+        except (AttributeError, OSError, TypeError, ValueError):
+            return []
+
+    def _pipeline_manifest_artifacts(self, video: Path) -> list[Path]:
+        manifest = output_manifest_path(video, self.config)
+        if not manifest.is_file():
+            return []
+        try:
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+            raw_outputs = payload.get("outputs") if isinstance(payload, dict) else None
+            if not isinstance(raw_outputs, list) or not raw_outputs:
+                return []
+            outputs = [
+                Path(str(item["path"]))
+                for item in raw_outputs
+                if isinstance(item, dict) and item.get("path")
+            ]
+            if len(outputs) != len(raw_outputs) or not all(path.is_file() for path in outputs):
+                return []
+        except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+            return []
+        return self._unique_paths([manifest, *outputs])
+
+    @staticmethod
+    def _unique_paths(paths: list[Path]) -> list[Path]:
+        unique: dict[str, Path] = {}
+        for path in paths:
+            try:
+                key = str(path.resolve())
+            except OSError:
+                key = str(path)
+            unique.setdefault(key, path)
+        return list(unique.values())
+
+    @staticmethod
+    def _verified_small_artifact(path: Path) -> dict[str, object] | None:
+        try:
+            before = path.stat()
+            if not path.is_file() or int(before.st_size) > _PIPELINE_CHECKPOINT_MAX_ARTIFACT_BYTES:
+                return None
+            digest = sha256_file(path)
+            after = path.stat()
+        except OSError:
+            return None
+        if (
+            int(before.st_size) != int(after.st_size)
+            or int(before.st_mtime_ns) != int(after.st_mtime_ns)
+        ):
+            return None
+        return {
+            "path": str(path.resolve()),
+            "size": int(after.st_size),
+            "mtime_ns": int(after.st_mtime_ns),
+            "sha256": digest,
+        }
+
+    @staticmethod
+    def _pipeline_stage_reason_code(stage: str, normalized_status: str) -> str:
+        if normalized_status in {"running", "started", "start"}:
+            return "legacy_worker_stage_started"
+        if normalized_status == "skipped":
+            return "legacy_worker_stage_skipped"
+        if normalized_status in _PIPELINE_SUCCESS_STATUSES:
+            return "legacy_worker_stage_succeeded"
+        if str(stage or "").strip().casefold() == "transcription_review" or "quality" in str(stage or "").casefold():
+            return "legacy_worker_stage_review_required"
+        return "legacy_worker_stage_retryable_failure"
+
+    @staticmethod
+    def _pipeline_event_payload(
+        job: dict[str, object],
+        attempt: dict[str, object],
+        *,
+        event: str,
+        reason_code: str,
+        message: str,
+        outputs_verified: bool,
+    ) -> dict[str, object]:
+        return {
+            "event": event,
+            "job_id": str(job["job_id"]),
+            "media_revision": str(job.get("media_revision") or ""),
+            "state": str(job.get("state") or ""),
+            "stage": str(attempt.get("stage") or ""),
+            "attempt": attempt.get("attempt_number"),
+            "reason_code": reason_code,
+            "evidence": {
+                "message": str(message or ""),
+                "attempt_status": str(attempt.get("status") or ""),
+                "outputs_verified": bool(outputs_verified),
+            },
+        }
+
+    def _pipeline_event_log_root(self) -> Path:
+        configured = getattr(self.config, "log_path", None)
+        if configured:
+            return Path(configured)
+        return Path(self.config.work_path) / "logs"
 
     def _close_stage_state(self) -> None:
         if self._stage_state is None:

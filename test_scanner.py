@@ -1607,6 +1607,11 @@ class VideoScannerTest(unittest.TestCase):
             with patch("scanner.extract_available_subtitles", return_value=[]):
                 self.assertEqual(scanner.refresh_queue(reconcile_batch=True), 1)
 
+            self.assertEqual(
+                scanner.reconcile_scan_counters,
+                {"batches": 1, "paths": 1, "cycles": 1, "last_batch_paths": 1},
+            )
+
             connection = sqlite3.connect(config.scanner_state_path)
             try:
                 epoch = connection.execute(

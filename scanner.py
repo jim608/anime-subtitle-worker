@@ -91,6 +91,10 @@ class VideoScanner:
         self._reconcile_cycle_complete = True
         self._reconcile_cycle_started_at = 0.0
         self._reconcile_max_seen_mtime_ns = 0
+        self._reconcile_batches_total = 0
+        self._reconcile_paths_total = 0
+        self._reconcile_cycles_total = 0
+        self._last_reconcile_batch_paths = 0
         self._inventory_epoch_id = ""
         self._inventory_eligibility_bound = 0.0
         self._inventory_instrumented_at = 0.0
@@ -106,6 +110,17 @@ class VideoScanner:
     @property
     def reconcile_cycle_complete(self) -> bool:
         return bool(self._reconcile_cycle_complete)
+
+    @property
+    def reconcile_scan_counters(self) -> dict[str, int]:
+        """Return path-free counters for scheduler diagnostics and tests."""
+
+        return {
+            "batches": int(self._reconcile_batches_total),
+            "paths": int(self._reconcile_paths_total),
+            "cycles": int(self._reconcile_cycles_total),
+            "last_batch_paths": int(self._last_reconcile_batch_paths),
+        }
 
     def _clear_last_database_error(self) -> None:
         self.last_database_error = ""
@@ -370,6 +385,8 @@ class VideoScanner:
         force_restart: bool = False,
     ) -> None:
         self._start_reconcile_inventory_epoch(force_restart=force_restart)
+        self._reconcile_batches_total += 1
+        batch_number = self._reconcile_batches_total
         limit = max(1, int(getattr(self.config, "scanner_reconcile_batch_size", 1000) or 1000))
         budget = max(1.0, float(getattr(self.config, "scanner_reconcile_budget_seconds", 60) or 60))
         deadline = time.monotonic() + budget
@@ -385,10 +402,15 @@ class VideoScanner:
                     self._finalize_reconcile_inventory_epoch()
                     self._reconcile_iterator = None
                     self._reconcile_cycle_complete = True
+                    self._reconcile_cycles_total += 1
                     elapsed = max(0.0, time.monotonic() - self._reconcile_cycle_started_at)
                     self.logger.info(
-                        "Scanner inventory proof epoch exhausted. final_batch=%s elapsed_seconds=%.1f",
+                        "Scanner inventory proof epoch exhausted. reason=cycle_complete "
+                        "batch_number=%s final_batch=%s paths_total=%s cycles_total=%s elapsed_seconds=%.1f",
+                        batch_number,
                         processed,
+                        self._reconcile_paths_total,
+                        self._reconcile_cycles_total,
                         elapsed,
                     )
                     break
@@ -407,10 +429,15 @@ class VideoScanner:
                 int(priority_time_ns or 0),
             )
             processed += 1
+            self._reconcile_paths_total += 1
+        self._last_reconcile_batch_paths = processed
         if not self._reconcile_cycle_complete:
             self.logger.info(
-                "Scanner inventory reconciliation batch committed. videos=%s batch_limit=%s budget_seconds=%s",
+                "Scanner inventory reconciliation batch committed. reason=bounded_continuation "
+                "batch_number=%s videos=%s paths_total=%s batch_limit=%s budget_seconds=%s",
+                batch_number,
                 processed,
+                self._reconcile_paths_total,
                 limit,
                 int(budget),
             )

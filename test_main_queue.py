@@ -1067,6 +1067,22 @@ class MainQueueResultTest(unittest.TestCase):
                     ["ja", "zh-CN", "zh-TW"],
                 )
                 self.assertEqual(queue_status, "done")
+                pipeline_store = state.pipeline_jobs()
+                pipeline_job = pipeline_store.job_for_path(
+                    video,
+                    size=video.stat().st_size,
+                    mtime_ns=video.stat().st_mtime_ns,
+                    create=False,
+                )
+                self.assertIsNotNone(pipeline_job)
+                self.assertEqual(pipeline_job["state"], "COMPLETED")
+                transition_states = [
+                    row["to_state"]
+                    for row in pipeline_store.list_transitions(pipeline_job["job_id"])
+                ]
+                self.assertIn("SUBTITLE_DETECTION", transition_states)
+                self.assertIn("QC", transition_states)
+                self.assertEqual(transition_states[-1], "COMPLETED")
             finally:
                 state.close()
 
@@ -1111,6 +1127,338 @@ class MainQueueResultTest(unittest.TestCase):
                     state.iter_ai_queue_candidates(now=time.time() + 1),
                     [video.resolve()],
                 )
+                pipeline_store = state.pipeline_jobs()
+                pipeline_job = pipeline_store.job_for_path(
+                    video,
+                    size=video.stat().st_size,
+                    mtime_ns=video.stat().st_mtime_ns,
+                    create=False,
+                )
+                self.assertIsNotNone(pipeline_job)
+                self.assertEqual(pipeline_job["state"], "RETRYING")
+                self.assertNotIn(
+                    "COMPLETED",
+                    [
+                        row["to_state"]
+                        for row in pipeline_store.list_transitions(pipeline_job["job_id"])
+                    ],
+                )
+            finally:
+                state.close()
+
+    def test_child_failure_and_parent_result_spend_one_formal_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Episode 01.mkv"
+            video.write_bytes(b"media")
+            config = SimpleNamespace(
+                work_path=root,
+                log_path=root / "logs",
+                scanner_state_path=root / "scanner_state.sqlite3",
+                ai_output_manifest_path="manifests",
+                control_state_path="control.sqlite3",
+                auto_ai_failure_cooldown_seconds=0,
+                auto_ai_max_attempts=3,
+            )
+            state = ScanStateStore.from_config(config)
+            try:
+                state.upsert_ai_queue_candidate(video, video.stat().st_mtime_ns)
+                state.commit()
+                delivery_attempt_id = main_module._mark_queue_running(
+                    state,
+                    video,
+                    config,
+                )
+                pipeline = state.pipeline_jobs()
+                job = pipeline.job_for_path(
+                    video,
+                    size=video.stat().st_size,
+                    mtime_ns=video.stat().st_mtime_ns,
+                    create=False,
+                )
+                assert job is not None
+                inputs = {
+                    "canonical_path": str(video.resolve()),
+                    "media_size": video.stat().st_size,
+                    "media_mtime_ns": video.stat().st_mtime_ns,
+                }
+                pipeline.transition_legacy_stage(
+                    str(job["job_id"]),
+                    "translation",
+                    "running",
+                    inputs=inputs,
+                    retry_limit=2,
+                    timeout_seconds=60,
+                    reason_code="child_translation_started",
+                    evidence={"source": "test_child"},
+                    confidence=1.0,
+                )
+                pipeline.transition_legacy_stage(
+                    str(job["job_id"]),
+                    "translation",
+                    "failed",
+                    error_class="transient",
+                    error_code="transient_timeout",
+                    error={"message": "translation timeout"},
+                    reason_code="child_translation_failed",
+                    evidence={"source": "test_child"},
+                    confidence=1.0,
+                )
+                state.update_ai_job_stage(
+                    video,
+                    "translation",
+                    "failed",
+                    "translation timeout",
+                )
+                state.commit()
+
+                with patch(
+                    "control_state.open_ai_quality_review_for_target",
+                    return_value=None,
+                ):
+                    main_module._mark_queue_result(
+                        state,
+                        video,
+                        False,
+                        config,
+                        delivery_attempt_id=delivery_attempt_id,
+                    )
+
+                job = pipeline.get_job(str(job["job_id"]))
+                attempts = pipeline.list_stage_attempts(
+                    str(job["job_id"]),
+                    "TRANSLATING",
+                )
+                self.assertEqual(job["state"], "RETRYING")
+                self.assertEqual(job["retry_count"], 1)
+                self.assertEqual(len(attempts), 1)
+                self.assertEqual(attempts[0]["status"], "RETRYABLE_FAILURE")
+            finally:
+                state.close()
+
+    def test_isolated_timeout_finishes_active_later_stage_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_path = root / "config.yaml"
+            config_path.write_text("config", encoding="utf-8")
+            video = root / "Episode 01.mkv"
+            video.write_bytes(b"media")
+            config = SimpleNamespace(
+                work_path=root,
+                log_path=root / "logs",
+                scanner_state_path=root / "scanner_state.sqlite3",
+                ai_output_manifest_path="manifests",
+                control_state_path="control.sqlite3",
+                auto_ai_failure_cooldown_seconds=0,
+                auto_ai_max_attempts=3,
+                ai_subprocess_timeout_seconds=1,
+                config_path=config_path,
+            )
+            state = ScanStateStore.from_config(config)
+            try:
+                state.upsert_ai_queue_candidate(video, video.stat().st_mtime_ns)
+                state.commit()
+                delivery_attempt_id = main_module._mark_queue_running(
+                    state,
+                    video,
+                    config,
+                )
+                pipeline = state.pipeline_jobs()
+                job = pipeline.job_for_path(
+                    video,
+                    size=video.stat().st_size,
+                    mtime_ns=video.stat().st_mtime_ns,
+                    create=False,
+                )
+                assert job is not None
+                pipeline.transition_legacy_stage(
+                    str(job["job_id"]),
+                    "translation",
+                    "running",
+                    inputs={
+                        "canonical_path": str(video.resolve()),
+                        "media_size": video.stat().st_size,
+                        "media_mtime_ns": video.stat().st_mtime_ns,
+                    },
+                    retry_limit=2,
+                    timeout_seconds=1,
+                    reason_code="translation_started",
+                    evidence={"source": "timeout_test"},
+                    confidence=1.0,
+                )
+                active = pipeline.get_job(str(job["job_id"]))
+                state._conn.execute(
+                    "UPDATE pipeline_stage_attempts SET heartbeat_at=? WHERE stage_attempt_id=?",
+                    (time.time() - 10, str(active["active_stage_attempt_id"])),
+                )
+                state.commit()
+            finally:
+                state.close()
+
+            with (
+                patch.object(
+                    main_module.subprocess,
+                    "run",
+                    side_effect=main_module.subprocess.TimeoutExpired(
+                        cmd="worker",
+                        timeout=1,
+                    ),
+                ),
+                patch("ai_failure_markers.mark_ai_failure"),
+            ):
+                ok = main_module._process_video_subprocess(
+                    config,
+                    video,
+                    Mock(),
+                    delivery_attempt_id=delivery_attempt_id,
+                )
+            self.assertFalse(ok)
+
+            state = ScanStateStore.from_config(config)
+            try:
+                pipeline = state.pipeline_jobs()
+                job = pipeline.job_for_path(
+                    video,
+                    size=video.stat().st_size,
+                    mtime_ns=video.stat().st_mtime_ns,
+                    create=False,
+                )
+                assert job is not None
+                attempts = pipeline.list_stage_attempts(
+                    str(job["job_id"]),
+                    "TRANSLATING",
+                )
+                self.assertEqual(job["state"], "RETRYING")
+                self.assertEqual(job["retry_count"], 1)
+                self.assertEqual(len(attempts), 1)
+                self.assertTrue(attempts[0]["error"]["watchdog_expired"])
+
+                with patch(
+                    "control_state.open_ai_quality_review_for_target",
+                    return_value=None,
+                ):
+                    main_module._mark_queue_result(
+                        state,
+                        video,
+                        False,
+                        config,
+                        delivery_attempt_id=delivery_attempt_id,
+                    )
+                job = pipeline.get_job(str(job["job_id"]))
+                attempts = pipeline.list_stage_attempts(
+                    str(job["job_id"]),
+                    "TRANSLATING",
+                )
+                self.assertEqual(job["state"], "RETRYING")
+                self.assertEqual(job["retry_count"], 1)
+                self.assertEqual(len(attempts), 1)
+                self.assertEqual(attempts[0]["status"], "RETRYABLE_FAILURE")
+            finally:
+                state.close()
+
+    def test_temporary_delivery_evidence_cannot_complete_durable_job(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Episode 01.mkv"
+            temporary_manifest = root / "delivery.manifest.json.tmp"
+            video.write_bytes(b"media")
+            temporary_manifest.write_text("temporary", encoding="utf-8")
+            config = SimpleNamespace(
+                work_path=root,
+                scanner_state_path=root / "scanner_state.sqlite3",
+                ai_output_manifest_path="manifests",
+                control_state_path="control.sqlite3",
+                auto_ai_failure_cooldown_seconds=0,
+                auto_ai_max_attempts=3,
+            )
+            state = ScanStateStore.from_config(config)
+            try:
+                state.upsert_ai_queue_candidate(video, video.stat().st_mtime_ns)
+                state.commit()
+                attempt_id = main_module._mark_queue_running(state, video, config)
+                evidence = {
+                    "manifest_path": str(temporary_manifest),
+                    "manifest_sha256": "unused",
+                    "verified_at": time.time(),
+                    "verification": {
+                        "required_outputs_complete": True,
+                        "hashes_verified": True,
+                        "publication_marker_absent": True,
+                        "media_identity_matched": True,
+                    },
+                }
+
+                with patch.object(
+                    main_module,
+                    "_verified_ai_delivery_evidence",
+                    return_value=evidence,
+                ):
+                    main_module._mark_queue_result(
+                        state,
+                        video,
+                        True,
+                        config,
+                        delivery_attempt_id=attempt_id,
+                    )
+
+                pipeline_store = state.pipeline_jobs()
+                pipeline_job = pipeline_store.job_for_path(
+                    video,
+                    size=video.stat().st_size,
+                    mtime_ns=video.stat().st_mtime_ns,
+                    create=False,
+                )
+                self.assertIsNotNone(pipeline_job)
+                self.assertEqual(pipeline_job["state"], "RETRYING")
+                self.assertNotIn(
+                    "COMPLETED",
+                    [
+                        row["to_state"]
+                        for row in pipeline_store.list_transitions(pipeline_job["job_id"])
+                    ],
+                )
+            finally:
+                state.close()
+
+    def test_pipeline_event_append_failure_does_not_rollback_queue_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Episode 01.mkv"
+            video.write_bytes(b"media")
+            config = SimpleNamespace(
+                work_path=root,
+                log_path=root / "logs",
+                scanner_state_path=root / "scanner_state.sqlite3",
+                ai_output_manifest_path="manifests",
+                control_state_path="control.sqlite3",
+                auto_ai_max_attempts=3,
+            )
+            logger = Mock()
+            state = ScanStateStore.from_config(config)
+            try:
+                state.upsert_ai_queue_candidate(video, video.stat().st_mtime_ns)
+                state.commit()
+                with patch(
+                    "pipeline_event_log.append_pipeline_event",
+                    side_effect=OSError("event log unavailable"),
+                ):
+                    attempt_id = main_module._mark_queue_running(
+                        state,
+                        video,
+                        config,
+                        logger=logger,
+                    )
+
+                self.assertTrue(attempt_id)
+                pipeline_job = state.pipeline_jobs().job_for_path(
+                    video,
+                    size=video.stat().st_size,
+                    mtime_ns=video.stat().st_mtime_ns,
+                    create=False,
+                )
+                self.assertIsNotNone(pipeline_job)
+                self.assertEqual(pipeline_job["state"], "SUBTITLE_DETECTION")
+                self.assertTrue(logger.warning.called)
             finally:
                 state.close()
 
@@ -2941,7 +3289,10 @@ class MainQueueResultTest(unittest.TestCase):
         worker.process.assert_called_once_with(video)
 
     def test_background_ai_scan_refreshes_queue_then_waits(self) -> None:
-        config = SimpleNamespace(watch_interval_seconds=15)
+        config = SimpleNamespace(
+            watch_interval_seconds=15,
+            scanner_fallback_scan_interval_seconds=21600,
+        )
         logger = Mock()
         shutdown_event = Mock()
         shutdown_event.is_set.return_value = False
@@ -2952,7 +3303,7 @@ class MainQueueResultTest(unittest.TestCase):
             main_module._background_ai_scan_loop(config, logger, shutdown_event)
 
         scanner.refresh_queue.assert_called_once_with(reconcile_batch=True)
-        shutdown_event.wait.assert_called_once_with(15)
+        shutdown_event.wait.assert_called_once_with(21600)
 
     def test_background_ai_scan_uses_delayed_low_frequency_reconciliation_with_event_watcher(self) -> None:
         config = SimpleNamespace(
@@ -2986,6 +3337,7 @@ class MainQueueResultTest(unittest.TestCase):
             watch_interval_seconds=15,
             scanner_event_watch_enabled=True,
             scanner_background_scan_interval_seconds=21600,
+            scanner_fallback_scan_interval_seconds=3600,
             scanner_background_scan_startup_delay_seconds=600,
         )
         logger = Mock()
@@ -3003,7 +3355,79 @@ class MainQueueResultTest(unittest.TestCase):
             )
 
         scanner.refresh_queue.assert_called_once_with(reconcile_batch=True)
-        shutdown_event.wait.assert_called_once_with(15)
+        shutdown_event.wait.assert_called_once_with(3600)
+        self.assertTrue(
+            any(
+                call.args
+                and call.args[0].startswith("Background AI reconciliation dispatch.")
+                and call.args[1] == "startup_reconciliation"
+                for call in logger.info.call_args_list
+            )
+        )
+
+    def test_background_ai_scan_incomplete_batch_uses_bounded_cooldown_not_hot_loop(self) -> None:
+        config = SimpleNamespace(
+            scanner_event_watch_enabled=False,
+            scanner_fallback_scan_interval_seconds=3600,
+            scanner_reconcile_batch_interval_seconds=75,
+        )
+        logger = Mock()
+        shutdown_event = Mock()
+        shutdown_event.is_set.return_value = False
+        shutdown_event.wait.return_value = True
+        scanner = Mock()
+        scanner.reconcile_cycle_complete = False
+        scanner.reconcile_scan_counters = {
+            "batches": 1,
+            "paths": 10,
+            "cycles": 0,
+            "last_batch_paths": 10,
+        }
+
+        with patch("scanner.VideoScanner", return_value=scanner):
+            main_module._background_ai_scan_loop(
+                config,
+                logger,
+                shutdown_event,
+                None,
+            )
+
+        scanner.refresh_queue.assert_called_once_with(reconcile_batch=True)
+        shutdown_event.wait.assert_called_once_with(75)
+        self.assertTrue(
+            any(
+                call.args
+                and call.args[0].startswith("Background AI reconciliation observed.")
+                and call.args[4:8] == (1, 10, 0, 10)
+                for call in logger.info.call_args_list
+            )
+        )
+
+    def test_background_ai_scan_dead_watcher_waits_full_low_frequency_fallback(self) -> None:
+        config = SimpleNamespace(
+            scanner_event_watch_enabled=True,
+            scanner_fallback_scan_interval_seconds=7200,
+            scanner_background_scan_startup_delay_seconds=600,
+        )
+        logger = Mock()
+        shutdown_event = Mock()
+        shutdown_event.is_set.return_value = False
+        shutdown_event.wait.return_value = True
+        scanner = Mock()
+        scanner.reconcile_cycle_complete = True
+        watcher = Mock()
+        watcher.is_alive.return_value = False
+
+        with patch("scanner.VideoScanner", return_value=scanner):
+            main_module._background_ai_scan_loop(
+                config,
+                logger,
+                shutdown_event,
+                watcher,
+            )
+
+        scanner.refresh_queue.assert_called_once_with(reconcile_batch=True)
+        shutdown_event.wait.assert_called_once_with(7200)
 
     def test_background_ai_ledger_backfill_drains_one_bounded_batch_while_worker_is_busy(self) -> None:
         config = SimpleNamespace(
@@ -3282,6 +3706,64 @@ class MainQueueResultTest(unittest.TestCase):
                 self.assertEqual(state.iter_ai_queue_candidates(), [video.resolve()])
             finally:
                 state.close()
+
+    def test_restart_recovers_durable_stage_and_requeues_job(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Interrupted Anime S01E01.mkv"
+            video.write_bytes(b"media")
+            config = SimpleNamespace(
+                work_path=root / "work",
+                log_path=root / "logs",
+                scanner_state_path="scanner_state.sqlite3",
+                scanner_cache_enabled=True,
+                scanner_queue_enabled=True,
+                ai_output_manifest_path="manifests",
+                control_state_path="control.sqlite3",
+                auto_ai_max_attempts=3,
+            )
+            state = ScanStateStore.from_config(config)
+            try:
+                state.upsert_ai_queue_candidate(video, video.stat().st_mtime_ns)
+                state.commit()
+                main_module._mark_queue_running(state, video, config, logger=Mock())
+            finally:
+                state.close()
+
+            count = main_module._requeue_previous_worker_running(config, Mock())
+
+            self.assertEqual(count, 1)
+            state = ScanStateStore.from_config(config)
+            try:
+                pipeline_store = state.pipeline_jobs()
+                pipeline_job = pipeline_store.job_for_path(
+                    video,
+                    size=video.stat().st_size,
+                    mtime_ns=video.stat().st_mtime_ns,
+                    create=False,
+                )
+                self.assertIsNotNone(pipeline_job)
+                self.assertEqual(pipeline_job["state"], "QUEUED")
+                attempts = pipeline_store.list_stage_attempts(
+                    pipeline_job["job_id"],
+                    "SUBTITLE_DETECTION",
+                )
+                self.assertEqual(attempts[-1]["status"], "INTERRUPTED")
+            finally:
+                state.close()
+
+            event_path = config.log_path / "pipeline-events.jsonl"
+            events = [
+                json.loads(line)
+                for line in event_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            states = [event["state"] for event in events]
+            self.assertIn("RETRYING", states)
+            self.assertEqual(states[-1], "QUEUED")
+            serialized_events = "\n".join(json.dumps(event, sort_keys=True) for event in events)
+            self.assertNotIn(str(root), serialized_events)
+            self.assertNotIn("canonical_path", serialized_events)
 
     def test_requeue_stale_ai_running_requeues_only_expired_rows_without_scanner(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

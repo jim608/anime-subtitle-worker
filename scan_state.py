@@ -19,6 +19,7 @@ from acceptance_queue_lane import (
 from mikan_source import extract_episode_number, release_season_number
 from subtitle_extract import SIDECAR_SUBTITLE_EXTENSIONS
 from subtitle_paths import finished_subtitle_paths
+from pipeline_state import PipelineJobStore, ensure_pipeline_state_schema
 
 
 SCHEMA_VERSION = 1
@@ -202,6 +203,8 @@ class ScanStateStore:
         self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self.path, timeout=SQLITE_BUSY_TIMEOUT_SECONDS)
+        self._conn.execute("PRAGMA foreign_keys=ON")
+        self._pipeline_job_store: PipelineJobStore | None = None
         self._stage_events_since_prune = 0
         self._stage_event_max_rows = max(
             1,
@@ -246,6 +249,39 @@ class ScanStateStore:
 
     def rollback(self) -> None:
         self._conn.rollback()
+
+    def pipeline_jobs(self) -> PipelineJobStore:
+        """Return the M1 job store backed by this store's SQLite connection."""
+
+        if self._pipeline_job_store is None:
+            self._pipeline_job_store = PipelineJobStore.from_connection(self._conn)
+        return self._pipeline_job_store
+
+    def upsert_ingest_observation(
+        self,
+        path: str | Path,
+        size: int,
+        mtime_ns: int,
+        observed_at: float | None = None,
+        event_type: str = "",
+        state: str = "stabilizing",
+    ) -> dict[str, Any]:
+        """Persist one filesystem observation without committing the caller's batch."""
+
+        return self.pipeline_jobs().upsert_ingest_observation(
+            path,
+            size,
+            mtime_ns,
+            observed_at,
+            event_type,
+            state,
+        )
+
+    def iter_pending_ingest_observations(self) -> list[dict[str, Any]]:
+        return self.pipeline_jobs().iter_pending_ingest_observations()
+
+    def clear_ingest_observation(self, path: str | Path) -> bool:
+        return self.pipeline_jobs().clear_ingest_observation(path)
 
     def get_status(self, signature: VideoScanSignature) -> str | None:
         row = self._conn.execute(
@@ -4429,6 +4465,7 @@ class ScanStateStore:
                 """,
                 (str(now), now),
             )
+        ensure_pipeline_state_schema(self._conn)
         self._conn.commit()
 
     def _prune_stage_events(self, *, force: bool = False) -> int:

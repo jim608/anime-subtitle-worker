@@ -4,6 +4,7 @@ import argparse
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import queue
@@ -595,6 +596,7 @@ def _scan_and_process(
                                     video,
                                     worker.config,
                                     canary_binding=canary_binding,
+                                    logger=logger,
                                 )
                 if claim_blocked_by_control:
                     logger.info(
@@ -615,7 +617,10 @@ def _scan_and_process(
                     video,
                     delivery_attempt_id,
                 )
-                process_kwargs = {"resource_launch_plan": plan}
+                process_kwargs = {
+                    "resource_launch_plan": plan,
+                    "delivery_attempt_id": delivery_attempt_id,
+                }
                 if acceptance_attempt_context is not None:
                     process_kwargs["acceptance_attempt_context"] = acceptance_attempt_context
                 ok = _process_video_with_policy(
@@ -630,6 +635,7 @@ def _scan_and_process(
                     ok,
                     worker.config,
                     delivery_attempt_id=delivery_attempt_id,
+                    logger=logger,
                 )
                 processed += 1
                 update_ai_scheduler_state(
@@ -722,6 +728,7 @@ def _scan_and_process(
                                 queue_state,
                                 video,
                                 worker.config,
+                                logger=logger,
                             )
                             acceptance_attempt_context = build_acceptance_attempt_context(
                                 queue_state,
@@ -730,6 +737,7 @@ def _scan_and_process(
                                 delivery_attempt_id,
                             )
                     submit_kwargs = {}
+                    submit_kwargs["delivery_attempt_id"] = delivery_attempt_id
                     if acceptance_attempt_context is not None:
                         submit_kwargs["acceptance_attempt_context"] = acceptance_attempt_context
                     future = executor.submit(
@@ -759,6 +767,7 @@ def _scan_and_process(
                         ok,
                         worker.config,
                         delivery_attempt_id=delivery_attempt_id,
+                        logger=logger,
                     )
                     processed += 1
                     update_ai_scheduler_state(
@@ -904,6 +913,7 @@ def _process_video_with_policy(
     *,
     resource_launch_plan=None,
     acceptance_attempt_context=None,
+    delivery_attempt_id: str = "",
 ) -> bool:
     config = worker.config
     resource_enabled = bool(getattr(config, "resource_admission_enabled", False))
@@ -935,6 +945,7 @@ def _process_video_with_policy(
         logger,
         resource_launch_plan=resource_launch_plan,
         acceptance_attempt_context=acceptance_attempt_context,
+        delivery_attempt_id=delivery_attempt_id,
     )
 
 
@@ -945,6 +956,7 @@ def _process_video_subprocess(
     *,
     resource_launch_plan=None,
     acceptance_attempt_context=None,
+    delivery_attempt_id: str = "",
 ) -> bool:
     config_path = getattr(config, "config_path", None)
     if not config_path:
@@ -1006,7 +1018,14 @@ def _process_video_subprocess(
         )
     except subprocess.TimeoutExpired:
         detail = f"AI subprocess timed out and was terminated after {timeout}s"
-        _persist_isolated_resource_failure(config, Path(video), "resource_runtime", detail, logger)
+        _persist_isolated_resource_failure(
+            config,
+            Path(video),
+            "resource_runtime",
+            detail,
+            logger,
+            delivery_attempt_id=delivery_attempt_id,
+        )
         logger.error("%s. video=%s", detail, video)
         return False
     except OSError as exc:
@@ -1016,6 +1035,7 @@ def _process_video_subprocess(
             "resource_runtime",
             f"AI subprocess launch failed: {exc}",
             logger,
+            delivery_attempt_id=delivery_attempt_id,
         )
         logger.exception("Failed to start AI subprocess for %s: %s", video, exc)
         return False
@@ -1042,6 +1062,7 @@ def _process_video_subprocess(
             "resource_runtime",
             detail,
             logger,
+            delivery_attempt_id=delivery_attempt_id,
         )
         logger.error(
             "AI subprocess was killed, likely by OOM or GPU/runtime failure. video=%s returncode=%s",
@@ -1053,7 +1074,15 @@ def _process_video_subprocess(
     return False
 
 
-def _persist_isolated_resource_failure(config, video: Path, stage: str, detail: str, logger) -> None:
+def _persist_isolated_resource_failure(
+    config,
+    video: Path,
+    stage: str,
+    detail: str,
+    logger,
+    *,
+    delivery_attempt_id: str = "",
+) -> None:
     """Persist parent-observed child failure so queue retry routing is exact."""
 
     try:
@@ -1072,6 +1101,35 @@ def _persist_isolated_resource_failure(config, video: Path, stage: str, detail: 
 
         state = ScanStateStore.from_config(config)
         state.update_ai_job_stage(video, stage, "failed", detail)
+        pipeline_store = _pipeline_jobs_for_state(state)
+        if pipeline_store is not None and callable(
+            getattr(pipeline_store, "job_for_path", None)
+        ):
+            try:
+                media_stat = video.stat()
+                pipeline_job = pipeline_store.job_for_path(
+                    video,
+                    size=int(media_stat.st_size),
+                    mtime_ns=int(media_stat.st_mtime_ns),
+                    create=False,
+                )
+            except OSError:
+                pipeline_job = None
+            error_code, _retry_strategy = _ai_failure_policy(stage, detail)
+            _reconcile_parent_pipeline_failure(
+                pipeline_store,
+                pipeline_job,
+                delivery_attempt_id=delivery_attempt_id,
+                target_state="RETRYING",
+                stage=stage,
+                reason_code=(
+                    "active_stage_timeout_watchdog"
+                    if "timed out" in str(detail).casefold()
+                    else "isolated_worker_resource_failure"
+                ),
+                error_code=error_code,
+                detail=detail,
+            )
         state.commit()
     except Exception as exc:  # noqa: BLE001 - preserve the subprocess result and resource cooldown.
         if state is not None:
@@ -5944,22 +6002,60 @@ def _background_ai_scan_loop(
     )
     if startup_delay and shutdown_event.wait(startup_delay):
         return
+    dispatch_count = 0
+    first_dispatch = True
     while not shutdown_event.is_set():
         if _deployment_hold_active(config):
             if shutdown_event.wait(1.0):
                 break
             continue
+        cycle_was_complete = bool(scanner.reconcile_cycle_complete)
+        watcher_alive = _background_event_watcher_alive(config, event_watcher=event_watcher)
+        if first_dispatch:
+            reason = "startup_reconciliation"
+        elif not cycle_was_complete:
+            reason = "bounded_continuation"
+        elif watcher_alive:
+            reason = "scheduled_low_frequency"
+        else:
+            reason = "watcher_unavailable_low_frequency"
+        dispatch_count += 1
+        logger.info(
+            "Background AI reconciliation dispatch. reason=%s dispatch_count=%s watcher_alive=%s",
+            reason,
+            dispatch_count,
+            watcher_alive,
+        )
         try:
             scanner.refresh_queue(reconcile_batch=True)
         except Exception as exc:
             logger.exception("Unhandled background AI scan error: %s", exc)
+        counters = getattr(scanner, "reconcile_scan_counters", {})
+        if not isinstance(counters, dict):
+            counters = {}
+        logger.info(
+            "Background AI reconciliation observed. reason=%s dispatch_count=%s "
+            "cycle_complete=%s batches=%s paths=%s cycles=%s last_batch_paths=%s",
+            reason,
+            dispatch_count,
+            bool(scanner.reconcile_cycle_complete),
+            int(counters.get("batches", 0) or 0),
+            int(counters.get("paths", 0) or 0),
+            int(counters.get("cycles", 0) or 0),
+            int(counters.get("last_batch_paths", 0) or 0),
+        )
+        first_dispatch = False
         interval, _unused_startup_delay = _background_ai_scan_schedule(
             config,
             event_watcher=event_watcher,
         )
-        wait_seconds = interval if scanner.reconcile_cycle_complete else max(
-            5,
-            int(getattr(config, "storage_io_pressure_backoff_seconds", 2.0) or 2.0),
+        wait_seconds = (
+            interval
+            if scanner.reconcile_cycle_complete
+            else max(
+                1,
+                int(getattr(config, "scanner_reconcile_batch_interval_seconds", 60) or 60),
+            )
         )
         if _wait_for_background_ai_scan(
             shutdown_event,
@@ -6040,16 +6136,27 @@ def _background_ai_ledger_backfill_loop(
             break
 
 
+def _background_event_watcher_alive(config, *, event_watcher=None) -> bool:
+    watcher_configured = bool(getattr(config, "scanner_event_watch_enabled", False))
+    if not watcher_configured or event_watcher is None:
+        return False
+    try:
+        return bool(event_watcher.is_alive())
+    except Exception:
+        return False
+
+
 def _background_ai_scan_schedule(config, *, event_watcher=None) -> tuple[int, int]:
     watcher_configured = bool(getattr(config, "scanner_event_watch_enabled", False))
-    watcher_alive = False
-    if watcher_configured and event_watcher is not None:
-        try:
-            watcher_alive = bool(event_watcher.is_alive())
-        except Exception:
-            watcher_alive = False
+    watcher_alive = _background_event_watcher_alive(config, event_watcher=event_watcher)
     if not watcher_configured or not watcher_alive:
-        return max(1, int(config.watch_interval_seconds)), 0
+        return (
+            max(
+                1,
+                int(getattr(config, "scanner_fallback_scan_interval_seconds", 21600) or 21600),
+            ),
+            0,
+        )
     return (
         max(1, int(getattr(config, "scanner_background_scan_interval_seconds", 21600) or 21600)),
         max(0, int(getattr(config, "scanner_background_scan_startup_delay_seconds", 600) or 0)),
@@ -6073,15 +6180,6 @@ def _wait_for_background_ai_scan(
     """
 
     remaining = max(0.0, float(wait_seconds))
-    fallback_interval = max(1.0, float(getattr(config, "watch_interval_seconds", 1) or 1))
-    watcher_backed = (
-        bool(getattr(config, "scanner_event_watch_enabled", False))
-        and event_watcher is not None
-        and remaining > fallback_interval
-    )
-    if not watcher_backed:
-        return bool(shutdown_event.wait(remaining))
-
     health_interval = max(
         1.0,
         float(
@@ -6093,17 +6191,26 @@ def _wait_for_background_ai_scan(
             or 30.0
         ),
     )
+    watcher_backed = (
+        _background_event_watcher_alive(config, event_watcher=event_watcher)
+        and remaining > health_interval
+    )
+    if not watcher_backed:
+        return bool(shutdown_event.wait(remaining))
+
     while remaining > 0:
+        chunk = min(remaining, health_interval)
+        if shutdown_event.wait(chunk):
+            return True
+        remaining -= chunk
+        if remaining <= 0:
+            break
         try:
             watcher_alive = bool(event_watcher.is_alive())
         except Exception:
             watcher_alive = False
         if not watcher_alive:
             return False
-        chunk = min(remaining, health_interval)
-        if shutdown_event.wait(chunk):
-            return True
-        remaining -= chunk
     return False
 
 
@@ -6682,12 +6789,212 @@ def _open_ai_queue_state(config):
     return ScanStateStore.from_config(config)
 
 
+def _pipeline_jobs_for_state(state):
+    """Return the optional durable job facade without teaching legacy fakes new calls."""
+
+    factory = getattr(type(state), "pipeline_jobs", None)
+    if not callable(factory):
+        return None
+    return state.pipeline_jobs()
+
+
+def _pipeline_transition_cursor(store, job: dict[str, object] | None) -> int:
+    if not isinstance(job, dict):
+        return 0
+    list_transitions = getattr(store, "list_transitions", None)
+    if not callable(list_transitions):
+        return 0
+    return max(
+        (
+            int(transition.get("sequence") or 0)
+            for transition in list_transitions(str(job["job_id"]))
+            if isinstance(transition, dict)
+        ),
+        default=0,
+    )
+
+
+def _path_free_pipeline_event_evidence(value):
+    """Keep JSON transition telemetry useful without copying host filesystem paths."""
+
+    if isinstance(value, dict):
+        sanitized: dict[str, object] = {}
+        for key, item in value.items():
+            normalized_key = str(key).strip().casefold()
+            if "path" in normalized_key or normalized_key in {
+                "artifacts",
+                "detail",
+                "error",
+                "message",
+            }:
+                continue
+            sanitized[str(key)] = _path_free_pipeline_event_evidence(item)
+        return sanitized
+    if isinstance(value, (list, tuple)):
+        return [_path_free_pipeline_event_evidence(item) for item in value]
+    if isinstance(value, str) and (
+        os.path.isabs(value)
+        or bool(re.match(r"^[A-Za-z]:[\\/]", value))
+        or value.startswith("\\\\")
+    ):
+        return "<redacted-path>"
+    return value
+
+
+def _pipeline_transition_events(
+    store,
+    job_id: str,
+    *,
+    after_sequence: int,
+) -> list[dict[str, object]]:
+    list_transitions = getattr(store, "list_transitions", None)
+    get_job = getattr(store, "get_job", None)
+    if not callable(list_transitions) or not callable(get_job):
+        return []
+    job = get_job(str(job_id))
+    if not isinstance(job, dict):
+        return []
+    events: list[dict[str, object]] = []
+    for transition in list_transitions(str(job_id)):
+        if not isinstance(transition, dict):
+            continue
+        sequence = int(transition.get("sequence") or 0)
+        if sequence <= int(after_sequence):
+            continue
+        transition_evidence = transition.get("evidence")
+        evidence = (
+            _path_free_pipeline_event_evidence(transition_evidence)
+            if isinstance(transition_evidence, dict)
+            else {}
+        )
+        evidence.update(
+            {
+                "transition_sequence": sequence,
+                "from_state": str(transition.get("from_state") or ""),
+                "actor": str(transition.get("actor") or "system"),
+            }
+        )
+        stage_attempt_id = str(transition.get("stage_attempt_id") or "")
+        if stage_attempt_id:
+            evidence["stage_attempt_id"] = stage_attempt_id
+        events.append(
+            {
+                "event": "pipeline_job_transition",
+                "job_id": str(job_id),
+                "media_revision": str(job.get("media_revision") or ""),
+                "state": str(transition.get("to_state") or job.get("state") or ""),
+                "stage": str(evidence.get("stage") or evidence.get("legacy_stage") or ""),
+                "reason_code": str(transition.get("reason_code") or "pipeline_state_transition"),
+                "confidence": float(transition.get("confidence") or 0.0),
+                "evidence": evidence,
+            }
+        )
+    return events
+
+
+def _warn_pipeline_event_failure(logger, event: dict[str, object], exc: BaseException) -> None:
+    target = logger if callable(getattr(logger, "warning", None)) else logging.getLogger(__name__)
+    target.warning(
+        "Pipeline JSON event append failed after database commit. event=%s job_id=%s error=%s",
+        event.get("event"),
+        event.get("job_id"),
+        exc,
+    )
+
+
+def _append_pipeline_transition_events(config, logger, events: list[dict[str, object]]) -> None:
+    if not events:
+        return
+    log_root = getattr(config, "log_path", None) if config is not None else None
+    if not log_root:
+        return
+    try:
+        from pipeline_event_log import append_pipeline_event
+    except Exception as exc:  # noqa: BLE001 - JSON telemetry cannot roll back committed state.
+        _warn_pipeline_event_failure(logger, events[0], exc)
+        return
+    for event in events:
+        try:
+            append_pipeline_event(
+                log_root,
+                str(event["event"]),
+                job_id=str(event["job_id"]),
+                state=str(event["state"]),
+                reason_code=str(event["reason_code"]),
+                media_revision=str(event.get("media_revision") or ""),
+                stage=str(event.get("stage") or ""),
+                confidence=float(event.get("confidence") or 0.0),
+                evidence=(
+                    _path_free_pipeline_event_evidence(event["evidence"])
+                    if isinstance(event.get("evidence"), dict)
+                    else {}
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001 - JSON telemetry cannot roll back committed state.
+            _warn_pipeline_event_failure(logger, event, exc)
+
+
 def _requeue_previous_worker_running(config, logger) -> int:
     acceptance_lane = load_acceptance_queue_lane(config)
     state = _open_ai_queue_state(config)
     if state is None:
         return 0
+    pipeline_events: list[dict[str, object]] = []
+    recovered_pipeline_jobs = 0
     try:
+        pipeline_store = _pipeline_jobs_for_state(state)
+        if pipeline_store is not None and all(
+            callable(getattr(pipeline_store, method, None))
+            for method in ("recover_interrupted_stages", "get_job", "transition_job")
+        ):
+            recovered = pipeline_store.recover_interrupted_stages(recover_all_running=True)
+            recovered_pipeline_jobs = len(recovered)
+            for item in recovered:
+                if not isinstance(item, dict):
+                    continue
+                job_id = str(item.get("job_id") or "")
+                if not job_id:
+                    continue
+                job = pipeline_store.get_job(job_id)
+                if not isinstance(job, dict):
+                    continue
+                recovery_cursor = _pipeline_transition_cursor(pipeline_store, job)
+                if recovery_cursor:
+                    pipeline_events.extend(
+                        _pipeline_transition_events(
+                            pipeline_store,
+                            job_id,
+                            after_sequence=recovery_cursor - 1,
+                        )
+                    )
+                if str(job.get("state") or "") != "RETRYING":
+                    continue
+                requeue_cursor = _pipeline_transition_cursor(pipeline_store, job)
+                pipeline_store.transition_job(
+                    job_id,
+                    "QUEUED",
+                    reason_code="worker_restart_requeued",
+                    evidence={
+                        "stage": str(item.get("stage") or ""),
+                        "stage_attempt_id": str(item.get("stage_attempt_id") or ""),
+                        "recovered_status": str(item.get("recovered_status") or ""),
+                    },
+                    confidence=1.0,
+                    expected_state="RETRYING",
+                    idempotency_key=(
+                        "worker-restart-requeue:"
+                        + str(item.get("stage_attempt_id") or job_id)
+                    ),
+                    actor="recovery",
+                )
+                pipeline_events.extend(
+                    _pipeline_transition_events(
+                        pipeline_store,
+                        job_id,
+                        after_sequence=requeue_cursor,
+                    )
+                )
+
         def resolve_delivery_evidence(video, attempt, obligation):
             return _verified_ai_delivery_evidence(
                 Path(video),
@@ -6707,13 +7014,17 @@ def _requeue_previous_worker_running(config, logger) -> int:
                 message="Worker restarted before this acceptance job finished",
             )
         state.commit()
-        if count:
+        _append_pipeline_transition_events(config, logger, pipeline_events)
+        requeued_count = max(count, recovered_pipeline_jobs)
+        if count or recovered_pipeline_jobs:
             logger.warning(
-                "Requeued running AI job(s) left by previous worker process: count=%s acceptance_run_id=%s",
+                "Requeued running AI job(s) left by previous worker process: "
+                "count=%s durable_recovered=%s acceptance_run_id=%s",
                 count,
+                recovered_pipeline_jobs,
                 acceptance_lane.run_id if acceptance_lane is not None else "-",
             )
-        return count
+        return requeued_count
     finally:
         state.close()
 
@@ -6724,6 +7035,7 @@ def _mark_queue_running(
     config=None,
     *,
     canary_binding: dict[str, object] | None = None,
+    logger=None,
 ) -> str:
     if state is None:
         return ""
@@ -6740,8 +7052,10 @@ def _mark_queue_running(
             verify_acceptance_queue_target_source(acceptance_target, config)
             acceptance_run_id = acceptance_lane.run_id
     claimed: dict[str, str] = {"attempt_id": ""}
+    pipeline_events: list[dict[str, object]] = []
 
     def claim() -> None:
+        pipeline_events.clear()
         exact_claim: dict[str, object] = {}
         if canary_binding is not None:
             exact_claim = {
@@ -6782,7 +7096,69 @@ def _mark_queue_running(
         )
         claimed["attempt_id"] = str(attempt["attempt_id"])
 
+        pipeline_store = _pipeline_jobs_for_state(state)
+        if pipeline_store is None or not all(
+            callable(getattr(pipeline_store, method, None))
+            for method in ("job_for_path", "transition_legacy_stage")
+        ):
+            return
+        existing_job = pipeline_store.job_for_path(
+            Path(video),
+            size=int(media["media_size"]),
+            mtime_ns=int(media["media_mtime_ns"]),
+            create=False,
+        )
+        transition_cursor = _pipeline_transition_cursor(pipeline_store, existing_job)
+        job = pipeline_store.job_for_path(
+            Path(video),
+            size=int(media["media_size"]),
+            mtime_ns=int(media["media_mtime_ns"]),
+            create=True,
+            initial_state="QUEUED",
+            reason_code="ai_queue_claim_adopted",
+            evidence={
+                "queue": "ai",
+                "delivery_attempt_id": claimed["attempt_id"],
+                "acceptance_run_id": acceptance_run_id,
+            },
+            confidence=1.0,
+        )
+        if not isinstance(job, dict):
+            return
+        configured_attempts = int(getattr(config, "auto_ai_max_attempts", 3) or 3)
+        retry_limit = max(0, max(1, configured_attempts) - 1)
+        pipeline_store.transition_legacy_stage(
+            str(job["job_id"]),
+            "worker",
+            "running",
+            inputs={
+                "queue": "ai",
+                "delivery_attempt_id": claimed["attempt_id"],
+                "acceptance_run_id": acceptance_run_id,
+            },
+            retry_limit=retry_limit,
+            timeout_seconds=max(
+                0,
+                int(getattr(config, "ai_queue_stage_stale_seconds", 900) or 0),
+            ),
+            reason_code="ai_queue_claimed",
+            evidence={
+                "legacy_queue_status": "running",
+                "delivery_attempt_id": claimed["attempt_id"],
+            },
+            confidence=1.0,
+            idempotency_key="ai-queue-claim:" + claimed["attempt_id"],
+        )
+        pipeline_events.extend(
+            _pipeline_transition_events(
+                pipeline_store,
+                str(job["job_id"]),
+                after_sequence=transition_cursor,
+            )
+        )
+
     _commit_ai_queue_state_write(state, claim)
+    _append_pipeline_transition_events(config, logger, pipeline_events)
     return claimed["attempt_id"]
 
 
@@ -6890,6 +7266,297 @@ def _verified_ai_delivery_evidence(
         return None
 
 
+def _pipeline_delivery_evidence_is_final(evidence: object) -> bool:
+    if not isinstance(evidence, dict):
+        return False
+    verification = evidence.get("verification")
+    required = (
+        "required_outputs_complete",
+        "hashes_verified",
+        "publication_marker_absent",
+        "media_identity_matched",
+    )
+    if not isinstance(verification, dict) or not all(
+        verification.get(field) is True for field in required
+    ):
+        return False
+    artifact_paths: list[Path] = []
+    for field in ("manifest_path", "output_path", "delivery_manifest", "publication_manifest"):
+        if evidence.get(field):
+            artifact_paths.append(Path(str(evidence[field])))
+    artifacts = evidence.get("artifacts")
+    if isinstance(artifacts, list):
+        artifact_paths.extend(
+            Path(str(item["path"]))
+            for item in artifacts
+            if isinstance(item, dict) and item.get("path")
+        )
+    forbidden_suffixes = (".tmp", ".part", ".publishing", ".staging")
+    return bool(artifact_paths) and all(
+        path.is_file() and not path.name.casefold().endswith(forbidden_suffixes)
+        for path in artifact_paths
+    )
+
+
+def _pipeline_queue_result_context(state, video, delivery_obligation=None):
+    pipeline_store = _pipeline_jobs_for_state(state)
+    if pipeline_store is None or not callable(getattr(pipeline_store, "job_for_path", None)):
+        return None, None, 0
+    media_size = None
+    media_mtime_ns = None
+    if isinstance(delivery_obligation, dict):
+        media_size = delivery_obligation.get("media_size")
+        media_mtime_ns = delivery_obligation.get("media_mtime_ns")
+    if media_size is None or media_mtime_ns is None:
+        try:
+            media_stat = Path(video).stat()
+        except OSError:
+            return pipeline_store, None, 0
+        media_size = int(media_stat.st_size)
+        media_mtime_ns = int(media_stat.st_mtime_ns)
+    job = pipeline_store.job_for_path(
+        Path(video),
+        size=int(media_size),
+        mtime_ns=int(media_mtime_ns),
+        create=False,
+    )
+    if not isinstance(job, dict):
+        return pipeline_store, None, 0
+    return pipeline_store, job, _pipeline_transition_cursor(pipeline_store, job)
+
+
+def _reconcile_parent_pipeline_failure(
+    pipeline_store,
+    pipeline_job: dict[str, object] | None,
+    *,
+    delivery_attempt_id: str,
+    target_state: str,
+    stage: str,
+    reason_code: str,
+    error_code: str,
+    detail: str,
+) -> bool:
+    """Finish or align the child's existing attempt without spending it twice."""
+
+    if not isinstance(pipeline_job, dict) or pipeline_store is None:
+        return False
+    get_job = getattr(pipeline_store, "get_job", None)
+    list_attempts = getattr(pipeline_store, "list_stage_attempts", None)
+    finish_attempt = getattr(pipeline_store, "finish_stage_attempt", None)
+    transition_job = getattr(pipeline_store, "transition_job", None)
+    if not callable(get_job) or not callable(list_attempts):
+        return False
+    job_id = str(pipeline_job["job_id"])
+    current = get_job(job_id)
+    if not isinstance(current, dict):
+        return False
+    target = str(target_state).upper()
+    attempts = list_attempts(job_id)
+    active_id = str(current.get("active_stage_attempt_id") or "")
+    active = next(
+        (
+            item
+            for item in attempts
+            if isinstance(item, dict)
+            and str(item.get("stage_attempt_id") or "") == active_id
+            and str(item.get("status") or "").upper() == "RUNNING"
+        ),
+        None,
+    )
+    common_evidence = {
+        "source": "parent_queue_reconcile",
+        "delivery_attempt_id": str(delivery_attempt_id or ""),
+        "reported_legacy_stage": str(stage or "worker"),
+        "active_formal_stage": str(active.get("stage") or "") if active else "",
+    }
+    if active is not None and callable(finish_attempt):
+        if target == "FAILED":
+            final_status = "PERMANENT_FAILURE"
+            error_class = "permanent"
+        elif target == "NEEDS_REVIEW":
+            final_status = "NEEDS_REVIEW"
+            error_class = "quality"
+        else:
+            final_status = "RETRYABLE_FAILURE"
+            error_class = (
+                "resource"
+                if "resource" in str(error_code).casefold()
+                or "oom" in str(error_code).casefold()
+                else "transient"
+            )
+        timeout_seconds = float(active.get("timeout_seconds") or 0.0)
+        heartbeat_at = float(active.get("heartbeat_at") or 0.0)
+        now = time.time()
+        watchdog_expired = bool(
+            timeout_seconds > 0 and heartbeat_at + timeout_seconds <= now
+        )
+        finish_attempt(
+            str(active["stage_attempt_id"]),
+            final_status,
+            outputs=active.get("output", {}),
+            outputs_verified=False,
+            error_class=error_class,
+            error_code=str(error_code or "parent_observed_worker_failure"),
+            error={
+                "message": str(detail or "worker returned false")[:1000],
+                "reported_legacy_stage": str(stage or "worker"),
+                "watchdog_expired": watchdog_expired,
+                "heartbeat_at": heartbeat_at,
+                "timeout_seconds": timeout_seconds,
+            },
+            reason_code=reason_code,
+            evidence={
+                **common_evidence,
+                "watchdog_expired": watchdog_expired,
+                "heartbeat_at": heartbeat_at,
+                "timeout_seconds": timeout_seconds,
+            },
+            confidence=1.0,
+        )
+        return True
+
+    current_state = str(current.get("state") or "").upper()
+    if current_state in {"RETRYING", "NEEDS_REVIEW", "FAILED"}:
+        # A child-side _set_stage(..., failed) already closed the real attempt.
+        # Only align to a stricter queue terminal decision; never create a
+        # second synthetic attempt or regress NEEDS_REVIEW/FAILED to RETRYING.
+        if (
+            current_state == "RETRYING"
+            and target in {"NEEDS_REVIEW", "FAILED"}
+            and callable(transition_job)
+        ):
+            transition_job(
+                job_id,
+                target,
+                reason_code=reason_code,
+                evidence={**common_evidence, "child_failure_already_recorded": True},
+                confidence=1.0,
+                expected_state="RETRYING",
+                idempotency_key=(
+                    "ai-parent-failure-align:" + str(delivery_attempt_id)
+                    if delivery_attempt_id
+                    else None
+                ),
+                actor="queue_parent",
+            )
+        return True
+    return False
+
+
+def _record_pipeline_queue_result(
+    pipeline_store,
+    pipeline_job: dict[str, object] | None,
+    transition_cursor: int,
+    *,
+    config,
+    delivery_attempt_id: str,
+    target_state: str,
+    stage: str,
+    reason_code: str,
+    error_code: str = "",
+    detail: str = "",
+    delivery_evidence: dict[str, object] | None = None,
+) -> list[dict[str, object]]:
+    if not isinstance(pipeline_job, dict) or pipeline_store is None:
+        return []
+    transition_legacy_stage = getattr(pipeline_store, "transition_legacy_stage", None)
+    if not callable(transition_legacy_stage):
+        return []
+    job_id = str(pipeline_job["job_id"])
+    target = str(target_state).upper()
+    common_evidence = {
+        "legacy_queue_state": target,
+        "delivery_attempt_id": str(delivery_attempt_id or ""),
+        "detail": str(detail or "")[:1000],
+    }
+    if target == "COMPLETED":
+        if not _pipeline_delivery_evidence_is_final(delivery_evidence):
+            raise ValueError("durable completion requires final strict delivery evidence")
+        formal_evidence = {**dict(delivery_evidence or {}), "delivery_verified": True}
+        transition_legacy_stage(
+            job_id,
+            "delivery_verification",
+            "success",
+            outputs={"delivery_evidence": formal_evidence},
+            outputs_verified=True,
+            reason_code="strict_delivery_verified",
+            evidence={**common_evidence, "delivery_verified": True},
+            confidence=1.0,
+            idempotency_key=(
+                "ai-delivery-verified:" + str(delivery_attempt_id)
+                if delivery_attempt_id
+                else None
+            ),
+        )
+        complete_job = getattr(pipeline_store, "complete_job", None)
+        if not callable(complete_job):
+            return []
+        complete_job(
+            job_id,
+            delivery_evidence=formal_evidence,
+            reason_code=reason_code,
+            confidence=1.0,
+            idempotency_key=(
+                "ai-delivery-complete:" + str(delivery_attempt_id)
+                if delivery_attempt_id
+                else None
+            ),
+        )
+    else:
+        configured_attempts = int(getattr(config, "auto_ai_max_attempts", 3) or 3)
+        retry_limit = max(0, max(1, configured_attempts) - 1)
+        if target == "FAILED":
+            legacy_status = "failed"
+            error_class = "permanent"
+        elif target == "NEEDS_REVIEW":
+            legacy_status = "needs_review"
+            error_class = "quality"
+        else:
+            legacy_status = "retryable_failure"
+            error_class = (
+                "resource"
+                if "resource" in str(error_code).casefold() or "oom" in str(error_code).casefold()
+                else "transient"
+            )
+        if _reconcile_parent_pipeline_failure(
+            pipeline_store,
+            pipeline_job,
+            delivery_attempt_id=delivery_attempt_id,
+            target_state=target,
+            stage=stage,
+            reason_code=reason_code,
+            error_code=error_code,
+            detail=detail,
+        ):
+            return _pipeline_transition_events(
+                pipeline_store,
+                job_id,
+                after_sequence=transition_cursor,
+            )
+        transition_legacy_stage(
+            job_id,
+            str(stage or "worker"),
+            legacy_status,
+            retry_limit=retry_limit,
+            error_class=error_class,
+            error_code=str(error_code or "worker_failed"),
+            error={"message": str(detail or "worker returned false")[:1000]},
+            reason_code=reason_code,
+            evidence=common_evidence,
+            confidence=1.0,
+            idempotency_key=(
+                "ai-queue-result:" + str(delivery_attempt_id)
+                if delivery_attempt_id
+                else None
+            ),
+        )
+    return _pipeline_transition_events(
+        pipeline_store,
+        job_id,
+        after_sequence=transition_cursor,
+    )
+
+
 def _mark_queue_result(
     state,
     video,
@@ -6897,12 +7564,15 @@ def _mark_queue_result(
     config,
     *,
     delivery_attempt_id: str = "",
+    logger=None,
 ) -> None:
     if state is None:
         return
     metric_result = {"ok": bool(ok)}
+    pipeline_events: list[dict[str, object]] = []
 
     def write_result() -> None:
+        pipeline_events.clear()
         delivery_attempt = (
             state.get_ai_delivery_attempt(delivery_attempt_id)
             if delivery_attempt_id
@@ -6913,6 +7583,11 @@ def _mark_queue_result(
             if delivery_attempt is not None
             else None
         )
+        pipeline_store, pipeline_job, transition_cursor = _pipeline_queue_result_context(
+            state,
+            video,
+            delivery_obligation,
+        )
         if ok:
             if delivery_attempt is not None and delivery_obligation is not None:
                 evidence = _verified_ai_delivery_evidence(
@@ -6922,7 +7597,7 @@ def _mark_queue_result(
                     expected_policy_revision=str(delivery_obligation["policy_revision"]),
                     attempt_started_at=float(delivery_attempt["started_at"]),
                 )
-                if evidence is not None:
+                if _pipeline_delivery_evidence_is_final(evidence):
                     state.finish_ai_delivery_attempt(
                         delivery_attempt_id,
                         status="succeeded",
@@ -6937,6 +7612,19 @@ def _mark_queue_result(
                         verified_at=float(evidence["verified_at"]),
                     )
                     state.mark_ai_queue_done(video)
+                    pipeline_events.extend(
+                        _record_pipeline_queue_result(
+                            pipeline_store,
+                            pipeline_job,
+                            transition_cursor,
+                            config=config,
+                            delivery_attempt_id=delivery_attempt_id,
+                            target_state="COMPLETED",
+                            stage="delivery_verification",
+                            reason_code="verified_delivery_completed",
+                            delivery_evidence=evidence,
+                        )
+                    )
                     metric_result["ok"] = True
                     return
 
@@ -6964,6 +7652,24 @@ def _mark_queue_result(
                     error_code="delivery_evidence_missing",
                     detail=failure_message,
                 )
+                pipeline_events.extend(
+                    _record_pipeline_queue_result(
+                        pipeline_store,
+                        pipeline_job,
+                        transition_cursor,
+                        config=config,
+                        delivery_attempt_id=delivery_attempt_id,
+                        target_state="NEEDS_REVIEW" if review_required else "RETRYING",
+                        stage="delivery_verification",
+                        reason_code=(
+                            "delivery_evidence_missing_review"
+                            if review_required
+                            else "delivery_evidence_missing_retry"
+                        ),
+                        error_code="delivery_evidence_missing",
+                        detail=failure_message,
+                    )
+                )
                 metric_result["ok"] = False
                 return
 
@@ -6975,8 +7681,36 @@ def _mark_queue_result(
 
                 if not has_ai_finished_subtitle(video, config):
                     state.force_ai_queue_candidate(video)
+                    pipeline_events.extend(
+                        _record_pipeline_queue_result(
+                            pipeline_store,
+                            pipeline_job,
+                            transition_cursor,
+                            config=config,
+                            delivery_attempt_id=delivery_attempt_id,
+                            target_state="RETRYING",
+                            stage="delivery_verification",
+                            reason_code="delivery_evidence_missing_retry",
+                            error_code="delivery_evidence_missing",
+                            detail="AI output is not yet a verified delivery",
+                        )
+                    )
                     return
             state.mark_ai_queue_done(video)
+            pipeline_events.extend(
+                _record_pipeline_queue_result(
+                    pipeline_store,
+                    pipeline_job,
+                    transition_cursor,
+                    config=config,
+                    delivery_attempt_id=delivery_attempt_id,
+                    target_state="RETRYING",
+                    stage="delivery_verification",
+                    reason_code="delivery_evidence_missing_retry",
+                    error_code="delivery_evidence_missing",
+                    detail="Legacy success had no strict delivery evidence",
+                )
+            )
         else:
             retry_seconds = int(getattr(config, "auto_ai_failure_cooldown_seconds", 0) or 0)
             failure = state.ai_job_failure(video)
@@ -6995,6 +7729,20 @@ def _mark_queue_result(
                         error_code="deterministic_asr_quality",
                         detail=str(failure[1]),
                     )
+                pipeline_events.extend(
+                    _record_pipeline_queue_result(
+                        pipeline_store,
+                        pipeline_job,
+                        transition_cursor,
+                        config=config,
+                        delivery_attempt_id=delivery_attempt_id,
+                        target_state="NEEDS_REVIEW",
+                        stage="transcription_review",
+                        reason_code="deterministic_asr_quality_review",
+                        error_code="deterministic_asr_quality",
+                        detail=str(failure[1]),
+                    )
+                )
             else:
                 from control_state import open_ai_quality_review_for_target
 
@@ -7034,8 +7782,31 @@ def _mark_queue_result(
                             error_code=error_code,
                             detail=failure_message,
                         )
+                    pipeline_events.extend(
+                        _record_pipeline_queue_result(
+                            pipeline_store,
+                            pipeline_job,
+                            transition_cursor,
+                            config=config,
+                            delivery_attempt_id=delivery_attempt_id,
+                            target_state="NEEDS_REVIEW" if review_required else "RETRYING",
+                            stage=failure_stage,
+                            reason_code=(
+                                "legacy_retry_budget_exhausted"
+                                if review_required
+                                else "legacy_retry_scheduled"
+                            ),
+                            error_code=error_code,
+                            detail=failure_message,
+                        )
+                    )
                     return
                 if open_review is not None:
+                    review_error_code = (
+                        "asr_quality_review"
+                        if str(open_review.get("kind") or "") == "asr_quality"
+                        else "subtitle_quality_review"
+                    )
                     state.mark_ai_queue_review_required(
                         video,
                         str(failure[1] if failure is not None else "Open AI quality review requires attention"),
@@ -7047,11 +7818,6 @@ def _mark_queue_result(
                         ),
                     )
                     if delivery_attempt is not None:
-                        review_error_code = (
-                            "asr_quality_review"
-                            if str(open_review.get("kind") or "") == "asr_quality"
-                            else "subtitle_quality_review"
-                        )
                         state.finish_ai_delivery_attempt(
                             delivery_attempt_id,
                             status="review_required",
@@ -7063,6 +7829,24 @@ def _mark_queue_result(
                                 else "Open AI quality review requires attention"
                             ),
                         )
+                    pipeline_events.extend(
+                        _record_pipeline_queue_result(
+                            pipeline_store,
+                            pipeline_job,
+                            transition_cursor,
+                            config=config,
+                            delivery_attempt_id=delivery_attempt_id,
+                            target_state="NEEDS_REVIEW",
+                            stage="quality_review",
+                            reason_code="legacy_quality_review_required",
+                            error_code=review_error_code,
+                            detail=str(
+                                failure[1]
+                                if failure is not None
+                                else "Open AI quality review requires attention"
+                            ),
+                        )
+                    )
                     return
                 review_required = state.mark_ai_queue_failed(
                     video,
@@ -7080,8 +7864,36 @@ def _mark_queue_result(
                         error_code=error_code,
                         detail=failure_message,
                     )
+                durable_target = (
+                    "FAILED"
+                    if retry_strategy == "permanent"
+                    else ("NEEDS_REVIEW" if review_required else "RETRYING")
+                )
+                pipeline_events.extend(
+                    _record_pipeline_queue_result(
+                        pipeline_store,
+                        pipeline_job,
+                        transition_cursor,
+                        config=config,
+                        delivery_attempt_id=delivery_attempt_id,
+                        target_state=durable_target,
+                        stage=failure_stage,
+                        reason_code=(
+                            "legacy_permanent_failure"
+                            if durable_target == "FAILED"
+                            else (
+                                "legacy_retry_budget_exhausted"
+                                if durable_target == "NEEDS_REVIEW"
+                                else "legacy_retry_scheduled"
+                            )
+                        ),
+                        error_code=error_code,
+                        detail=failure_message,
+                    )
+                )
 
     _commit_ai_queue_state_write(state, write_result)
+    _append_pipeline_transition_events(config, logger, pipeline_events)
     try:
         from control_state import increment_daily_metric
 

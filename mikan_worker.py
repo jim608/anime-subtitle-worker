@@ -336,6 +336,11 @@ class MikanWorker:
         )
         self._resolved_series_mappings: list[dict[str, object]] | None = None
         self._episode_index_ready = False
+        self._episode_index_next_check_monotonic = 0.0
+        self._fallback_library_scan_next_at = 0.0
+        self._fallback_library_scan_offset = 0
+        self._fallback_library_scan_runs = 0
+        self._fallback_library_scan_roots = 0
         self._pending_episode_repair_done = False
         self._terminal_completion_repair_done = False
         self._fallback_sources = FallbackSourcePool(config, logger)
@@ -1433,6 +1438,9 @@ class MikanWorker:
             self.logger.warning("Mikan cached series mappings are empty during redownload; falling back to full local series discovery.")
             series_mappings = self._series_mappings()
         library_scan_mappings = _library_scan_series_mappings(self.config, self.logger, series_mappings)
+        library_scan_mappings, episode_index_ready = self._library_scan_plan(
+            library_scan_mappings
+        )
         bangumi_ids = _bangumi_ids_for_run(self.config, library_scan_mappings)
         if not bangumi_ids:
             self.logger.warning("Mikan sync skipped because no bangumi ids or auto-matched series are available.")
@@ -1602,6 +1610,7 @@ class MikanWorker:
                     bangumi_mappings,
                     pending=pending,
                     candidate_episodes=candidate_episodes,
+                    episode_index_ready=episode_index_ready,
                     progress_callback=report_scan_progress if redownload_progress else None,
                     stop_callback=should_stop_scan if redownload_progress or allow_redownload_preempt else None,
                 )
@@ -2230,41 +2239,34 @@ class MikanWorker:
         return restored
 
     def _ensure_episode_index(self, series_mappings: list[dict[str, object]]) -> None:
-        if self._episode_index_ready:
+        """Refresh readiness only; the bounded scan plan owns reconciliation.
+
+        This method is used by several hot workers. Recursive work here used to
+        synchronize a full-library rebuild whenever the global TTL expired.
+        """
+
+        now_monotonic = time.monotonic()
+        if self._episode_index_ready and now_monotonic < self._episode_index_next_check_monotonic:
             return
-        refresh_lock: VideoLock | None = None
-        try:
-            if _mikan_episode_index_is_fresh(self.config):
-                self.logger.info("Mikan episode index refresh skipped; existing index is fresh.")
-                return
-            refresh_lock = _mikan_episode_index_lock(self.config)
-            if not refresh_lock.acquire():
-                deadline = time.monotonic() + min(
-                    120.0,
-                    max(5.0, _mikan_operation_lock_wait_seconds(self.config)),
-                )
-                while time.monotonic() < deadline:
-                    if _mikan_episode_index_is_fresh(self.config):
-                        self.logger.info("Mikan episode index refresh completed by another worker.")
-                        return
-                    time.sleep(0.25)
-                self.logger.warning(
-                    "Mikan episode index refresh is still owned by another worker; using the existing index or filesystem fallback."
-                )
-                return
-            # Another process may have refreshed while this process was
-            # acquiring the cross-process lock. Avoid a second full walk.
-            if _mikan_episode_index_is_fresh(self.config):
-                self.logger.info("Mikan episode index refresh skipped after lock; existing index is fresh.")
-                return
-            indexed = _refresh_mikan_episode_index(self.config, self.logger, series_mappings)
-            self.logger.info("Mikan episode index refreshed. indexed=%s", indexed)
-        except (OSError, sqlite3.Error) as exc:
-            self.logger.warning("Mikan episode index refresh failed; falling back to filesystem matching: %s", exc)
-        finally:
-            if refresh_lock is not None:
-                refresh_lock.release()
-            self._episode_index_ready = True
+        check_interval = min(
+            300,
+            max(
+                1,
+                int(
+                    getattr(
+                        self.config,
+                        "mikan_library_fallback_scan_interval_seconds",
+                        3600,
+                    )
+                    or 3600
+                ),
+            ),
+        )
+        self._episode_index_ready = _mikan_episode_index_covers_mappings(
+            self.config,
+            series_mappings,
+        )
+        self._episode_index_next_check_monotonic = now_monotonic + check_interval
 
     def _enqueue_completed_extract_jobs(
         self,
@@ -4209,6 +4211,104 @@ class MikanWorker:
         ]
         return manual + retained
 
+    def _library_scan_plan(
+        self,
+        mappings: list[dict[str, object]],
+    ) -> tuple[list[dict[str, object]], bool]:
+        """Use the persistent index and reconcile at most N roots per cooled run."""
+
+        self._ensure_episode_index(mappings)
+        index_covers_all = _mikan_episode_index_covers_mappings(self.config, mappings)
+        due_mappings = _mikan_episode_index_due_mappings(self.config, mappings)
+        if index_covers_all and not due_mappings:
+            return list(mappings), True
+
+        fallback_interval = max(
+            1,
+            int(
+                getattr(
+                    self.config,
+                    "mikan_library_fallback_scan_interval_seconds",
+                    3600,
+                )
+                or 3600
+            ),
+        )
+        now_monotonic = time.monotonic()
+        if (
+            now_monotonic < self._fallback_library_scan_next_at
+            or not _mikan_episode_index_reconcile_due(self.config)
+        ):
+            self.logger.warning(
+                "Mikan library discovery deferred. reason=episode_index_unavailable_cooldown "
+                "fallback_runs=%s fallback_roots=%s retry_after_seconds=%s",
+                self._fallback_library_scan_runs,
+                self._fallback_library_scan_roots,
+                max(1, int(self._fallback_library_scan_next_at - now_monotonic)),
+            )
+            return (list(mappings), True) if index_covers_all else ([], False)
+
+        fallback_limit = max(
+            1,
+            int(
+                getattr(
+                    self.config,
+                    "mikan_library_fallback_scan_max_series_per_cycle",
+                    8,
+                )
+                or 8
+            ),
+        )
+        selected = due_mappings[:fallback_limit]
+        if not selected:
+            return (list(mappings), True) if index_covers_all else ([], False)
+        self._fallback_library_scan_next_at = now_monotonic + fallback_interval
+        self._fallback_library_scan_runs += 1
+        self._fallback_library_scan_roots += len(selected)
+
+        refresh_lock = _mikan_episode_index_lock(self.config)
+        refresh_succeeded = False
+        lock_acquired = False
+        try:
+            lock_acquired = bool(refresh_lock.acquire())
+            if lock_acquired:
+                # Recheck the persistent deadline after taking the lock so
+                # concurrent worker processes cannot each scan another batch.
+                if _mikan_episode_index_reconcile_due(self.config):
+                    _refresh_mikan_episode_index(self.config, self.logger, selected)
+                    refresh_succeeded = True
+            else:
+                self.logger.warning(
+                    "Mikan episode index incremental reconciliation is owned by another worker."
+                )
+        except (OSError, sqlite3.Error) as exc:
+            self.logger.warning(
+                "Mikan episode index incremental reconciliation failed; using bounded filesystem fallback: %s",
+                exc,
+            )
+        finally:
+            if lock_acquired:
+                refresh_lock.release()
+
+        if refresh_succeeded:
+            index_covers_all = _mikan_episode_index_covers_mappings(self.config, mappings)
+        self.logger.warning(
+            "Mikan library discovery using bounded incremental reconciliation. "
+            "reason=episode_index_incremental_bounded_reconcile fallback_run=%s "
+            "selected_roots=%s deferred_roots=%s roots_total=%s cooldown_seconds=%s",
+            self._fallback_library_scan_runs,
+            len(selected),
+            max(0, len(mappings) - len(selected)),
+            self._fallback_library_scan_roots,
+            fallback_interval,
+        )
+        if index_covers_all:
+            return list(mappings), True
+        # A successful bounded reconciliation makes these selected roots safe
+        # to query through the persistent index (including zero-video roots).
+        # On persistence failure the same bounded roots get one direct scan.
+        return selected, refresh_succeeded
+
     def _consume_completed_state_update_request_unlocked(self) -> dict[str, Any]:
         request_path = _mikan_completed_state_update_request_path(self.config)
         request = _load_request_file(request_path)
@@ -4912,13 +5012,104 @@ def _mikan_episode_index_is_fresh(config: AppConfig) -> bool:
             conn.close()
 
 
+def _mikan_episode_index_mapping_key(
+    mapping: Mapping[str, object],
+) -> tuple[int, str] | None:
+    bangumi_id = _coerce_int(mapping.get("bangumi_id"))
+    raw_path = str(mapping.get("path") or "").strip()
+    if bangumi_id is None or not raw_path:
+        return None
+    return int(bangumi_id), str(_safe_resolve(Path(raw_path)))
+
+
+def _mikan_episode_index_mapping_timestamps(
+    config: AppConfig,
+) -> dict[tuple[int, str], float]:
+    """Read durable per-root timestamps, including legacy index-only rows."""
+
+    conn: sqlite3.Connection | None = None
+    result: dict[tuple[int, str], float] = {}
+    try:
+        conn = _mikan_state_connect(config)
+        for bangumi_id, series_path, scanned_at in conn.execute(
+            "SELECT bangumi_id, series_path, scanned_at FROM anime_episode_index_roots"
+        ).fetchall():
+            key = (int(bangumi_id), str(_safe_resolve(Path(str(series_path)))))
+            result[key] = max(result.get(key, 0.0), float(scanned_at or 0))
+        for bangumi_id, series_path, updated_at in conn.execute(
+            """
+            SELECT bangumi_id, series_path, MAX(updated_at)
+            FROM anime_episode_index
+            GROUP BY bangumi_id, series_path
+            """
+        ).fetchall():
+            key = (int(bangumi_id), str(_safe_resolve(Path(str(series_path)))))
+            result[key] = max(result.get(key, 0.0), float(updated_at or 0))
+        return result
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        return {}
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _mikan_episode_index_covers_mappings(
+    config: AppConfig,
+    mappings: list[dict[str, object]],
+) -> bool:
+    keys = [
+        key
+        for mapping in mappings
+        if (key := _mikan_episode_index_mapping_key(mapping)) is not None
+    ]
+    if not keys:
+        return False
+    timestamps = _mikan_episode_index_mapping_timestamps(config)
+    return all(timestamps.get(key, 0.0) > 0 for key in keys)
+
+
+def _mikan_episode_index_due_mappings(
+    config: AppConfig,
+    mappings: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    timestamps = _mikan_episode_index_mapping_timestamps(config)
+    cutoff = time.time() - _mikan_episode_index_ttl_seconds(config)
+    candidates: list[tuple[float, str, dict[str, object]]] = []
+    for mapping in mappings:
+        key = _mikan_episode_index_mapping_key(mapping)
+        if key is None:
+            continue
+        scanned_at = float(timestamps.get(key, 0.0))
+        if scanned_at <= 0 or scanned_at <= cutoff:
+            candidates.append((scanned_at, key[1].casefold(), mapping))
+    return [mapping for _timestamp, _path, mapping in sorted(candidates, key=lambda row: row[:2])]
+
+
+def _mikan_episode_index_reconcile_due(config: AppConfig) -> bool:
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = _mikan_state_connect(config)
+        row = conn.execute(
+            "SELECT value FROM mikan_state_meta WHERE key='episode_index_next_reconcile_at'"
+        ).fetchone()
+        return row is None or float(row[0] or 0) <= time.time()
+    except (OSError, sqlite3.Error, TypeError, ValueError):
+        return True
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def _refresh_mikan_episode_index(
     config: AppConfig,
     logger: logging.Logger,
     series_mappings: list[dict[str, object]],
 ) -> int:
+    """Incrementally replace only the selected roots in the persistent index."""
+
     now = time.time()
     rows: list[tuple[int, int, int | None, str, str, float]] = []
+    scanned_roots: list[tuple[int, str, float]] = []
     for mapping in series_mappings:
         bangumi_id = _coerce_int(mapping.get("bangumi_id"))
         if bangumi_id is None:
@@ -4927,6 +5118,7 @@ def _refresh_mikan_episode_index(
         if not root.exists():
             logger.warning("Mikan episode index skipped missing series path: bangumi_id=%s path=%s", bangumi_id, root)
             continue
+        resolved_root = str(_safe_resolve(root))
         for video in _find_video_files(root, config.video_extensions):
             episode = extract_episode_number(video.name)
             if episode is None:
@@ -4937,14 +5129,21 @@ def _refresh_mikan_episode_index(
                     episode,
                     _season_number_for_video(video),
                     str(_safe_resolve(video)),
-                    str(_safe_resolve(root)),
+                    resolved_root,
                     now,
                 )
             )
+        # Empty roots are still durably reconciled; otherwise they would be
+        # selected and walked on every fallback cycle forever.
+        scanned_roots.append((bangumi_id, resolved_root, now))
 
     conn = _mikan_state_connect(config)
     try:
-        conn.execute("DELETE FROM anime_episode_index")
+        for bangumi_id, series_path, _scanned_at in scanned_roots:
+            conn.execute(
+                "DELETE FROM anime_episode_index WHERE bangumi_id=? AND series_path=?",
+                (bangumi_id, series_path),
+            )
         conn.executemany(
             """
             INSERT OR REPLACE INTO anime_episode_index(
@@ -4954,13 +5153,41 @@ def _refresh_mikan_episode_index(
             """,
             rows,
         )
+        conn.executemany(
+            """
+            INSERT INTO anime_episode_index_roots(bangumi_id, series_path, scanned_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(bangumi_id, series_path) DO UPDATE SET
+                scanned_at=excluded.scanned_at
+            """,
+            scanned_roots,
+        )
+        reconcile_interval = max(
+            1,
+            int(
+                getattr(
+                    config,
+                    "mikan_library_fallback_scan_interval_seconds",
+                    3600,
+                )
+                or 3600
+            ),
+        )
         conn.execute(
             """
             INSERT INTO mikan_state_meta(key, value, updated_at)
-            VALUES ('episode_index_refreshed_at', ?, ?)
+            VALUES ('episode_index_last_incremental_at', ?, ?)
             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
             """,
             (str(now), now),
+        )
+        conn.execute(
+            """
+            INSERT INTO mikan_state_meta(key, value, updated_at)
+            VALUES ('episode_index_next_reconcile_at', ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (str(now + reconcile_interval), now),
         )
         conn.commit()
         return len(rows)
@@ -4975,17 +5202,22 @@ def _target_videos_from_episode_index(
     *,
     season_hint: int | None = None,
 ) -> list[Path]:
-    bangumi_ids = sorted(
+    mapping_pairs = sorted(
         {
-            bangumi_id
+            (int(bangumi_id), str(_safe_resolve(Path(raw_path))))
             for mapping in series_mappings
             if (bangumi_id := _coerce_int(mapping.get("bangumi_id"))) is not None
+            and (raw_path := str(mapping.get("path") or "").strip())
         }
     )
-    if not bangumi_ids:
+    if not mapping_pairs:
         return []
-    placeholders = ",".join("?" for _ in bangumi_ids)
-    params: list[object] = [*bangumi_ids, int(episode)]
+    pair_clause = " OR ".join(
+        "(bangumi_id=? AND series_path=?)" for _pair in mapping_pairs
+    )
+    params: list[object] = [int(episode)]
+    for bangumi_id, series_path in mapping_pairs:
+        params.extend((bangumi_id, series_path))
     season_clause = ""
     if season_hint is not None:
         season_clause = " AND (season IS NULL OR season = ?)"
@@ -4997,8 +5229,8 @@ def _target_videos_from_episode_index(
             f"""
             SELECT path
             FROM anime_episode_index
-            WHERE bangumi_id IN ({placeholders})
-              AND episode = ?
+            WHERE episode = ?
+              AND ({pair_clause})
               {season_clause}
             ORDER BY CASE WHEN season = ? THEN 0 ELSE 1 END, path
             """,
@@ -5100,6 +5332,7 @@ def _missing_episodes_for_bangumi(
     *,
     pending: dict[str, Any] | None = None,
     candidate_episodes: set[int] | None = None,
+    episode_index_ready: bool = False,
     progress_callback: Callable[[int, int, Path], None] | None = None,
     stop_callback: Callable[[], bool] | None = None,
 ) -> set[int]:
@@ -5107,6 +5340,38 @@ def _missing_episodes_for_bangumi(
     scanned_series = 0
     deferred_no_candidate = 0
     now = _utc_now()
+    if episode_index_ready and candidate_episodes is not None:
+        indexed_videos = 0
+        for episode in sorted(candidate_episodes):
+            if stop_callback is not None and stop_callback():
+                logger.warning(
+                    "Mikan indexed missing-episode scan stopped early because an operation stop was requested. "
+                    "bangumi_id=%s",
+                    bangumi_id,
+                )
+                return missing
+            if pending is not None and _no_candidate_retry_active(pending, bangumi_id, episode, now):
+                deferred_no_candidate += 1
+                continue
+            candidates = _target_videos_from_episode_index(
+                config,
+                series_mappings,
+                episode,
+            )
+            indexed_videos += len(candidates)
+            if any(video.is_file() and not _has_official_chinese_subtitle(video) for video in candidates):
+                missing.add(episode)
+        logger.info(
+            "Mikan library scan bangumi summary reason=episode_index bangumi_id=%s "
+            "candidate_episodes=%s indexed_videos=%s missing_episodes=%s deferred_no_candidate=%s",
+            bangumi_id,
+            len(candidate_episodes),
+            indexed_videos,
+            len(missing),
+            deferred_no_candidate,
+        )
+        return missing
+
     total_series = len(series_mappings)
     for index, mapping in enumerate(series_mappings, start=1):
         if stop_callback is not None and stop_callback():
@@ -5138,7 +5403,8 @@ def _missing_episodes_for_bangumi(
         scanned_series += 1
 
     logger.info(
-        "Mikan library scan bangumi summary bangumi_id=%s scanned_series=%s missing_episodes=%s deferred_no_candidate=%s",
+        "Mikan library scan bangumi summary reason=filesystem_fallback bangumi_id=%s "
+        "scanned_series=%s missing_episodes=%s deferred_no_candidate=%s",
         bangumi_id,
         scanned_series,
         len(missing),
@@ -8348,6 +8614,20 @@ def _ensure_mikan_state_tables(conn: sqlite3.Connection) -> None:
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_anime_episode_index_lookup ON anime_episode_index(bangumi_id, episode)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_anime_episode_index_path ON anime_episode_index(path)")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS anime_episode_index_roots (
+            bangumi_id INTEGER NOT NULL,
+            series_path TEXT NOT NULL,
+            scanned_at REAL NOT NULL,
+            PRIMARY KEY(bangumi_id, series_path)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_anime_episode_index_roots_scanned "
+        "ON anime_episode_index_roots(scanned_at)"
+    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS mikan_extract_jobs (

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 import sqlite3
 from types import SimpleNamespace
@@ -14,11 +15,17 @@ from audio import AudioStreamInfo
 from srt_utils import SrtBlock, read_srt, validate_translation, write_srt
 from language_detector import AudioStreamSelection, LanguageDetectionResult
 from metadata_context import MetadataContext
-from output_manifest import delivery_identity, validate_output_manifest
+from output_manifest import (
+    begin_output_publication,
+    delivery_identity,
+    output_publication_marker_path,
+    validate_output_manifest,
+)
 from safe_files import atomic_write_text as real_atomic_write_text
 from safe_files import sha256_file
 from safe_files import verified_copy_replace as real_verified_copy_replace
 from scan_state import ScanStateStore
+from source_integrity import SourceIntegrityError, capture_source_snapshot
 from subtitle_quality import SubtitleQualityError, managed_quality_report_path
 from subtitle_paths import (
     has_ai_finished_subtitle,
@@ -200,6 +207,63 @@ class VideoWorkerTest(unittest.TestCase):
                 [path.read_text(encoding="utf-8") for path in destinations],
                 ["old-0", "old-1", "old-2"],
             )
+
+    def test_same_size_mtime_source_swap_before_replace_preserves_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = _config(root)
+            worker = VideoWorker(config, _logger())
+            video = root / "Anime S01E01.mkv"
+            video.write_bytes(b"original-media")
+            original_stat = video.stat()
+            worker._source_snapshot = capture_source_snapshot(video)
+            staged = root / "staged.ass"
+            destination = root / "published.ass"
+            staged.write_text("new-verified-output", encoding="utf-8")
+            destination.write_text("old-published-output", encoding="utf-8")
+            begin_output_publication(video, config)
+            marker = output_publication_marker_path(video, config)
+            swapped = False
+
+            def backup_then_swap(source: Path, target: Path) -> Path:
+                nonlocal swapped
+                result = real_verified_copy_replace(source, target)
+                if Path(source) == destination and not swapped:
+                    replacement = root / "replacement.mkv"
+                    replacement.write_bytes(b"changed-media!")
+                    self.assertEqual(replacement.stat().st_size, original_stat.st_size)
+                    os.utime(
+                        replacement,
+                        ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+                    )
+                    video.unlink()
+                    replacement.replace(video)
+                    os.utime(
+                        video,
+                        ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+                    )
+                    swapped = True
+                return result
+
+            with patch(
+                "worker.verified_copy_replace",
+                side_effect=backup_then_swap,
+            ):
+                with self.assertRaises(SourceIntegrityError):
+                    worker._replace_ai_outputs_with_rollback(
+                        video,
+                        [staged],
+                        [destination],
+                    )
+
+            self.assertTrue(swapped)
+            self.assertEqual(video.stat().st_size, original_stat.st_size)
+            self.assertEqual(video.stat().st_mtime_ns, original_stat.st_mtime_ns)
+            self.assertEqual(
+                destination.read_text(encoding="utf-8"),
+                "old-published-output",
+            )
+            self.assertTrue(marker.is_file())
 
     def test_rollback_attempts_every_output_and_records_incomplete_restore(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -810,6 +874,362 @@ class VideoWorkerTest(unittest.TestCase):
             state.rollback.assert_called_once_with()
             state.close.assert_called_once_with()
             self.assertIsNone(worker._stage_state)
+
+    def test_durable_legacy_stage_sequence_reaches_mux_without_conflict(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Anime S01E01.mkv"
+            video.write_bytes(b"video")
+            config = _config(
+                root,
+                scanner_state_path=str(root / "scanner_state.sqlite3"),
+                scanner_cache_enabled=True,
+                scanner_queue_enabled=True,
+                pipeline_job_store_required=True,
+                auto_ai_max_attempts=4,
+                ai_subprocess_timeout_seconds=123,
+                translator_model="test-translator",
+                log_path=root / "logs",
+            )
+            worker = VideoWorker(config, _logger())
+            sequence = [
+                ("worker", "running"),
+                ("preflight", "running"),
+                ("preflight", "ok"),
+                ("audio", "running"),
+                ("transcription", "running"),
+                ("transcription", "ok"),
+                ("postprocess", "running"),
+                ("translation", "running"),
+                ("translation", "ok"),
+                ("opencc", "running"),
+                ("opencc", "ok"),
+                ("ass_export", "running"),
+                ("quality_check", "running"),
+                ("quality_check", "ok"),
+                ("ass_export", "ok"),
+                ("complete", "ok"),
+                ("mux", "running"),
+                ("move_completed", "ok"),
+            ]
+
+            for stage, status in sequence:
+                worker._set_stage(video, stage, status, f"{stage}:{status}")
+            worker._close_stage_state()
+
+            state = ScanStateStore.from_config(config)
+            try:
+                pipeline = state.pipeline_jobs()
+                job = pipeline.job_for_path(video)
+                self.assertIsNotNone(job)
+                assert job is not None
+                self.assertEqual(job["state"], "MUXING")
+                transitions = pipeline.list_transitions(str(job["job_id"]))
+                self.assertNotIn("RETRYING", [item["to_state"] for item in transitions])
+                self.assertNotIn("COMPLETED", [item["to_state"] for item in transitions])
+                attempts = pipeline.list_stage_attempts(str(job["job_id"]))
+            finally:
+                state.close()
+
+            self.assertTrue(attempts)
+            self.assertNotIn("RUNNING", [item["status"] for item in attempts])
+            asr = next(item for item in attempts if item["stage"] == "ASR")
+            translating = next(item for item in attempts if item["stage"] == "TRANSLATING")
+            self.assertEqual(asr["input"]["media_size"], video.stat().st_size)
+            self.assertEqual(asr["input"]["media_mtime_ns"], video.stat().st_mtime_ns)
+            self.assertEqual(asr["retry_limit"], 3)
+            self.assertEqual(asr["timeout_seconds"], 123.0)
+            self.assertEqual(asr["model"]["name"], "fallback-model")
+            self.assertEqual(translating["model"]["name"], "test-translator")
+
+            event_path = root / "logs" / "pipeline-events.jsonl"
+            events = [
+                json.loads(line)
+                for line in event_path.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertTrue(events)
+            self.assertTrue(all(event["job_id"] == str(job["job_id"]) for event in events))
+            self.assertIn("STAGE_FINISHED", {event["event"] for event in events})
+
+    def test_verified_artifact_checkpoint_is_reused_and_hash_guarded(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Anime S01E01.mkv"
+            video.write_bytes(b"video")
+            config = _config(
+                root,
+                scanner_state_path=str(root / "scanner_state.sqlite3"),
+                scanner_cache_enabled=True,
+                scanner_queue_enabled=True,
+                pipeline_job_store_required=True,
+                auto_ai_max_attempts=3,
+                ai_subprocess_timeout_seconds=60,
+                log_path=root / "logs",
+            )
+            paths = paths_for_video(video, config)
+            paths.ja_srt.parent.mkdir(parents=True, exist_ok=True)
+            paths.ja_srt.write_text(
+                "1\n00:00:00,000 --> 00:00:01,000\n縺ゅ＞\n",
+                encoding="utf-8",
+            )
+            worker = VideoWorker(config, _logger())
+            worker._set_stage(video, "transcription", "running", "ASR")
+            worker._set_stage(video, "transcription", "ok", "Japanese SRT created")
+            worker._close_stage_state()
+
+            state = ScanStateStore.from_config(config)
+            try:
+                pipeline = state.pipeline_jobs()
+                job = pipeline.job_for_path(video)
+                self.assertIsNotNone(job)
+                assert job is not None
+                inputs = worker._pipeline_stage_inputs(video)
+                reusable = pipeline.reusable_stage_attempt(
+                    str(job["job_id"]),
+                    "ASR",
+                    inputs=inputs,
+                    verify_outputs=True,
+                )
+                self.assertIsNotNone(reusable)
+                assert reusable is not None
+                artifact = reusable["output"]["artifacts"][0]
+                self.assertEqual(artifact["path"], str(paths.ja_srt.resolve()))
+                self.assertEqual(artifact["size"], paths.ja_srt.stat().st_size)
+                self.assertEqual(artifact["sha256"], sha256_file(paths.ja_srt))
+                self.assertEqual(
+                    reusable["checkpoint"]["artifacts"][0]["sha256"],
+                    sha256_file(paths.ja_srt),
+                )
+            finally:
+                state.close()
+
+            worker._set_stage(video, "transcription", "ok", "Japanese SRT cache hit")
+            worker._close_stage_state()
+            state = ScanStateStore.from_config(config)
+            try:
+                pipeline = state.pipeline_jobs()
+                job = pipeline.job_for_path(video)
+                assert job is not None
+                self.assertEqual(len(pipeline.list_stage_attempts(str(job["job_id"]), "ASR")), 1)
+                paths.ja_srt.write_text("changed", encoding="utf-8")
+                self.assertIsNone(
+                    pipeline.reusable_stage_attempt(
+                        str(job["job_id"]),
+                        "ASR",
+                        inputs=worker._pipeline_stage_inputs(video),
+                        verify_outputs=True,
+                    )
+                )
+            finally:
+                state.close()
+
+            events = (root / "logs" / "pipeline-events.jsonl").read_text(encoding="utf-8")
+            self.assertIn('"event": "STAGE_REUSED"', events)
+
+    def test_verified_asr_and_translation_checkpoints_skip_expensive_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Anime S01E01.mkv"
+            video.write_bytes(b"video")
+            config = _config(
+                root,
+                scanner_state_path=str(root / "scanner_state.sqlite3"),
+                scanner_cache_enabled=True,
+                scanner_queue_enabled=True,
+                pipeline_job_store_required=True,
+                log_path=root / "logs",
+            )
+            paths = paths_for_video(video, config)
+            source_blocks = [
+                SrtBlock(1, "00:00:01,000 --> 00:00:02,000", ["Japanese source"])
+            ]
+            translated_blocks = [
+                SrtBlock(1, "00:00:01,000 --> 00:00:02,000", ["Traditional output"])
+            ]
+            seed = VideoWorker(config, _logger())
+            seed._set_stage(video, "transcription", "running", "ASR")
+            write_srt(paths.ja_srt, source_blocks)
+            seed._set_stage(video, "transcription", "ok", "Japanese SRT created")
+            seed._set_stage(video, "translation", "running", "Translate")
+            write_srt(paths.zh_cn_srt, translated_blocks)
+            seed._set_stage(video, "translation", "ok", "zh-CN SRT created")
+            write_srt(paths.zh_tw_srt, translated_blocks)
+            seed._close_stage_state()
+
+            worker = VideoWorker(config, _logger())
+            with (
+                patch.object(worker, "_has_strict_chinese_publication", return_value=False),
+                patch.object(worker, "_has_required_finished_subtitle", return_value=False),
+                patch.object(worker, "_recover_interrupted_output_publication", return_value=False),
+                patch.object(worker, "_restore_japanese_srt_cache_from_ass", return_value=False),
+                patch.object(worker, "_repair_cached_asr_rejection", return_value=False),
+                patch.object(worker, "_refresh_cached_japanese_leading_gap", return_value=False),
+                patch.object(worker, "_repair_cached_translation_safe_omissions", return_value=False),
+                patch.object(worker, "_repair_translation_cps_violations", return_value=False),
+                patch.object(worker, "_transcribe") as transcribe,
+                patch.object(worker, "_get_translator") as get_translator,
+                patch.object(worker, "_convert_to_zh_tw") as convert,
+                patch("worker.discover_normalized_subtitle_source", return_value=None),
+                patch("worker.preferred_audio_stream_info", return_value=None),
+                patch("worker.validate_cached_audio", return_value=False),
+            ):
+                outcome = worker._process_locked(
+                    video,
+                    root / "audio.wav",
+                    root / "vocals.wav",
+                )
+
+            self.assertEqual(outcome.status, "ok")
+            transcribe.assert_not_called()
+            get_translator.assert_not_called()
+            convert.assert_not_called()
+            worker._close_stage_state()
+            state = ScanStateStore.from_config(config)
+            try:
+                pipeline = state.pipeline_jobs()
+                job = pipeline.job_for_path(video)
+                assert job is not None
+                self.assertEqual(
+                    len(pipeline.list_stage_attempts(str(job["job_id"]), "ASR")),
+                    1,
+                )
+                self.assertEqual(
+                    len(
+                        pipeline.list_stage_attempts(
+                            str(job["job_id"]), "TRANSLATING"
+                        )
+                    ),
+                    1,
+                )
+            finally:
+                state.close()
+
+    def test_required_pipeline_store_failure_stops_stage_update(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Anime S01E01.mkv"
+            video.write_bytes(b"video")
+            worker = VideoWorker(
+                _config(
+                    root,
+                    scanner_cache_enabled=True,
+                    scanner_queue_enabled=True,
+                    pipeline_job_store_required=True,
+                ),
+                _logger(),
+            )
+
+            with patch(
+                "scan_state.ScanStateStore.from_config",
+                side_effect=sqlite3.OperationalError("database is locked"),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "Required durable pipeline stage update failed",
+                ):
+                    worker._set_stage(video, "translation", "running", "Translating")
+
+            self.assertIsNone(worker._stage_state)
+
+    def test_pipeline_json_event_failure_does_not_override_committed_database(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Anime S01E01.mkv"
+            video.write_bytes(b"video")
+            config = _config(
+                root,
+                scanner_state_path=str(root / "scanner_state.sqlite3"),
+                scanner_cache_enabled=True,
+                scanner_queue_enabled=True,
+                pipeline_job_store_required=True,
+                log_path=root / "logs",
+            )
+            worker = VideoWorker(config, _logger())
+
+            with patch("worker.append_pipeline_event", side_effect=OSError("disk full")):
+                worker._set_stage(video, "translation", "running", "Translating")
+            worker._close_stage_state()
+
+            state = ScanStateStore.from_config(config)
+            try:
+                job = state.pipeline_jobs().job_for_path(video)
+                self.assertIsNotNone(job)
+                assert job is not None
+                self.assertEqual(job["state"], "TRANSLATING")
+            finally:
+                state.close()
+
+    def test_source_replacement_before_publication_keeps_fail_closed_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Anime S01E01.mkv"
+            video.write_bytes(b"original-source")
+            config = _config(root, source_integrity_sha256_enabled=True)
+            worker = VideoWorker(config, _logger())
+            worker._source_snapshot = capture_source_snapshot(video, hash_content=True)
+            begin_output_publication(video, config)
+            marker = output_publication_marker_path(video, config)
+            replacement = root / "replacement.mkv"
+            replacement.write_bytes(b"replacement-source")
+            video.unlink()
+            replacement.replace(video)
+
+            with patch("worker.finish_output_publication") as finish:
+                with self.assertRaises(SourceIntegrityError):
+                    worker._commit_output_publication(video)
+
+            finish.assert_not_called()
+            self.assertTrue(marker.is_file())
+
+    def test_failed_stage_defaults_retryable_but_quality_requires_review(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = _config(
+                root,
+                scanner_state_path=str(root / "scanner_state.sqlite3"),
+                scanner_cache_enabled=True,
+                scanner_queue_enabled=True,
+                pipeline_job_store_required=True,
+                auto_ai_max_attempts=3,
+                ai_subprocess_timeout_seconds=60,
+                log_path=root / "logs",
+            )
+            retry_video = root / "Retry.mkv"
+            review_video = root / "Review.mkv"
+            retry_video.write_bytes(b"retry")
+            review_video.write_bytes(b"review")
+
+            retry_worker = VideoWorker(config, _logger())
+            retry_worker._set_stage(retry_video, "translation", "running", "Translating")
+            retry_worker._set_stage(retry_video, "translation", "failed", "timeout")
+            retry_worker._close_stage_state()
+
+            review_worker = VideoWorker(config, _logger())
+            review_worker._set_stage(review_video, "quality_check", "running", "QC")
+            review_worker._set_stage(review_video, "quality_check", "failed", "bad subtitle")
+            review_worker._close_stage_state()
+
+            state = ScanStateStore.from_config(config)
+            try:
+                pipeline = state.pipeline_jobs()
+                retry_job = pipeline.job_for_path(retry_video)
+                review_job = pipeline.job_for_path(review_video)
+                assert retry_job is not None and review_job is not None
+                retry_attempt = pipeline.list_stage_attempts(
+                    str(retry_job["job_id"]), "TRANSLATING"
+                )[-1]
+                review_attempt = pipeline.list_stage_attempts(
+                    str(review_job["job_id"]), "QC"
+                )[-1]
+            finally:
+                state.close()
+
+            self.assertEqual(retry_job["state"], "RETRYING")
+            self.assertEqual(retry_attempt["status"], "RETRYABLE_FAILURE")
+            self.assertEqual(retry_attempt["error_class"], "transient")
+            self.assertEqual(review_job["state"], "NEEDS_REVIEW")
+            self.assertEqual(review_attempt["status"], "NEEDS_REVIEW")
+            self.assertEqual(review_attempt["error_class"], "quality")
 
     def test_process_waits_for_short_official_subtitle_lock_instead_of_failing_ai_job(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -5986,6 +6406,41 @@ class CompletedDeliveryWorkerTests(unittest.TestCase):
                 worker._deliver_completed_media_if_required(video)
             deliver.assert_called_once_with(video, worker.config, logger=worker.logger)
             self.assertEqual([call.args[1] for call in set_stage.call_args_list], ["mux", "move_completed"])
+
+    def test_verified_mux_checkpoint_skips_completed_delivery_execution(self) -> None:
+        from completed_delivery import completed_delivery_receipt_path
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "episode.mkv"
+            video.write_bytes(b"video")
+            config = _config(
+                root,
+                completed_delivery_enabled=True,
+                scanner_state_path=str(root / "scanner_state.sqlite3"),
+                scanner_cache_enabled=True,
+                scanner_queue_enabled=True,
+                pipeline_job_store_required=True,
+                log_path=root / "logs",
+            )
+            seed = VideoWorker(config, _logger())
+            seed._set_stage(video, "mux", "running", "Muxing")
+            receipt = completed_delivery_receipt_path(video, config)
+            receipt.parent.mkdir(parents=True, exist_ok=True)
+            receipt.write_text('{"state":"committed"}', encoding="utf-8")
+            seed._set_stage(video, "move_completed", "ok", "Committed")
+            seed._close_stage_state()
+
+            worker = VideoWorker(config, _logger())
+            with (
+                patch.object(worker, "_has_strict_chinese_publication", return_value=True),
+                patch("completed_delivery.validate_completed_delivery", return_value=True),
+                patch("completed_delivery.deliver_completed_mkv") as deliver,
+            ):
+                worker._deliver_completed_media_if_required(video)
+
+            deliver.assert_not_called()
+            worker._close_stage_state()
 
 
 def _config(root: Path, **overrides: object) -> SimpleNamespace:

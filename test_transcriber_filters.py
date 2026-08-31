@@ -1626,6 +1626,9 @@ class TranscriberFilterTest(unittest.TestCase):
             config = SimpleNamespace(
                 gap_rescue_clip_seconds=30.0,
                 gap_rescue_clip_overlap_seconds=2.0,
+                # This regression intentionally preserves a valid one-character
+                # Japanese particle while exercising range expansion.
+                gap_rescue_min_chars=1,
                 whisper_initial_prompt=None,
                 op_ed_initial_prompt=None,
                 whisper_hallucination_phrases=[],

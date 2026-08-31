@@ -45,12 +45,20 @@ class ResourceMainIntegrationTest(unittest.TestCase):
                     "reason_codes": ["gpu_busy"],
                 }
 
-            def claim(_state, video, _config, *, canary_binding=None):
+            def claim(
+                _state,
+                video,
+                _config,
+                *,
+                canary_binding=None,
+                logger=None,
+            ):
                 events.append(("claim", Path(video)))
                 return "attempt"
 
-            def process(_worker, video, _logger, *, resource_launch_plan=None):
-                self.assertTrue(resource_launch_plan["admitted"])
+            def process(_worker, video, _logger, **options):
+                self.assertTrue(options["resource_launch_plan"]["admitted"])
+                self.assertEqual(options["delivery_attempt_id"], "attempt")
                 events.append(("process", Path(video)))
                 return True
 

@@ -51,6 +51,7 @@ from mikan_worker import (
     _pending_entry_matches_completed_torrent,
     _pending_failed_info_hashes,
     _queue_tags,
+    _refresh_mikan_episode_index,
     _save_pending,
     _save_qbit_unhealthy_since,
     _save_json_atomic,
@@ -906,7 +907,7 @@ class MikanWorkerPendingTest(unittest.TestCase):
 
             refresh.assert_not_called()
 
-    def test_episode_index_refreshes_stale_existing_index(self) -> None:
+    def test_episode_index_stale_check_never_recursively_rebuilds(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             config = _mikan_process_config(root, root / "downloads")
@@ -935,29 +936,207 @@ class MikanWorkerPendingTest(unittest.TestCase):
             finally:
                 conn.close()
 
-            with patch("mikan_worker._refresh_mikan_episode_index", return_value=1) as refresh:
+            with (
+                patch("mikan_worker._refresh_mikan_episode_index") as refresh,
+                patch(
+                    "mikan_worker._find_video_files",
+                    side_effect=AssertionError("readiness check must not recurse"),
+                ),
+            ):
                 MikanWorker(config, _logger())._ensure_episode_index([{"bangumi_id": 123, "path": root / "anime"}])
 
-            refresh.assert_called_once()
+            refresh.assert_not_called()
 
-    def test_episode_index_waits_for_single_refresh_owner_instead_of_scanning_again(self) -> None:
+    def test_library_scan_plan_bounds_and_cools_index_unavailable_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = _mikan_enqueue_config(root)
+            config.mikan_library_fallback_scan_interval_seconds = 3600
+            config.mikan_library_fallback_scan_max_series_per_cycle = 2
+            logger = Mock()
+            worker = MikanWorker(config, logger)
+            worker._ensure_episode_index = Mock()
+            mappings = [
+                {"bangumi_id": index, "path": root / f"Series-{index}"}
+                for index in range(1, 6)
+            ]
+
+            refresh_lock = Mock()
+            refresh_lock.acquire.return_value = True
+            with (
+                patch(
+                    "mikan_worker._mikan_episode_index_covers_mappings",
+                    side_effect=[False, False, False],
+                ),
+                patch("mikan_worker._mikan_episode_index_due_mappings", return_value=mappings),
+                patch("mikan_worker._mikan_episode_index_reconcile_due", return_value=True),
+                patch("mikan_worker._mikan_episode_index_lock", return_value=refresh_lock),
+                patch("mikan_worker._refresh_mikan_episode_index", return_value=2) as refresh,
+                patch("mikan_worker.time.monotonic", side_effect=[100.0, 101.0]),
+            ):
+                selected, indexed = worker._library_scan_plan(mappings)
+                cooled, cooled_indexed = worker._library_scan_plan(mappings)
+
+            self.assertTrue(indexed)
+            self.assertFalse(cooled_indexed)
+            self.assertEqual(len(selected), 2)
+            self.assertEqual(cooled, [])
+            self.assertEqual(len(refresh.call_args.args[2]), 2)
+            refresh_lock.release.assert_called_once_with()
+            self.assertEqual(worker._fallback_library_scan_runs, 1)
+            self.assertEqual(worker._fallback_library_scan_roots, 2)
+            messages = [str(call.args[0]) for call in logger.warning.call_args_list]
+            self.assertTrue(any("reason=episode_index_incremental_bounded_reconcile" in message for message in messages))
+            self.assertTrue(any("reason=episode_index_unavailable_cooldown" in message for message in messages))
+            self.assertFalse(any(str(root) in message for message in messages))
+
+    def test_indexed_missing_episode_scan_never_walks_series_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Series" / "Season 1" / "Series - S01E01.mkv"
+            video.parent.mkdir(parents=True)
+            video.write_bytes(b"video")
+            config = _mikan_process_config(root, root / "downloads")
+            logger = Mock()
+
+            with (
+                patch(
+                    "mikan_worker._target_videos_from_episode_index",
+                    side_effect=lambda _config, _mappings, episode: [video] if episode == 1 else [],
+                ),
+                patch(
+                    "mikan_worker._find_video_files",
+                    side_effect=AssertionError("indexed scan must not recurse through roots"),
+                ),
+                patch("mikan_worker._has_official_chinese_subtitle", return_value=False),
+            ):
+                missing = _missing_episodes_for_bangumi(
+                    config,
+                    logger,
+                    123,
+                    [{"bangumi_id": 123, "path": root / "Series"}],
+                    candidate_episodes={1, 2},
+                    episode_index_ready=True,
+                )
+
+            self.assertEqual(missing, {1})
+            self.assertTrue(
+                any(
+                    call.args and "reason=episode_index" in str(call.args[0])
+                    for call in logger.info.call_args_list
+                )
+            )
+
+    def test_episode_index_lock_contention_never_scans_or_releases_foreign_lock(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             config = _mikan_process_config(root, root / "downloads")
             worker = MikanWorker(config, _logger())
+            worker._ensure_episode_index = Mock()
             refresh_lock = Mock()
             refresh_lock.acquire.return_value = False
+            mappings = [{"bangumi_id": 123, "path": root / "anime"}]
 
             with (
-                patch("mikan_worker._mikan_episode_index_is_fresh", side_effect=[False, True]),
+                patch("mikan_worker._mikan_episode_index_covers_mappings", return_value=False),
+                patch("mikan_worker._mikan_episode_index_due_mappings", return_value=mappings),
+                patch("mikan_worker._mikan_episode_index_reconcile_due", return_value=True),
                 patch("mikan_worker._mikan_episode_index_lock", return_value=refresh_lock),
                 patch("mikan_worker._refresh_mikan_episode_index") as refresh,
             ):
-                worker._ensure_episode_index([])
+                selected, indexed = worker._library_scan_plan(mappings)
 
             refresh.assert_not_called()
-            refresh_lock.release.assert_called_once_with()
-            self.assertTrue(worker._episode_index_ready)
+            refresh_lock.release.assert_not_called()
+            self.assertEqual(mappings, selected)
+            self.assertFalse(indexed)
+
+    def test_incremental_episode_index_refresh_preserves_unselected_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            first_root = root / "Series-1"
+            second_root = root / "Series-2"
+            first_root.mkdir()
+            second_root.mkdir()
+            first_video = first_root / "Series 1 - S01E01.mkv"
+            second_video = second_root / "Series 2 - S01E02.mkv"
+            first_video.write_bytes(b"first")
+            second_video.write_bytes(b"second")
+            config = _mikan_process_config(root, root / "downloads")
+            conn = _mikan_state_connect(config)
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO anime_episode_index(
+                        bangumi_id, episode, season, path, series_path, updated_at
+                    ) VALUES (2, 2, 1, ?, ?, ?)
+                    """,
+                    (str(second_video.resolve()), str(second_root.resolve()), time.time()),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            indexed = _refresh_mikan_episode_index(
+                config,
+                _logger(),
+                [{"bangumi_id": 1, "path": first_root}],
+            )
+
+            conn = _mikan_state_connect(config)
+            try:
+                rows = conn.execute(
+                    "SELECT bangumi_id, episode FROM anime_episode_index ORDER BY bangumi_id"
+                ).fetchall()
+                roots = conn.execute(
+                    "SELECT bangumi_id, series_path FROM anime_episode_index_roots"
+                ).fetchall()
+            finally:
+                conn.close()
+            self.assertEqual(1, indexed)
+            self.assertEqual([(1, 1), (2, 2)], rows)
+            self.assertEqual([(1, str(first_root.resolve()))], roots)
+
+    def test_bounded_incremental_reconciliation_rotates_unindexed_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = _mikan_enqueue_config(root)
+            config.mikan_library_fallback_scan_interval_seconds = 1
+            config.mikan_library_fallback_scan_max_series_per_cycle = 2
+            config.video_extensions = [".mkv"]
+            mappings: list[dict[str, object]] = []
+            for index in range(1, 5):
+                series_root = root / f"Series-{index}"
+                series_root.mkdir()
+                (series_root / f"Series {index} - S01E{index:02d}.mkv").write_bytes(b"video")
+                mappings.append({"bangumi_id": index, "path": series_root})
+            worker = MikanWorker(config, _logger())
+            worker._ensure_episode_index = Mock()
+            refresh_lock = Mock()
+            refresh_lock.acquire.return_value = True
+
+            with (
+                patch("mikan_worker._mikan_episode_index_reconcile_due", return_value=True),
+                patch("mikan_worker._mikan_episode_index_lock", return_value=refresh_lock),
+                patch("mikan_worker.time.monotonic", side_effect=[100.0, 102.0]),
+            ):
+                first, first_indexed = worker._library_scan_plan(mappings)
+                second, second_indexed = worker._library_scan_plan(mappings)
+
+            conn = _mikan_state_connect(config)
+            try:
+                roots = conn.execute(
+                    "SELECT bangumi_id FROM anime_episode_index_roots ORDER BY bangumi_id"
+                ).fetchall()
+            finally:
+                conn.close()
+            self.assertEqual(2, len(first))
+            self.assertTrue(first_indexed)
+            self.assertEqual(mappings, second)
+            self.assertTrue(second_indexed)
+            self.assertEqual([(1,), (2,), (3,), (4,)], roots)
+            self.assertEqual(4, worker._fallback_library_scan_roots)
+            self.assertEqual(2, refresh_lock.release.call_count)
 
     def test_extract_slot_uses_cached_series_mappings_without_local_catalog_walk(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
