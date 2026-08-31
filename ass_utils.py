@@ -17,6 +17,9 @@ TIMING_PAIR_RE = re.compile(
 ASS_TIMESTAMP_RE = re.compile(
     r"^(?P<hours>\d+):(?P<minutes>\d{2}):(?P<seconds>\d{2})\.(?P<centiseconds>\d{1,2})$"
 )
+ASS_VECTOR_DRAWING_MODE_RE = re.compile(r"\\p\s*(?P<scale>\d+)", re.IGNORECASE)
+ASS_SECONDARY_HARD_CPS = 25
+ASS_SECONDARY_TARGET_CPS = 24
 GENERATED_SECONDARY_STYLE_RE = re.compile(
     r"\{\\fs[^\\{}]+\\c&H[0-9A-Fa-f]+&\\alpha&H[0-9A-Fa-f]+&\\bord[^\\{}]+\\shad[^\\{}]+\}"
 )
@@ -148,7 +151,7 @@ def dominant_ass_dialogue_style(
 
     counts: dict[str, int] = {}
     names: dict[str, str] = {}
-    timings: dict[str, list[tuple[str, str]]] = {}
+    seen_events: set[tuple[str, str, str, str]] = set()
     total = 0
     for _raw_line, fields in _ass_dialogue_fields(content):
         style = fields[3].strip()
@@ -156,12 +159,17 @@ def dominant_ass_dialogue_style(
             continue
         start = _ass_timestamp_to_srt(fields[1].strip())
         end = _ass_timestamp_to_srt(fields[2].strip())
-        if not _unescape_generated_ass_text(fields[9]):
+        text_lines = _unescape_generated_ass_text(fields[9])
+        if not text_lines:
             continue
         key = style.casefold()
+        normalized_text = " ".join(" ".join(text_lines).split()).casefold()
+        event_key = (key, start, end, normalized_text)
+        if event_key in seen_events:
+            continue
+        seen_events.add(event_key)
         names.setdefault(key, style)
         counts[key] = counts.get(key, 0) + 1
-        timings.setdefault(key, []).append((start, end))
         total += 1
 
     if not counts or total <= 0:
@@ -172,35 +180,32 @@ def dominant_ass_dialogue_style(
         return None
     if highest < minimum_dialogues or highest / total < minimum_share:
         return None
-    leader = leaders[0]
-    leader_timings = set(timings.get(leader, ()))
-    if any(
-        timing not in leader_timings
-        for key, style_timings in timings.items()
-        if key != leader
-        for timing in style_timings
-    ):
-        # A secondary style has unique timeline coverage.  It may contain
-        # signs or real dialogue rather than a duplicated karaoke/translation
-        # layer, so selecting one style would silently omit content.
-        return None
-    return names[leader]
+    return names[leaders[0]]
 
 
 def ass_dialogue_style_to_srt_blocks(content: str, style: str) -> list[SrtBlock]:
-    """Convert one ASS style while retaining shadowed secondary text.
+    """Convert every ASS Dialogue event under a trusted dominant-style gate.
 
-    A trusted dominant style may have alternate events at the exact same
-    timestamps (for example signs, a second speaker, or karaoke text).  Those
-    events must not disappear merely because their style is not dominant, so
-    distinct text is appended to the first selected cue at that timestamp.
-    Callers must first use :func:`dominant_ass_dialogue_style`; it rejects any
-    secondary event with timeline coverage that cannot be merged safely.
+    The requested style must be the independently recomputed dominant style.
+    Its non-overlapping cues form the timeline.  Secondary dialogue that
+    overlaps that timeline is merged once into the cue with the greatest
+    overlap; remaining secondary dialogue is clustered into non-overlapping
+    cues.  ASS ``Comment:`` events are not dialogue and remain excluded by
+    :func:`_ass_dialogue_fields`.
     """
 
     requested_style = str(style or "").strip()
     if not requested_style:
         raise ValueError("style must not be empty")
+    trusted_style = dominant_ass_dialogue_style(content)
+    if (
+        trusted_style is None
+        or trusted_style.casefold() != requested_style.casefold()
+    ):
+        raise AssExportError(
+            "ASS requested style does not match its trusted dominant dialogue style: "
+            f"requested={requested_style!r} dominant={trusted_style!r}"
+        )
 
     parsed_events: list[tuple[str, str, str, list[str]]] = []
     for _raw_line, fields in _ass_dialogue_fields(content):
@@ -209,51 +214,290 @@ def ass_dialogue_style_to_srt_blocks(content: str, style: str) -> list[SrtBlock]
         text_lines = _unescape_generated_ass_text(fields[9])
         if not text_lines:
             continue
-        parsed_events.append((fields[3].strip(), start, end, text_lines))
-
-    blocks: list[SrtBlock] = []
-    first_block_by_timing: dict[tuple[str, str], int] = {}
-    seen_text_by_timing: dict[tuple[str, str], set[str]] = {}
-    for event_style, start, end, text_lines in parsed_events:
-        if event_style.casefold() != requested_style.casefold():
-            continue
-        timing_key = (start, end)
-        blocks.append(
-            SrtBlock(
-                index=len(blocks) + 1,
-                timing=f"{start} --> {end}",
-                text=list(text_lines),
+        event_style = fields[3].strip()
+        if not event_style:
+            raise AssExportError(
+                "ASS contains usable Dialogue text without a style: "
+                f"start={start} end={end}"
             )
-        )
-        first_block_by_timing.setdefault(timing_key, len(blocks) - 1)
-        seen_text_by_timing.setdefault(timing_key, set()).add(
-            " ".join(" ".join(text_lines).split()).casefold()
-        )
-    if not blocks:
+        if _srt_timestamp_milliseconds(end) <= _srt_timestamp_milliseconds(start):
+            raise AssExportError(
+                "ASS Dialogue event has a non-positive duration: "
+                f"style={event_style!r} start={start} end={end}"
+            )
+        parsed_events.append((event_style, start, end, text_lines))
+
+    if not any(
+        event_style.casefold() == requested_style.casefold()
+        for event_style, _start, _end, _text_lines in parsed_events
+    ):
         raise AssExportError(
             f"ASS contains no usable Dialogue events for style {requested_style!r}"
         )
 
-    for event_style, start, end, text_lines in parsed_events:
-        if event_style.casefold() == requested_style.casefold():
-            continue
+    dominant_events = [
+        event
+        for event in parsed_events
+        if event[0].casefold() == requested_style.casefold()
+    ]
+    secondary_events = [
+        event
+        for event in parsed_events
+        if event[0].casefold() != requested_style.casefold()
+    ]
+
+    dominant_text_by_timing: dict[tuple[str, str], list[str]] = {}
+    dominant_seen_by_timing: dict[tuple[str, str], set[str]] = {}
+    for _event_style, start, end, text_lines in dominant_events:
         timing_key = (start, end)
-        destination_index = first_block_by_timing.get(timing_key)
-        if destination_index is None:
-            # The dominant-style gate rejects this case.  Keep the conversion
-            # helper fail closed as well so future callers cannot omit unique
-            # secondary timeline coverage accidentally.
-            raise AssExportError(
-                "ASS secondary style contains unique timeline coverage: "
-                f"style={event_style!r} start={start} end={end}"
-            )
         normalized_text = " ".join(" ".join(text_lines).split()).casefold()
-        seen = seen_text_by_timing.setdefault(timing_key, set())
+        seen = dominant_seen_by_timing.setdefault(timing_key, set())
         if normalized_text in seen:
             continue
-        blocks[destination_index].text.extend(text_lines)
+        dominant_text_by_timing.setdefault(timing_key, []).extend(text_lines)
         seen.add(normalized_text)
-    return blocks
+
+    dominant_timings = sorted(
+        dominant_text_by_timing,
+        key=lambda timing: (
+            _srt_timestamp_milliseconds(timing[0]),
+            _srt_timestamp_milliseconds(timing[1]),
+        ),
+    )
+    for previous, current in zip(dominant_timings, dominant_timings[1:]):
+        if _srt_timestamp_milliseconds(current[0]) < _srt_timestamp_milliseconds(previous[1]):
+            raise AssExportError(
+                "ASS dominant Dialogue cues overlap and cannot form a safe timeline: "
+                f"previous={previous!r} current={current!r}"
+            )
+    dominant_original_character_counts = {
+        timing: len(re.sub(r"\s+", "", "".join(dominant_text_by_timing[timing])))
+        for timing in dominant_timings
+    }
+
+    def overlap_milliseconds(
+        first: tuple[str, str],
+        second: tuple[str, str],
+    ) -> int:
+        return max(
+            0,
+            min(
+                _srt_timestamp_milliseconds(first[1]),
+                _srt_timestamp_milliseconds(second[1]),
+            )
+            - max(
+                _srt_timestamp_milliseconds(first[0]),
+                _srt_timestamp_milliseconds(second[0]),
+            ),
+        )
+
+    orphan_secondary: list[tuple[str, str, str, list[str]]] = []
+    attached_dominant_timings: set[tuple[str, str]] = set()
+    ordered_secondary = sorted(
+        secondary_events,
+        key=lambda event: (
+            _srt_timestamp_milliseconds(event[1]),
+            _srt_timestamp_milliseconds(event[2]),
+        ),
+    )
+    for event_style, start, end, text_lines in ordered_secondary:
+        timing_key = (start, end)
+        overlaps = [
+            (overlap_milliseconds(timing_key, dominant_timing), position)
+            for position, dominant_timing in enumerate(dominant_timings)
+        ]
+        greatest_overlap, target_position = max(
+            overlaps,
+            key=lambda item: (item[0], -item[1]),
+        )
+        if greatest_overlap <= 0:
+            orphan_secondary.append((event_style, start, end, text_lines))
+            continue
+        target_timing = dominant_timings[target_position]
+        normalized_text = " ".join(" ".join(text_lines).split()).casefold()
+        seen = dominant_seen_by_timing.setdefault(target_timing, set())
+        if normalized_text not in seen:
+            dominant_text_by_timing[target_timing].extend(text_lines)
+            seen.add(normalized_text)
+            attached_dominant_timings.add(target_timing)
+
+    secondary_clusters: list[dict[str, object]] = []
+    for _event_style, start, end, text_lines in orphan_secondary:
+        start_ms = _srt_timestamp_milliseconds(start)
+        end_ms = _srt_timestamp_milliseconds(end)
+        if not secondary_clusters or start_ms >= int(secondary_clusters[-1]["end_ms"]):
+            secondary_clusters.append(
+                {
+                    "start": start,
+                    "end": end,
+                    "start_ms": start_ms,
+                    "end_ms": end_ms,
+                    "text": [],
+                    "seen": set(),
+                }
+            )
+        cluster = secondary_clusters[-1]
+        if end_ms > int(cluster["end_ms"]):
+            cluster["end"] = end
+            cluster["end_ms"] = end_ms
+        normalized_text = " ".join(" ".join(text_lines).split()).casefold()
+        cluster_seen = cluster["seen"]
+        cluster_text = cluster["text"]
+        if not isinstance(cluster_seen, set) or not isinstance(cluster_text, list):
+            raise AssExportError("Invalid internal ASS secondary cluster state")
+        if normalized_text not in cluster_seen:
+            cluster_text.extend(text_lines)
+            cluster_seen.add(normalized_text)
+
+    dominant_start_ms = [_srt_timestamp_milliseconds(start) for start, _end in dominant_timings]
+    dominant_end_ms = [_srt_timestamp_milliseconds(end) for _start, end in dominant_timings]
+    for position, cluster in enumerate(secondary_clusters):
+        start_ms = int(cluster["start_ms"])
+        end_ms = int(cluster["end_ms"])
+        cluster_text = cluster["text"]
+        if not isinstance(cluster_text, list):
+            raise AssExportError("Invalid internal ASS secondary cluster text")
+        character_count = len(re.sub(r"\s+", "", "".join(cluster_text)))
+        duration_ms = end_ms - start_ms
+        if character_count * 1000 <= ASS_SECONDARY_HARD_CPS * duration_ms:
+            continue
+
+        required_ms = (
+            character_count * 1000 + ASS_SECONDARY_TARGET_CPS - 1
+        ) // ASS_SECONDARY_TARGET_CPS
+        extra_ms = required_ms - duration_ms
+        previous_boundaries = [value for value in dominant_end_ms if value <= start_ms]
+        if position > 0:
+            previous_boundaries.append(int(secondary_clusters[position - 1]["end_ms"]))
+        left_boundary_ms = max(previous_boundaries, default=0)
+
+        next_boundaries = [value for value in dominant_start_ms if value >= end_ms]
+        if position + 1 < len(secondary_clusters):
+            next_boundaries.append(int(secondary_clusters[position + 1]["start_ms"]))
+        right_boundary_ms = min(next_boundaries, default=end_ms)
+
+        available_left_ms = start_ms - left_boundary_ms
+        available_right_ms = right_boundary_ms - end_ms
+        if extra_ms > available_left_ms + available_right_ms:
+            raise AssExportError(
+                "ASS secondary Dialogue cluster cannot reach safe CPS within its gap: "
+                f"characters={character_count} duration_ms={duration_ms} "
+                f"available_ms={available_left_ms + available_right_ms}"
+            )
+        minimum_left_ms = max(0, extra_ms - available_right_ms)
+        maximum_left_ms = min(extra_ms, available_left_ms)
+        left_ms = min(max(extra_ms // 2, minimum_left_ms), maximum_left_ms)
+        right_ms = extra_ms - left_ms
+        start_ms -= left_ms
+        end_ms += right_ms
+        cluster["start_ms"] = start_ms
+        cluster["end_ms"] = end_ms
+        cluster["start"] = _milliseconds_to_srt_timestamp(start_ms)
+        cluster["end"] = _milliseconds_to_srt_timestamp(end_ms)
+
+    dominant_output_timings = {timing: timing for timing in dominant_timings}
+    for timing in dominant_timings:
+        if timing not in attached_dominant_timings:
+            continue
+        start_ms = _srt_timestamp_milliseconds(timing[0])
+        end_ms = _srt_timestamp_milliseconds(timing[1])
+        duration_ms = end_ms - start_ms
+        original_characters = dominant_original_character_counts[timing]
+        final_characters = len(
+            re.sub(r"\s+", "", "".join(dominant_text_by_timing[timing]))
+        )
+        if original_characters * 1000 > ASS_SECONDARY_HARD_CPS * duration_ms:
+            continue
+        if final_characters * 1000 <= ASS_SECONDARY_HARD_CPS * duration_ms:
+            continue
+
+        required_ms = (
+            final_characters * 1000 + ASS_SECONDARY_TARGET_CPS - 1
+        ) // ASS_SECONDARY_TARGET_CPS
+        extra_ms = required_ms - duration_ms
+        other_timings = [
+            output_timing
+            for source_timing, output_timing in dominant_output_timings.items()
+            if source_timing != timing
+        ]
+        previous_boundaries = [
+            _srt_timestamp_milliseconds(other_end)
+            for _other_start, other_end in other_timings
+            if _srt_timestamp_milliseconds(other_end) <= start_ms
+        ]
+        previous_boundaries.extend(
+            int(cluster["end_ms"])
+            for cluster in secondary_clusters
+            if int(cluster["end_ms"]) <= start_ms
+        )
+        left_boundary_ms = max(previous_boundaries, default=0)
+
+        next_boundaries = [
+            _srt_timestamp_milliseconds(other_start)
+            for other_start, _other_end in other_timings
+            if _srt_timestamp_milliseconds(other_start) >= end_ms
+        ]
+        next_boundaries.extend(
+            int(cluster["start_ms"])
+            for cluster in secondary_clusters
+            if int(cluster["start_ms"]) >= end_ms
+        )
+        right_boundary_ms = min(next_boundaries, default=end_ms)
+
+        available_left_ms = start_ms - left_boundary_ms
+        available_right_ms = right_boundary_ms - end_ms
+        if extra_ms > available_left_ms + available_right_ms:
+            raise AssExportError(
+                "ASS dominant Dialogue with attached secondary text cannot reach safe CPS: "
+                f"characters={final_characters} duration_ms={duration_ms} "
+                f"available_ms={available_left_ms + available_right_ms}"
+            )
+        minimum_left_ms = max(0, extra_ms - available_right_ms)
+        maximum_left_ms = min(extra_ms, available_left_ms)
+        left_ms = min(max(extra_ms // 2, minimum_left_ms), maximum_left_ms)
+        right_ms = extra_ms - left_ms
+        dominant_output_timings[timing] = (
+            _milliseconds_to_srt_timestamp(start_ms - left_ms),
+            _milliseconds_to_srt_timestamp(end_ms + right_ms),
+        )
+
+    cues: list[tuple[str, str, list[str]]] = [
+        (
+            dominant_output_timings[timing][0],
+            dominant_output_timings[timing][1],
+            list(dominant_text_by_timing[timing]),
+        )
+        for timing in dominant_timings
+    ]
+    for cluster in secondary_clusters:
+        start = cluster["start"]
+        end = cluster["end"]
+        text = cluster["text"]
+        if not isinstance(start, str) or not isinstance(end, str) or not isinstance(text, list):
+            raise AssExportError("Invalid internal ASS secondary cluster output")
+        cues.append((start, end, list(text)))
+    cues.sort(
+        key=lambda cue: (
+            _srt_timestamp_milliseconds(cue[0]),
+            _srt_timestamp_milliseconds(cue[1]),
+        )
+    )
+    for previous, current in zip(cues, cues[1:]):
+        if _srt_timestamp_milliseconds(current[0]) < _srt_timestamp_milliseconds(previous[1]):
+            raise AssExportError(
+                "ASS normalization produced overlapping cues: "
+                f"previous={(previous[0], previous[1])!r} "
+                f"current={(current[0], current[1])!r}"
+            )
+
+    return [
+        SrtBlock(
+            index=index,
+            timing=f"{start} --> {end}",
+            text=text_lines,
+        )
+        for index, (start, end, text_lines) in enumerate(cues, start=1)
+    ]
 
 
 def restyle_ass_file(ass_path: str | Path, style: AssStyle | None = None) -> bool:
@@ -474,8 +718,37 @@ def _ass_timestamp_to_srt(timestamp: str) -> str:
     )
 
 
+def _srt_timestamp_milliseconds(timestamp: str) -> int:
+    hours, minutes, remainder = timestamp.split(":", 2)
+    seconds, milliseconds = remainder.split(",", 1)
+    return (
+        ((int(hours) * 60 + int(minutes)) * 60 + int(seconds)) * 1000
+        + int(milliseconds)
+    )
+
+
+def _milliseconds_to_srt_timestamp(milliseconds: int) -> str:
+    if milliseconds < 0:
+        raise AssExportError("SRT timestamp cannot be negative")
+    total_seconds, millis = divmod(milliseconds, 1000)
+    total_minutes, seconds = divmod(total_seconds, 60)
+    hours, minutes = divmod(total_minutes, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
+
+
 def _unescape_generated_ass_text(text: str) -> list[str]:
-    without_tags = re.sub(r"\{[^{}]*\}", "", text)
+    text_segments: list[str] = []
+    drawing_mode = False
+    cursor = 0
+    for override in re.finditer(r"\{([^{}]*)\}", text):
+        if not drawing_mode:
+            text_segments.append(text[cursor : override.start()])
+        for match in ASS_VECTOR_DRAWING_MODE_RE.finditer(override.group(1)):
+            drawing_mode = int(match.group("scale")) > 0
+        cursor = override.end()
+    if not drawing_mode:
+        text_segments.append(text[cursor:])
+    without_tags = "".join(text_segments)
     normalized = without_tags.replace(r"\N", "\n").replace(r"\n", "\n").replace(r"\h", " ")
     return [line.replace(r"\\", "\\").strip() for line in normalized.split("\n") if line.strip()]
 
