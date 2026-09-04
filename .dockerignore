@@ -1,6 +1,7 @@
 .git
 .gitignore
 .env
+config.yaml.pre-*
 .venv
 .venv-whisperx
 __pycache__

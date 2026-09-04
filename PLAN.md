@@ -40,13 +40,26 @@ M2 translation quality, Translation Memory, full QC redesign and WebUI work are 
 - [x] Pass the dedicated 22-case M2 acceptance suite locally, including the nested M1 twelve-case gate and 106-case M2 integration gate.
 - [x] Cover all ten required representative source-selection fixture classes.
 - [x] Record focused local results and evidence boundaries in `docs/TEST_RESULTS_M2.md`.
-- [x] Run the complete existing repository regression suite against the combined M2 diff: 1,587 tests passed with one existing conditional skip.
+- [x] Run the complete existing repository regression suite against the combined M2 diff: 1,649 tests run, OK with one conditional skip.
 - [x] Complete the M2 design, source-selection, Decision-schema and confidence-policy documents.
 - [x] Run final changed-file compile, diff checks and release review with no private deployment details in tracked files.
+- [x] Verify the deployed Worker/WebUI runtime baseline and loaded guardrail configuration, pass all seven isolated breaker cases in the server image, and arm `M2_GUARDRAILS_ARMED`.
+- [x] Implement exact preservation/import for the former observation baseline `m2-guardrail-v1:276fdef781528ba2059c114e`, started at `2026-09-04T11:00:12.736033Z`, with required final status `INVALIDATED_OBSERVATION_AUTOMATION_NOT_READY`; keep its eight pre-gate attempts as supplemental history only.
+- [x] Implement the frozen first-20 claim cohort with claim-time `BEGIN IMMEDIATE`, no success backfill, immutable ordinals, stable-job uniqueness, WAL persistence, and restart-safe continuation.
+- [x] Persist the complete required terminal record for every frozen member, retain immutable per-attempt incident events, and journal one summary/outbox record only after all 20 members are terminal.
+- [x] Durably invalidate an active gate as `INVALIDATED_BY_RUNTIME_CHANGE`, with expected/actual evidence and no mixed-baseline admission.
+- [x] Add the atomic observation schema-v2 migration, including container-instance identity and canonical result-event payload/digest verification, while preserving version-1 Gate history.
+- [x] Pass the focused repository candidate suites: 24 frozen-cohort/schema/event-journal cases, 11 recovery/replay cases, and the isolated 7-breaker harness.
+- [ ] While claims are paused, deploy this repository candidate, apply the exact former-Gate invalidation, rerun the focused regression and seven-breaker suite in the new server image, and verify the live runtime remains `ARMED`.
+- [ ] Create a new deployment-bound Gate ID/baseline/start timestamp at `0/20`, then resume claims without waiting for the cohort to finish.
 
-M2 implementation is deployed under the `M2_SERVER_CANARY_ACTIVE` observation
-state documented in [`docs/M2_PRODUCTION_OBSERVATION.md`](docs/M2_PRODUCTION_OBSERVATION.md).
-It is not `M2_PRODUCTION_ACCEPTED`; the 20-output observation gate, 100-input
+The former `0/20` observation baseline is not a valid Gate and has the final
+status `INVALIDATED_OBSERVATION_AUTOMATION_NOT_READY`. Its eight pre-gate
+attempts remain supplemental records and cannot be enrolled retroactively.
+The replacement frozen-cohort implementation is locally tested, but its live
+Worker SHA, image identity, Gate ID, baseline and start time remain
+deployment-time evidence. No new Production Gate is represented as started by
+this plan. M2 is not `M2_PRODUCTION_ACCEPTED`; the 20-job Gate, 100-input
 release gate, rolling-500 Production SLO, and any measured 99%/99.9% autonomy
 claim remain unverified.
 

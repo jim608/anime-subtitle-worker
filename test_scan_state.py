@@ -1982,7 +1982,7 @@ class ScanStateStoreQueueTest(unittest.TestCase):
                 self.assertEqual(recovered["attempts"], before["attempts"])
                 self.assertEqual(
                     store.get_ai_delivery_attempt(attempt["attempt_id"])["status"],
-                    "deferred",
+                    "review_required",
                 )
             finally:
                 store.close()

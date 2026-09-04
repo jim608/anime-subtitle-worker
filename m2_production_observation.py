@@ -19,6 +19,31 @@ from m2_strict_observation import (
     update_summary_counters,
     validate_summary_counters,
 )
+from m2_observation_store import (
+    ACTIVE as GATE_ACTIVE,
+    ELIGIBILITY_POLICY_VERSION,
+    INVALIDATED_AUTOMATION,
+    INVALIDATED_RUNTIME,
+    ObservationStoreError,
+    active_gate as sqlite_active_gate,
+    connect_observation_database,
+    create_gate as sqlite_create_gate,
+    enroll_claim as sqlite_enroll_claim,
+    gate_by_id as sqlite_gate_by_id,
+    gate_identifier as sqlite_gate_identifier,
+    import_legacy_gate,
+    immediate_transaction,
+    invalidate_active_gate as sqlite_invalidate_active_gate,
+    latest_gate as sqlite_latest_gate,
+    member_for_job,
+    meta_state as sqlite_meta_state,
+    publish_pending_summaries,
+    record_terminal_evidence,
+    reserve_result_event,
+    status_summary as sqlite_status_summary,
+    update_failure_streaks as sqlite_update_failure_streaks,
+    validate_active_runtime,
+)
 from safe_files import atomic_write_text
 
 
@@ -77,6 +102,41 @@ def _m2_guardrail_config_exists(config: Any) -> bool:
         return True
 
 
+def require_durable_claim_pause(config: Any) -> dict[str, Any]:
+    """Prove the operator pause latch is durable before changing gate lifecycle.
+
+    Circuit-breaker state is intentionally not accepted as a substitute.  A
+    lifecycle transition must survive a Worker restart and must not depend on
+    a process-local latch.
+    """
+
+    path = Path(str(config.work_path)) / "ai_control.json"
+    try:
+        stat = path.stat()
+        if not path.is_file() or stat.st_size <= 0 or stat.st_size > 64 * 1024:
+            raise ObservationStateError("ai_claim_pause_invalid")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ObservationStateError("ai_claim_pause_missing") from exc
+    except ObservationStateError:
+        raise
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ObservationStateError("ai_claim_pause_unreadable") from exc
+    if not isinstance(payload, Mapping) or payload.get("paused") is not True:
+        raise ObservationStateError("ai_claims_not_paused")
+    try:
+        updated_at = float(payload.get("updated_at"))
+    except (TypeError, ValueError) as exc:
+        raise ObservationStateError("ai_claim_pause_timestamp_invalid") from exc
+    if not math.isfinite(updated_at) or updated_at <= 0:
+        raise ObservationStateError("ai_claim_pause_timestamp_invalid")
+    return {
+        "paused": True,
+        "updated_at": updated_at,
+        "requested_by": str(payload.get("requested_by") or "unknown")[:80],
+    }
+
+
 def circuit_breaker_active(config: Any) -> bool:
     if not bool(getattr(config, "m2_server_canary_circuit_breaker_enabled", False)):
         return False
@@ -99,8 +159,7 @@ def admit_new_job(config: Any, *, logger: Any | None = None) -> bool:
 
     if not _m2_guardrail_config_exists(config):
         return True
-    if circuit_breaker_active(config):
-        return False
+    breaker_latched = circuit_breaker_active(config)
     try:
         from m2_guardrail_runtime import runtime_guardrail_status
 
@@ -109,34 +168,50 @@ def admit_new_job(config: Any, *, logger: Any | None = None) -> bool:
         if logger is not None:
             logger.exception("M2 runtime guardrail status failed: %s", exc)
         return False
-    if str(runtime.get("status") or "DEGRADED") != "ARMED":
+    runtime_status = str(runtime.get("status") or "DEGRADED")
+    if runtime_status not in {"ARMED", "TRIPPED"}:
+        _persist_runtime_drift_invalidation(
+            config,
+            reason_code=str(runtime.get("reason_code") or "runtime_not_armed"),
+            runtime_state=runtime.get("state"),
+            runtime_result=runtime,
+            logger=logger,
+        )
         return False
     runtime_state = runtime.get("state")
     if not isinstance(runtime_state, Mapping):
         return False
     try:
-        with _LOCK:
-            state = _load_armed_observation_state(config, runtime_state)
-            if state.get("pending_gate") is not None:
-                _recover_pending_gate(config, state, logger=logger)
-                _validate_armed_observation_state(config, state, runtime_state)
-    except ObservationStateError as exc:
+        connection = connect_observation_database(config)
+        try:
+            with immediate_transaction(connection):
+                validate_active_runtime(connection, runtime_state)
+        finally:
+            connection.close()
+        publish_pending_summaries(config)
+    except Exception as exc:  # noqa: BLE001 - reload-safe reason contract.
+        reason_code = str(getattr(exc, "reason_code", "") or "")
+        if not reason_code:
+            if logger is not None:
+                logger.exception("M2 observation admission validation failed: %s", exc)
+            reason_code = "state_recovery_failed"
+        if _is_runtime_invalidation_error(exc):
+            _persist_runtime_invalidation_after_rollback(
+                config,
+                error=exc,
+                runtime_state=runtime_state,
+                runtime_result=runtime,
+                logger=logger,
+            )
+            return False
         trip_circuit_breaker(
             config,
             "observation_state_degraded",
-            evidence={"stage": "admission", "error_code": exc.reason_code},
+            evidence={"stage": "admission", "error_code": reason_code},
             logger=logger,
         )
         return False
-    except Exception as exc:  # noqa: BLE001 - persistence faults fail closed.
-        if logger is not None:
-            logger.exception("M2 observation admission validation failed: %s", exc)
-        trip_circuit_breaker(
-            config,
-            "observation_state_degraded",
-            evidence={"stage": "admission", "error_code": "state_recovery_failed"},
-            logger=logger,
-        )
+    if breaker_latched or runtime_status == "TRIPPED":
         return False
     disk_evidence = _insufficient_disk_evidence(config)
     if disk_evidence is None:
@@ -156,10 +231,10 @@ def initialize_observation_gate(
     *,
     now: float | None = None,
 ) -> dict[str, Any]:
-    """Initialize the strict 0/20 state before the runtime manifest is published.
+    """Atomically create one empty frozen cohort in the scanner WAL database.
 
-    Any prior canary observer state is retained as a hashed history file. The
-    new state is written first so a crash can only leave admission fail-closed.
+    The pre-repair JSON is imported as immutable invalidated history and is
+    never deleted or overwritten.
     """
 
     timestamp = time.time() if now is None else float(now)
@@ -176,36 +251,65 @@ def initialize_observation_gate(
     ):
         raise ValueError("M2 runtime gate baseline is incomplete")
 
-    with _LOCK:
-        target = observation_state_path(config)
-        existing = _read_json_object(target)
-        if (
-            isinstance(existing, dict)
-            and existing.get("schema_version") == SCHEMA_VERSION
-            and existing.get("gate_baseline_version") == baseline_version
-        ):
-            _validate_armed_observation_state(config, existing, runtime_state)
-            if existing.get("pending_gate") is not None:
-                _recover_pending_gate(config, existing)
-                _validate_armed_observation_state(config, existing, runtime_state)
-            return existing
-        if target.is_file():
-            raw = target.read_bytes()
-            digest = hashlib.sha256(raw).hexdigest()[:16]
-            history_dir = observation_output_dir(config) / "history"
-            history_dir.mkdir(parents=True, exist_ok=True)
-            history = history_dir / f"pre-arm-{digest}.json"
-            if not history.exists():
-                atomic_write_text(history, raw.decode("utf-8", errors="replace"))
-        state = _new_observation_state(
-            config,
-            now=timestamp,
-            gate_baseline_version=baseline_version,
-            gate_start_epoch=gate_start_epoch,
-            runtime_baseline=runtime_state.get("baseline"),
-        )
-        _write_observation_state(config, state)
-        return state
+    baseline = runtime_state.get("baseline")
+    if (
+        not isinstance(baseline, Mapping)
+        or baseline.get("eligibility_policy_version") != ELIGIBILITY_POLICY_VERSION
+    ):
+        raise ValueError("M2 runtime eligibility policy is incomplete")
+
+    supplied_gate_id = str(gate.get("gate_id") or "")
+    pause_evidence: dict[str, Any] | None = None
+    if not supplied_gate_id:
+        pause_evidence = require_durable_claim_pause(config)
+
+    connection = connect_observation_database(config)
+    try:
+        with immediate_transaction(connection):
+            computed_gate_id = sqlite_gate_identifier(runtime_state)
+            if supplied_gate_id and supplied_gate_id != computed_gate_id:
+                raise ObservationStateError("runtime_gate_id_mismatch")
+            existing = sqlite_gate_by_id(connection, computed_gate_id)
+            if existing is None:
+                pause_evidence = pause_evidence or require_durable_claim_pause(config)
+                recoverable = sqlite_active_gate(connection)
+                if recoverable is not None:
+                    # Recover the narrow crash window where the SQLite gate
+                    # committed but the ARMED runtime manifest did not.  The
+                    # baseline must match exactly; the original start/ordinal
+                    # identity is retained rather than creating a second gate.
+                    recovery_state = dict(runtime_state)
+                    recovery_gate = dict(gate)
+                    recovery_gate["gate_id"] = str(recoverable["gate_id"])
+                    recovery_state["gate"] = recovery_gate
+                    recovery_state["gate_start_at"] = str(
+                        recoverable["gate_start_at"]
+                    )
+                    recovery_state["gate_start_epoch"] = float(
+                        recoverable["gate_start_epoch"]
+                    )
+                    validate_active_runtime(connection, recovery_state)
+                    return recoverable
+                legacy = _read_json_object(observation_state_path(config))
+                if isinstance(legacy, Mapping):
+                    _require_exact_legacy_import(connection, legacy)
+            return sqlite_create_gate(connection, runtime_state, now=timestamp)
+    except Exception as exc:  # noqa: BLE001 - preserve invalidation across reload.
+        if _is_runtime_invalidation_error(exc):
+            _persist_runtime_invalidation_after_rollback(
+                config,
+                error=exc,
+                runtime_state=runtime_state,
+                runtime_result={
+                    "status": "ARMED",
+                    "reason_code": _runtime_invalidation_cause(exc),
+                    "state": runtime_state,
+                },
+                logger=None,
+            )
+        raise
+    finally:
+        connection.close()
 
 
 def record_job_claim(
@@ -213,30 +317,39 @@ def record_job_claim(
     *,
     job_identity: str,
     claimed_at: float,
+    gate_job_identity: str = "",
+    input_fingerprint: str = "",
     processing_strategy: str = "",
+    transaction_connection: Any | None = None,
+    prepared_runtime_state: Mapping[str, Any] | None = None,
     logger: Any | None = None,
 ) -> dict[str, Any]:
-    """Bind a durable queue attempt to the exact armed gate baseline."""
+    """Enroll a claim in the frozen cohort, optionally in the queue transaction."""
 
     if not _m2_guardrail_config_exists(config):
         return {}
     from m2_guardrail_runtime import gate_claim_eligible, runtime_guardrail_status
 
+    # Never trust a prepared manifest as live evidence.  It is a hand-off from
+    # an earlier admission check, while the code digest must be recomputed at
+    # the actual enrollment boundary even in a caller-owned transaction.
     runtime = runtime_guardrail_status(config)
     runtime_state = runtime.get("state")
     if str(runtime.get("status") or "") != "ARMED" or not isinstance(
         runtime_state, Mapping
     ):
-        trip_circuit_breaker(
+        if str(runtime.get("status") or "") == "TRIPPED":
+            raise ObservationStateError("circuit_breaker_tripped")
+        if transaction_connection is not None and transaction_connection.in_transaction:
+            transaction_connection.rollback()
+        _persist_runtime_drift_invalidation(
             config,
-            "runtime_contract_degraded",
-            evidence={"stage": "queue_claim"},
+            reason_code=str(runtime.get("reason_code") or "runtime_contract_degraded"),
+            runtime_state=runtime_state,
+            runtime_result=runtime,
             logger=logger,
         )
-        return {
-            "status": str(runtime.get("status") or "DEGRADED"),
-            "recorded": False,
-        }
+        raise ObservationStateError("runtime_contract_degraded")
     baseline_version = str(runtime_state.get("gate_baseline_version") or "")
     eligible, reason = gate_claim_eligible(
         runtime_state,
@@ -244,251 +357,469 @@ def record_job_claim(
         claimed_at=float(claimed_at),
         gate_baseline_version=baseline_version,
     )
-    job_key = _job_key(job_identity)
     strategy = normalize_processing_strategy(processing_strategy)
-    now = time.time()
-    with _LOCK:
-        try:
-            state = _load_armed_observation_state(config, runtime_state)
-            if state.get("pending_gate") is not None:
-                _recover_pending_gate(config, state, logger=logger)
-                _validate_armed_observation_state(config, state, runtime_state)
-        except ObservationStateError as exc:
-            trip_circuit_breaker(
+    owns_connection = transaction_connection is None
+    connection = transaction_connection or connect_observation_database(config)
+    try:
+        with immediate_transaction(connection):
+            validate_active_runtime(connection, runtime_state)
+            result = sqlite_enroll_claim(
+                connection,
+                runtime_state,
+                claim_identity=job_identity,
+                gate_job_identity=gate_job_identity or job_identity,
+                input_fingerprint=input_fingerprint or gate_job_identity or job_identity,
+                claimed_at=float(claimed_at),
+                processing_strategy=strategy,
+                eligible=bool(eligible),
+                eligibility_reason=reason,
+            )
+    except Exception as exc:  # noqa: BLE001 - reload-safe durable reason contract.
+        reason_code = str(getattr(exc, "reason_code", "") or "")
+        if not reason_code:
+            raise
+        if _is_runtime_invalidation_error(exc):
+            if connection.in_transaction:
+                connection.rollback()
+            _persist_runtime_invalidation_after_rollback(
                 config,
-                "observation_state_degraded",
-                evidence={"stage": "queue_claim", "error_code": exc.reason_code},
+                error=exc,
+                runtime_state=runtime_state,
+                runtime_result={
+                    "status": "ARMED",
+                    "reason_code": _runtime_invalidation_cause(exc),
+                    "state": runtime_state,
+                },
                 logger=logger,
             )
-            return {"status": "DEGRADED", "recorded": False}
-        claims = state["claims"]
-        if job_key in claims:
-            return {
-                "status": STATUS,
-                "recorded": False,
-                "duplicate_claim_ignored": True,
-                "gate_eligible": bool(claims[job_key].get("gate_eligible")),
-            }
-        claims[job_key] = {
-            "claimed_at": float(claimed_at),
-            "gate_eligible": bool(eligible),
-            "eligibility_reason": _safe_code(reason, default="unknown", limit=120),
-            "gate_baseline_version": baseline_version,
-            "processing_strategy": strategy,
-            "terminal_observed": False,
-        }
-        if eligible:
-            event = _strict_outcome(
-                terminal_status="QUEUED",
-                processing_strategy=strategy,
-                event_kind="claim",
-                claimed_after_gate_start=True,
+            raise ObservationStateError(reason_code) from exc
+        trip_circuit_breaker(
+            config,
+            "observation_state_degraded",
+            evidence={"stage": "queue_claim", "error_code": reason_code},
+            logger=logger,
+        )
+        raise ObservationStateError(reason_code) from exc
+    finally:
+        if owns_connection:
+            connection.close()
+    result["status"] = STATUS
+    result["gate_eligible"] = bool(result.get("enrolled"))
+    return result
+
+
+def validate_claim_transaction(
+    config: Any,
+    *,
+    transaction_connection: Any,
+    logger: Any | None = None,
+) -> dict[str, Any]:
+    """Validate or invalidate the active gate before queue mutation begins."""
+
+    from m2_guardrail_runtime import runtime_guardrail_status
+
+    runtime = runtime_guardrail_status(config)
+    runtime_state = runtime.get("state")
+    runtime_status = str(runtime.get("status") or "")
+    if runtime_status not in {"ARMED", "TRIPPED"} or not isinstance(
+        runtime_state, Mapping
+    ):
+        gate = sqlite_active_gate(transaction_connection)
+        if gate is not None:
+            sqlite_invalidate_active_gate(
+                transaction_connection,
+                INVALIDATED_RUNTIME,
+                evidence={
+                    "reason_code": str(runtime.get("reason_code") or "runtime_not_armed"),
+                    "expected": {
+                        "baseline_version": gate.get("baseline_version"),
+                        "worker_sha": gate.get("worker_sha"),
+                        "webui_sha": gate.get("webui_sha"),
+                        "container_image_id": gate.get("container_image_id"),
+                        "worker_container_id": gate.get("worker_container_id"),
+                        "worker_source_revision": _gate_worker_source_revision(
+                            gate
+                        ),
+                        "worker_runtime_code_revision": _gate_runtime_code_revision(
+                            gate
+                        ),
+                        "runtime_instance_fingerprint": gate.get(
+                            "worker_runtime_instance_fingerprint"
+                        ),
+                        "configuration_fingerprint": gate.get(
+                            "configuration_fingerprint"
+                        ),
+                        "decision_schema_version": gate.get(
+                            "decision_schema_version"
+                        ),
+                        "eligibility_policy_version": gate.get(
+                            "eligibility_policy_version"
+                        ),
+                    },
+                    "actual": _actual_runtime_fingerprint(config, runtime),
+                },
             )
-            state["totals"], _ = update_summary_counters(
-                state["totals"], outcome=event
-            )
-            state["window"]["counters"], _ = update_summary_counters(
-                state["window"]["counters"], outcome=event
-            )
-        else:
-            state["excluded_claims"] = int(state.get("excluded_claims") or 0) + 1
-        state["updated_at"] = now
-        _write_observation_state(config, state)
+        trip_circuit_breaker(
+            config,
+            "runtime_change",
+            evidence={
+                "stage": "claim_transaction",
+                "error_code": str(runtime.get("reason_code") or "runtime_not_armed"),
+            },
+            logger=logger,
+        )
         return {
-            "status": STATUS,
-            "recorded": True,
-            "gate_eligible": bool(eligible),
-            "eligibility_reason": reason,
+            "admitted": False,
+            "reason_code": str(runtime.get("reason_code") or "runtime_not_armed"),
         }
+    try:
+        validate_active_runtime(transaction_connection, runtime_state)
+    except ObservationStoreError as exc:
+        trip_circuit_breaker(
+            config,
+            "runtime_change",
+            evidence={"stage": "claim_transaction", "error_code": exc.reason_code},
+            logger=logger,
+        )
+        return {"admitted": False, "reason_code": exc.reason_code}
+    if runtime_status == "TRIPPED":
+        return {
+            "admitted": False,
+            "reason_code": "circuit_breaker_tripped",
+        }
+    return {"admitted": True, "runtime_state": dict(runtime_state)}
 
 
 def record_job_result(
     config: Any,
     *,
     job_identity: str,
+    gate_job_identity: str = "",
     outcome: Mapping[str, Any],
     strict_evidence: Mapping[str, Any] | None = None,
+    transaction_connection: Any | None = None,
     logger: Any | None = None,
 ) -> dict[str, Any]:
-    """Persist one bounded terminal result and emit only strict 20-job gates."""
+    """Atomically persist one member outcome and journal an all-terminal summary."""
 
     if not _m2_guardrail_config_exists(config):
         return {}
-    now = time.time()
     sanitized = _sanitize_outcome(job_identity, outcome)
-    with _LOCK:
-        try:
-            from m2_guardrail_runtime import load_runtime_state
+    strict_outcome = _strict_outcome_from_sanitized(
+        sanitized,
+        claimed_after_gate_start=True,
+    )
+    qualification = qualify_strict_output(
+        strict_outcome,
+        {} if strict_evidence is None else strict_evidence,
+    )
+    owns_connection = transaction_connection is None
+    connection = transaction_connection or connect_observation_database(config)
+    emitted: list[str] = []
+    try:
+        with immediate_transaction(connection):
+            try:
+                from m2_guardrail_runtime import runtime_guardrail_status
 
-            runtime_state = load_runtime_state(config)
-            if not isinstance(runtime_state, Mapping):
-                raise ObservationStateError("runtime_state_missing")
-            state = _load_armed_observation_state(config, runtime_state)
-            if state.get("pending_gate") is not None:
-                _recover_pending_gate(config, state, logger=logger)
-                _validate_armed_observation_state(config, state, runtime_state)
-        except ObservationStateError as exc:
-            trip_circuit_breaker(
-                config,
-                "observation_state_degraded",
-                evidence={"stage": "terminal_observation", "error_code": exc.reason_code},
-                logger=logger,
-            )
-            return {
-                "status": "DEGRADED",
-                "recorded": False,
-                "circuit_breaker_tripped": True,
-                "reason_code": exc.reason_code,
-            }
-        observed_job_keys = state["observed_job_keys"]
-        if sanitized["job_key"] in observed_job_keys:
-            return {
-                "status": STATUS,
-                "verified_since_gate": _gate_progress(state),
-                "next_gate_after_verified_completed": _next_gate(state, config),
-                "emitted": [],
-                "duplicate_observation_ignored": True,
-                "circuit_breaker_tripped": circuit_breaker_active(config),
-            }
-        observed_job_keys.append(sanitized["job_key"])
-        state["total_attempts_observed"] += 1
-        window = state["window"]
-        window["last_observed_at"] = now
-        claim = state["claims"].get(sanitized["job_key"])
-        gate_eligible = bool(
-            isinstance(claim, dict) and claim.get("gate_eligible") is True
-        )
-        exclusion_reason = (
-            str(claim.get("eligibility_reason") or "")
-            if isinstance(claim, dict)
-            else _pre_gate_exclusion_reason(config, sanitized["job_key"])
-        )
-
-        _update_failure_streaks(state, sanitized)
-        breaker_reason = (
-            _breaker_reason(sanitized, state, config)
-            if bool(
-                getattr(
-                    config,
-                    "m2_server_canary_circuit_breaker_enabled",
-                    False,
+                terminal_runtime = runtime_guardrail_status(config)
+            except Exception:  # noqa: BLE001 - terminal evidence persists fail closed.
+                terminal_runtime = {
+                    "status": "DEGRADED",
+                    "reason_code": "runtime_status_unavailable",
+                    "state": None,
+                }
+            runtime_drift_reason = ""
+            active = sqlite_active_gate(connection)
+            if active is None and sqlite_latest_gate(connection) is None:
+                raise ObservationStoreError("observation_gate_missing")
+            runtime_state = terminal_runtime.get("state")
+            if active is not None:
+                if (
+                    str(terminal_runtime.get("status") or "") in {"ARMED", "TRIPPED"}
+                    and isinstance(runtime_state, Mapping)
+                ):
+                    try:
+                        validate_active_runtime(connection, runtime_state)
+                    except ObservationStoreError as exc:
+                        runtime_drift_reason = exc.reason_code
+                else:
+                    runtime_drift_reason = str(
+                        terminal_runtime.get("reason_code") or "runtime_not_armed"
+                    )
+                    sqlite_invalidate_active_gate(
+                        connection,
+                        INVALIDATED_RUNTIME,
+                        evidence={
+                            "reason_code": runtime_drift_reason,
+                            "expected": {
+                                "baseline_version": active.get("baseline_version"),
+                                "worker_sha": active.get("worker_sha"),
+                                "webui_sha": active.get("webui_sha"),
+                                "container_image_id": active.get(
+                                    "container_image_id"
+                                ),
+                                "worker_container_id": active.get(
+                                    "worker_container_id"
+                                ),
+                                "worker_source_revision": (
+                                    _gate_worker_source_revision(active)
+                                ),
+                                "worker_runtime_code_revision": (
+                                    _gate_runtime_code_revision(active)
+                                ),
+                                "runtime_instance_fingerprint": active.get(
+                                    "worker_runtime_instance_fingerprint"
+                                ),
+                                "configuration_fingerprint": active.get(
+                                    "configuration_fingerprint"
+                                ),
+                                "decision_schema_version": active.get(
+                                    "decision_schema_version"
+                                ),
+                                "eligibility_policy_version": active.get(
+                                    "eligibility_policy_version"
+                                ),
+                            },
+                            "actual": _actual_runtime_fingerprint(
+                                config, terminal_runtime
+                            ),
+                        },
+                    )
+            text = " ".join(
+                str(sanitized.get(key) or "")
+                for key in (
+                    "stage",
+                    "error_code",
+                    "reason_code",
+                    "_classification_detail",
                 )
             )
-            else ""
-        )
-        strict_outcome = _strict_outcome_from_sanitized(
-            sanitized,
-            claimed_after_gate_start=gate_eligible,
-        )
-        qualification = qualify_strict_output(
-            strict_outcome,
-            {} if strict_evidence is None else strict_evidence,
-        )
-        if (
-            gate_eligible
-            and sanitized["terminal_status"] == "COMPLETED"
-            and qualification.get("qualified") is not True
-        ):
-            strict_outcome["incorrect_completion"] = True
-            breaker_reason = breaker_reason or "incorrect_completion"
-            qualification = qualify_strict_output(
-                strict_outcome,
-                {} if strict_evidence is None else strict_evidence,
+            signature = (
+                f"{sanitized.get('stage') or 'worker'}:"
+                f"{sanitized.get('error_code') or sanitized.get('reason_code') or 'unknown'}"
             )
-        if breaker_reason:
-            trip_circuit_breaker(
-                config,
-                breaker_reason,
-                evidence={
-                    "job_key": sanitized["job_key"],
-                    "stage": sanitized["stage"],
-                    "error_code": sanitized["error_code"],
-                    "identical_failure_streak": state["identical_failure_streak"],
-                    "oom_streak": state["oom_streak"],
-                    "strict_failure_count": len(
-                        qualification.get("failed_evidence") or []
-                    ),
-                    "strict_failure_code": str(
-                        (qualification.get("reason_codes") or [""])[0]
-                    ),
+            is_oom = bool(sanitized.get("oom_event")) or _is_oom(text)
+            projected_streaks = _preview_failure_streaks(
+                sqlite_meta_state(connection),
+                failed=bool(sanitized.get("failed")),
+                is_oom=is_oom,
+                signature=signature,
+            )
+            breaker_reason = (
+                _breaker_reason(sanitized, projected_streaks, config)
+                if bool(
+                    getattr(
+                        config,
+                        "m2_server_canary_circuit_breaker_enabled",
+                        False,
+                    )
+                )
+                else ""
+            )
+            if runtime_drift_reason:
+                breaker_reason = "runtime_change"
+                strict_outcome["breaker_tripped"] = True
+                sanitized["breaker_tripped"] = True
+                drift_evidence = dict(strict_evidence or {})
+                drift_evidence["runtime_commit_matches_gate_baseline"] = False
+                qualification = qualify_strict_output(
+                    strict_outcome,
+                    drift_evidence,
+                )
+            if (
+                sanitized["terminal_status"] == "COMPLETED"
+                and qualification.get("qualified") is not True
+            ):
+                strict_outcome["incorrect_completion"] = True
+                sanitized["incorrect_completion"] = True
+                breaker_reason = breaker_reason or "incorrect_completion"
+                qualification = qualify_strict_output(
+                    strict_outcome,
+                    {} if strict_evidence is None else strict_evidence,
+                )
+            if breaker_reason:
+                strict_outcome["breaker_tripped"] = True
+                sanitized["breaker_tripped"] = True
+            persisted_outcome = {
+                key: value
+                for key, value in sanitized.items()
+                if not str(key).startswith("_")
+            }
+            event_reservation = reserve_result_event(
+                connection,
+                gate_job_identity=gate_job_identity or job_identity,
+                claim_identity=job_identity,
+                observed_state=str(sanitized.get("terminal_status") or "UNKNOWN"),
+                event_payload={
+                    "outcome": persisted_outcome,
+                    "normalized_outcome": strict_outcome,
+                    "qualification": qualification,
+                    "breaker": {
+                        "tripped": bool(breaker_reason),
+                        "reason_code": breaker_reason,
+                        "identical_failure_streak": projected_streaks[
+                            "identical_failure_streak"
+                        ],
+                        "oom_streak": projected_streaks["oom_streak"],
+                    },
                 },
-                logger=logger,
             )
-            strict_outcome["breaker_tripped"] = True
-
-        if gate_eligible:
-            window["terminal_attempts"] += 1
-            if not window.get("started_at"):
-                window["started_at"] = float(claim.get("claimed_at") or now)
-            _replace_unreported_strategy(state, claim, sanitized["processing_strategy"])
-            state["totals"], qualification = update_summary_counters(
-                state["totals"],
-                outcome=strict_outcome,
-                evidence={} if strict_evidence is None else strict_evidence,
-            )
-            window["counters"], _ = update_summary_counters(
-                window["counters"],
-                outcome=strict_outcome,
-                evidence={} if strict_evidence is None else strict_evidence,
-            )
-            if sanitized["terminal_status"] != "COMPLETED":
-                error_code = sanitized["error_code"] or "unclassified_failure"
-                errors = window["error_codes"]
-                errors[error_code] = int(errors.get(error_code) or 0) + 1
-        else:
-            state["excluded_terminal_results"] = int(
-                state.get("excluded_terminal_results") or 0
-            ) + 1
-            reasons = state["excluded_reason_counts"]
-            safe_reason = _safe_code(
-                exclusion_reason or "claim_not_bound_to_gate",
-                default="claim_not_bound_to_gate",
-                limit=120,
-            )
-            reasons[safe_reason] = int(reasons.get(safe_reason) or 0) + 1
-
-        if isinstance(claim, dict):
-            claim["terminal_observed"] = True
-            claim["processing_strategy"] = sanitized["processing_strategy"]
-        state["last_event"] = {
-            "job_key": sanitized["job_key"],
-            "terminal_status": sanitized["terminal_status"],
-            "processing_strategy": sanitized["processing_strategy"],
-            "stage": sanitized["stage"],
-            "error_code": sanitized["error_code"],
-            "reason_code": sanitized["reason_code"],
-            "gate_eligible": gate_eligible,
-            "gate_qualified": bool(qualification.get("qualified")),
-            "qualification_reason_codes": list(
-                qualification.get("reason_codes") or []
-            ),
-        }
-        state["updated_at"] = now
-
-        gate_size = max(
-            1,
-            int(getattr(config, "m2_server_canary_observation_gate_size", 20) or 20),
-        )
-        emitted = _emit_gate_if_ready(
+            if not event_reservation["reserved"]:
+                if runtime_drift_reason:
+                    trip_circuit_breaker(
+                        config,
+                        "runtime_change",
+                        evidence={
+                            "job_key": sanitized["job_key"],
+                            "stage": "terminal_observation_replay",
+                            "error_code": runtime_drift_reason,
+                        },
+                        logger=logger,
+                    )
+                result = {
+                    "recorded": False,
+                    "enrolled": bool(event_reservation.get("enrolled")),
+                    "settled": bool(event_reservation.get("settled")),
+                    "duplicate_observation_ignored": True,
+                    "duplicate_result_ignored": True,
+                    "gate_id": str(event_reservation.get("gate_id") or ""),
+                    "ordinal": event_reservation.get("ordinal"),
+                    "emission_pending": bool(
+                        event_reservation.get("emission_pending")
+                    ),
+                }
+            else:
+                streaks = sqlite_update_failure_streaks(
+                    connection,
+                    sanitized,
+                    is_oom=is_oom,
+                    failed=bool(sanitized.get("failed")),
+                    signature=signature,
+                )
+                if streaks != projected_streaks:
+                    raise ObservationStoreError("failure_streak_projection_mismatch")
+                breaker_payload: dict[str, Any] = {}
+                if breaker_reason:
+                    breaker_payload = trip_circuit_breaker(
+                        config,
+                        breaker_reason,
+                        evidence={
+                            "job_key": sanitized["job_key"],
+                            "stage": sanitized["stage"],
+                            "error_code": sanitized["error_code"],
+                            "identical_failure_streak": streaks[
+                                "identical_failure_streak"
+                            ],
+                            "oom_streak": streaks["oom_streak"],
+                            "strict_failure_count": len(
+                                qualification.get("failed_evidence") or []
+                            ),
+                            "strict_failure_code": str(
+                                (qualification.get("reason_codes") or [""])[0]
+                            ),
+                        },
+                        logger=logger,
+                    )
+                result = record_terminal_evidence(
+                    connection,
+                    gate_job_identity=gate_job_identity or job_identity,
+                    claim_identity=job_identity,
+                    outcome=persisted_outcome,
+                    qualification=qualification,
+                    breaker_evidence={
+                        "tripped": bool(breaker_reason),
+                        "reason_code": breaker_reason,
+                        "tripped_at": breaker_payload.get("tripped_at"),
+                    },
+                )
+            summary = sqlite_status_summary(connection)
+    except ObservationStoreError as exc:
+        trip_circuit_breaker(
             config,
-            state,
-            gate_size=gate_size,
-            now=now,
+            "observation_state_degraded",
+            evidence={"stage": "terminal_observation", "error_code": exc.reason_code},
             logger=logger,
         )
-        _write_observation_state(config, state)
-        return {
-            "status": STATUS,
-            "verified_since_gate": _gate_progress(state),
-            "next_gate_after_verified_completed": _next_gate(state, config),
-            "emitted": emitted,
-            "circuit_breaker_tripped": circuit_breaker_active(config),
-            "gate_eligible": gate_eligible,
-            "strictly_qualified": bool(qualification.get("qualified")),
-        }
+        raise ObservationStateError(exc.reason_code) from exc
+    finally:
+        if owns_connection:
+            connection.close()
+    if owns_connection:
+        emitted = publish_pending_summaries(config)
+    return {
+        "status": STATUS,
+        "gate_id": result.get("gate_id", summary.get("gate_id", "")),
+        "frozen_cohort_progress": f"{summary.get('enrolled_count', 0)}/{summary.get('target_size', 20)}",
+        "settled_progress": f"{summary.get('settled_count', 0)}/{summary.get('target_size', 20)}",
+        "verified_since_gate": int(summary.get("strict_verified_count") or 0),
+        "emitted": emitted,
+        "circuit_breaker_tripped": circuit_breaker_active(config),
+        "gate_eligible": bool(result.get("enrolled")),
+        "strictly_qualified": bool(result.get("strictly_qualified")),
+        **{key: value for key, value in result.items() if key not in {"status"}},
+    }
 
 
-def has_durable_gate_claim_binding(config: Any, *, job_identity: str) -> bool:
+def record_state_attempt_result(
+    config: Any,
+    state: Any,
+    video: str | Path,
+    delivery_attempt_id: str,
+    *,
+    transaction_connection: Any,
+    logger: Any | None = None,
+) -> dict[str, Any]:
+    """Build and persist one queue attempt result on the caller's transaction."""
+
+    if not bool(getattr(config, "m2_server_canary_observer_enabled", False)):
+        return {}
+    try:
+        from m2_guardrail_runtime import load_runtime_state
+        from m2_strict_runtime_evidence import build_m2_strict_runtime_evidence
+
+        strict_result = build_m2_strict_runtime_evidence(
+            state,
+            video,
+            config,
+            delivery_attempt_id,
+            load_runtime_state(config),
+        )
+        attempt = state.get_ai_delivery_attempt(delivery_attempt_id)
+        gate_job_identity = (
+            str(attempt.get("obligation_id") or delivery_attempt_id)
+            if isinstance(attempt, Mapping)
+            else delivery_attempt_id
+        )
+        return record_job_result(
+            config,
+            job_identity=delivery_attempt_id,
+            gate_job_identity=gate_job_identity,
+            outcome=strict_result["outcome"],
+            strict_evidence=strict_result["evidence"],
+            transaction_connection=transaction_connection,
+            logger=logger,
+        )
+    except Exception:
+        try:
+            trip_circuit_breaker(
+                config,
+                "observation_pipeline_failure",
+                evidence={"stage": "terminal_observation"},
+                logger=logger,
+            )
+        except Exception:
+            # The process-local latch is set before breaker evidence is written.
+            pass
+        raise
+
+
+def has_durable_gate_claim_binding(
+    config: Any,
+    *,
+    job_identity: str,
+    gate_job_identity: str = "",
+    transaction_connection: Any | None = None,
+) -> bool:
     """Return whether an attempt has an intact, gate-eligible durable binding.
 
     Missing or malformed runtime/observer state raises ``ObservationStateError``
@@ -498,20 +829,565 @@ def has_durable_gate_claim_binding(config: Any, *, job_identity: str) -> bool:
 
     if not str(job_identity or "").strip():
         raise ObservationStateError("job_identity_invalid")
-    from m2_guardrail_runtime import load_runtime_state
+    from m2_guardrail_runtime import runtime_guardrail_status
 
-    with _LOCK:
-        runtime_state = load_runtime_state(config)
-        if not isinstance(runtime_state, Mapping):
-            raise ObservationStateError("runtime_state_missing")
-        state = _load_armed_observation_state(config, runtime_state)
-        claim = state["claims"].get(_job_key(job_identity))
-        return bool(
-            isinstance(claim, Mapping)
-            and claim.get("gate_eligible") is True
-            and str(claim.get("gate_baseline_version") or "")
-            == str(runtime_state.get("gate_baseline_version") or "")
+    runtime = runtime_guardrail_status(config)
+    runtime_state = runtime.get("state")
+    if str(runtime.get("status") or "") != "ARMED" or not isinstance(
+        runtime_state, Mapping
+    ):
+        raise ObservationStateError("runtime_state_not_armed")
+    owns_connection = transaction_connection is None
+    connection = transaction_connection or connect_observation_database(config)
+    try:
+        with immediate_transaction(connection):
+            gate = validate_active_runtime(connection, runtime_state)
+            job_id = hashlib.sha256(
+                str(gate_job_identity or job_identity).encode("utf-8")
+            ).hexdigest()
+            return member_for_job(connection, str(gate["gate_id"]), job_id) is not None
+    except Exception as exc:
+        # The frozen-store restart test deliberately reloads its module; use
+        # the durable reason contract rather than relying on class identity
+        # surviving that in-process reload.
+        reason_code = getattr(exc, "reason_code", "")
+        if not reason_code:
+            raise
+        if _is_runtime_invalidation_error(exc):
+            if connection.in_transaction:
+                connection.rollback()
+            _persist_runtime_invalidation_after_rollback(
+                config,
+                error=exc,
+                runtime_state=runtime_state,
+                runtime_result=runtime,
+                logger=None,
+            )
+        raise ObservationStateError(str(reason_code)) from exc
+    finally:
+        if owns_connection:
+            connection.close()
+
+
+def invalidate_observation_gate(
+    config: Any,
+    *,
+    reason: str,
+    expected_gate_baseline_version: str,
+    expected_gate_start_at: str,
+    expected_worker_sha: str,
+    expected_webui_sha: str,
+    expected_pre_gate_attempts: int,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """Import and retire the exact pre-repair gate without deleting evidence."""
+
+    from m2_guardrail_runtime import runtime_state_path
+
+    timestamp = time.time() if now is None else float(now)
+    if reason != INVALIDATED_AUTOMATION:
+        raise ObservationStateError("legacy_gate_invalidation_reason_mismatch")
+    pause_evidence = require_durable_claim_pause(config)
+    runtime_path = runtime_state_path(config)
+    runtime_state = _read_json_object(runtime_path)
+    if not isinstance(runtime_state, Mapping):
+        raise ObservationStateError("runtime_state_missing")
+    legacy = _read_json_object(observation_state_path(config))
+    if not isinstance(legacy, Mapping):
+        raise ObservationStateError("legacy_observation_state_missing")
+
+    # All caller-supplied expectations are checked before the scanner database
+    # is opened.  This makes a typo or stale operator snapshot a zero-write
+    # failure instead of a partially imported/inactivated lifecycle.
+    _assert_expected_legacy_runtime(
+        runtime_state,
+        expected_gate_baseline_version=expected_gate_baseline_version,
+        expected_gate_start_at=expected_gate_start_at,
+        expected_worker_sha=expected_worker_sha,
+        expected_webui_sha=expected_webui_sha,
+        expected_pre_gate_attempts=expected_pre_gate_attempts,
+    )
+    legacy_baseline_version = str(legacy.get("gate_baseline_version") or "")
+    if legacy_baseline_version and legacy_baseline_version != expected_gate_baseline_version:
+        raise ObservationStateError("legacy_observation_baseline_mismatch")
+    legacy_start_at = str(legacy.get("gate_start_at") or "")
+    if legacy_start_at and legacy_start_at != expected_gate_start_at:
+        raise ObservationStateError("legacy_observation_start_mismatch")
+    historical_text = json.dumps(
+        dict(legacy), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    historical_digest = "sha256:" + hashlib.sha256(
+        historical_text.encode("utf-8")
+    ).hexdigest()
+    expected_gate_id = sqlite_gate_identifier(
+        {
+            "gate_baseline_version": expected_gate_baseline_version,
+            "gate_start_epoch": float(runtime_state.get("gate_start_epoch") or 0),
+        }
+    )
+
+    connection = connect_observation_database(config)
+    try:
+        with immediate_transaction(connection):
+            require_durable_claim_pause(config)
+            existing_before = sqlite_gate_by_id(connection, expected_gate_id)
+            unrelated_active = sqlite_active_gate(connection)
+            if (
+                unrelated_active is not None
+                and str(unrelated_active.get("gate_id") or "") != expected_gate_id
+            ):
+                raise ObservationStateError("different_active_gate_exists")
+            import_legacy_gate(
+                connection,
+                legacy,
+                runtime_state,
+                now=timestamp,
+            )
+            gate = sqlite_gate_by_id(connection, expected_gate_id)
+            if gate is None:
+                raise ObservationStateError("legacy_gate_missing")
+            _assert_expected_legacy_gate(
+                gate,
+                expected_gate_baseline_version=expected_gate_baseline_version,
+                expected_gate_start_at=expected_gate_start_at,
+                expected_worker_sha=expected_worker_sha,
+                expected_webui_sha=expected_webui_sha,
+                expected_pre_gate_attempts=expected_pre_gate_attempts,
+            )
+            _assert_exact_legacy_payloads(gate, legacy, runtime_state)
+            already_invalidated = (
+                existing_before is not None
+                and str(existing_before.get("status") or "") == INVALIDATED_AUTOMATION
+            )
+            if str(gate.get("status") or "") == GATE_ACTIVE:
+                gate = sqlite_invalidate_active_gate(
+                    connection,
+                    INVALIDATED_AUTOMATION,
+                    evidence={
+                        "reason": "legacy_success_count_observer_not_ready",
+                        "expected_pre_gate_attempts": int(expected_pre_gate_attempts),
+                    },
+                    now=timestamp,
+                )
+                already_invalidated = False
+            if gate is None or str(gate.get("status") or "") != INVALIDATED_AUTOMATION:
+                raise ObservationStateError("legacy_gate_invalidation_failed")
+    finally:
+        connection.close()
+
+    if str(runtime_state.get("status") or "") == "ARMED":
+        retired = dict(runtime_state)
+        retired["status"] = "DEGRADED"
+        retired["reason_code"] = INVALIDATED_AUTOMATION
+        retired["gate_final_status"] = INVALIDATED_AUTOMATION
+        retired["invalidated_at"] = timestamp
+        atomic_write_text(
+            runtime_path,
+            json.dumps(retired, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
         )
+    return {
+        "status": INVALIDATED_AUTOMATION,
+        "gate_id": str(gate["gate_id"]),
+        "baseline_version": str(gate["baseline_version"]),
+        "gate_start_at": str(gate["gate_start_at"]),
+        "invalidation_reason": str(gate["invalidation_reason"]),
+        "invalidated_at": float(gate["invalidated_at"] or timestamp),
+        "historical_evidence_sha256": historical_digest,
+        "supplemental_pre_gate_attempts": int(gate["pre_gate_attempt_count"]),
+        "enrolled_count": int(gate["enrolled_count"]),
+        "settled_count": int(gate["settled_count"]),
+        "already_invalidated": already_invalidated,
+        "history_preserved": True,
+        "claims_paused": pause_evidence["paused"],
+        "production_resources_affected": False,
+    }
+
+
+def _latest_sqlite_gate(connection: Any) -> dict[str, Any] | None:
+    cursor = connection.execute(
+        "SELECT * FROM m2_observation_gates ORDER BY gate_start_epoch DESC LIMIT 1"
+    )
+    row = cursor.fetchone()
+    if row is None:
+        return None
+    columns = [str(item[0]) for item in cursor.description or []]
+    return dict(zip(columns, row, strict=True))
+
+
+def _assert_expected_legacy_runtime(
+    runtime_state: Mapping[str, Any],
+    *,
+    expected_gate_baseline_version: str,
+    expected_gate_start_at: str,
+    expected_worker_sha: str,
+    expected_webui_sha: str,
+    expected_pre_gate_attempts: int,
+) -> None:
+    baseline = runtime_state.get("baseline")
+    pre_gate = runtime_state.get("pre_gate_running")
+    attempt_keys = pre_gate.get("attempt_keys") if isinstance(pre_gate, Mapping) else None
+    queue_job_keys = (
+        pre_gate.get("queue_job_keys") if isinstance(pre_gate, Mapping) else None
+    )
+    runtime_status = str(runtime_state.get("status") or "")
+    already_retired = (
+        runtime_status == "DEGRADED"
+        and str(runtime_state.get("reason_code") or "") == INVALIDATED_AUTOMATION
+        and str(runtime_state.get("gate_final_status") or "")
+        == INVALIDATED_AUTOMATION
+    )
+    if (
+        runtime_status != "ARMED"
+        and not already_retired
+        or str(runtime_state.get("gate_baseline_version") or "")
+        != expected_gate_baseline_version
+        or str(runtime_state.get("gate_start_at") or "") != expected_gate_start_at
+        or not isinstance(baseline, Mapping)
+        or str(baseline.get("worker_commit_sha") or "") != expected_worker_sha
+        or str(baseline.get("webui_commit_sha") or "") != expected_webui_sha
+        or not isinstance(pre_gate, Mapping)
+        or not isinstance(attempt_keys, list)
+        or not isinstance(queue_job_keys, list)
+        or int(pre_gate.get("attempt_count") or 0) != int(expected_pre_gate_attempts)
+        or int(pre_gate.get("attempt_count") or 0) != len(attempt_keys)
+        or int(pre_gate.get("queue_job_count") or 0) != len(queue_job_keys)
+    ):
+        raise ObservationStateError("runtime_legacy_gate_expectation_mismatch")
+
+
+def _assert_expected_legacy_gate(
+    gate: Mapping[str, Any],
+    *,
+    expected_gate_baseline_version: str,
+    expected_gate_start_at: str,
+    expected_worker_sha: str,
+    expected_webui_sha: str,
+    expected_pre_gate_attempts: int,
+) -> None:
+    if (
+        str(gate.get("baseline_version") or "") != expected_gate_baseline_version
+        or str(gate.get("gate_start_at") or "") != expected_gate_start_at
+        or str(gate.get("worker_sha") or "") != expected_worker_sha
+        or str(gate.get("webui_sha") or "") != expected_webui_sha
+        or int(gate.get("pre_gate_attempt_count") or 0)
+        != int(expected_pre_gate_attempts)
+    ):
+        raise ObservationStateError("legacy_gate_expectation_mismatch")
+
+
+def _canonical_mapping_json(value: Mapping[str, Any]) -> str:
+    return json.dumps(
+        dict(value), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+
+
+def _legacy_runtime_manifest_payload(
+    runtime_state: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload = dict(runtime_state)
+    if (
+        str(payload.get("status") or "") == "DEGRADED"
+        and str(payload.get("reason_code") or "") == INVALIDATED_AUTOMATION
+        and str(payload.get("gate_final_status") or "") == INVALIDATED_AUTOMATION
+    ):
+        payload["status"] = "ARMED"
+        payload.pop("reason_code", None)
+        payload.pop("gate_final_status", None)
+        payload.pop("invalidated_at", None)
+    return payload
+
+
+def _validated_legacy_runtime_manifest(gate: Mapping[str, Any]) -> dict[str, Any]:
+    manifest_text = str(gate.get("legacy_runtime_manifest_json") or "")
+    manifest_digest = str(gate.get("legacy_runtime_manifest_sha256") or "")
+    if not manifest_text or not re.fullmatch(r"[0-9a-f]{64}", manifest_digest):
+        raise ObservationStateError("legacy_runtime_manifest_missing")
+    if hashlib.sha256(manifest_text.encode("utf-8")).hexdigest() != manifest_digest:
+        raise ObservationStateError("legacy_runtime_manifest_digest_mismatch")
+    try:
+        payload = json.loads(manifest_text)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ObservationStateError("legacy_runtime_manifest_invalid") from exc
+    if not isinstance(payload, Mapping):
+        raise ObservationStateError("legacy_runtime_manifest_invalid")
+    if _canonical_mapping_json(payload) != manifest_text:
+        raise ObservationStateError("legacy_runtime_manifest_not_canonical")
+    return dict(payload)
+
+
+def _assert_exact_legacy_payloads(
+    gate: Mapping[str, Any],
+    legacy_state: Mapping[str, Any],
+    runtime_state: Mapping[str, Any],
+) -> None:
+    if str(gate.get("legacy_observation_json") or "") != _canonical_mapping_json(
+        legacy_state
+    ):
+        raise ObservationStateError("legacy_observation_payload_mismatch")
+    stored_runtime = _validated_legacy_runtime_manifest(gate)
+    if stored_runtime != _legacy_runtime_manifest_payload(runtime_state):
+        raise ObservationStateError("legacy_runtime_manifest_mismatch")
+    baseline = stored_runtime.get("baseline")
+    pre_gate = stored_runtime.get("pre_gate_running")
+    attempt_keys = pre_gate.get("attempt_keys") if isinstance(pre_gate, Mapping) else None
+    queue_job_keys = (
+        pre_gate.get("queue_job_keys") if isinstance(pre_gate, Mapping) else None
+    )
+    if (
+        not isinstance(baseline, Mapping)
+        or not isinstance(attempt_keys, list)
+        or not isinstance(queue_job_keys, list)
+        or int(pre_gate.get("attempt_count") or 0) != len(attempt_keys)
+        or int(pre_gate.get("queue_job_count") or 0) != len(queue_job_keys)
+        or int(gate.get("pre_gate_attempt_count") or 0) != len(attempt_keys)
+        or str(stored_runtime.get("gate_baseline_version") or "")
+        != str(gate.get("baseline_version") or "")
+        or str(stored_runtime.get("gate_start_at") or "")
+        != str(gate.get("gate_start_at") or "")
+        or str(baseline.get("worker_commit_sha") or "")
+        != str(gate.get("worker_sha") or "")
+        or str(baseline.get("webui_commit_sha") or "")
+        != str(gate.get("webui_sha") or "")
+    ):
+        raise ObservationStateError("legacy_runtime_manifest_identity_mismatch")
+
+
+def _require_exact_legacy_import(
+    connection: Any,
+    legacy_state: Mapping[str, Any],
+) -> dict[str, Any]:
+    try:
+        gate_id = sqlite_gate_identifier(
+            {
+                "gate_baseline_version": str(
+                    legacy_state.get("gate_baseline_version") or ""
+                ),
+                "gate_start_epoch": float(
+                    legacy_state.get("gate_start_epoch") or 0
+                ),
+            }
+        )
+        gate = sqlite_gate_by_id(connection, gate_id)
+        if gate is None or str(gate.get("status") or "") != INVALIDATED_AUTOMATION:
+            raise ObservationStateError("legacy_gate_not_explicitly_invalidated")
+        runtime_state = _validated_legacy_runtime_manifest(gate)
+        _assert_exact_legacy_payloads(gate, legacy_state, runtime_state)
+        return gate
+    except (ObservationStateError, ObservationStoreError, TypeError, ValueError) as exc:
+        raise ObservationStateError("legacy_gate_requires_exact_invalidation") from exc
+
+
+def _gate_runtime_code_revision(gate: Mapping[str, Any]) -> str:
+    try:
+        baseline = json.loads(str(gate.get("baseline_json") or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return "UNAVAILABLE"
+    if not isinstance(baseline, Mapping):
+        return "UNAVAILABLE"
+    return str(baseline.get("worker_runtime_code_revision") or "UNAVAILABLE")
+
+
+def _gate_worker_source_revision(gate: Mapping[str, Any]) -> str:
+    try:
+        baseline = json.loads(str(gate.get("baseline_json") or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return "UNAVAILABLE"
+    if not isinstance(baseline, Mapping):
+        return "UNAVAILABLE"
+    return str(baseline.get("worker_source_revision") or "UNAVAILABLE")
+
+
+def _actual_runtime_fingerprint(config: Any, runtime: Mapping[str, Any]) -> dict[str, Any]:
+    """Capture bounded, path-free actual values for drift evidence."""
+
+    actual: dict[str, Any] = {
+        "runtime_status": str(runtime.get("status") or "DEGRADED"),
+        "reason_code": str(runtime.get("reason_code") or "runtime_status_unavailable"),
+        "decision_schema_version": int(
+            getattr(config, "source_decision_schema_version", 0) or 0
+        ),
+        "decision_version": str(getattr(config, "source_decision_version", "") or ""),
+        "eligibility_policy_version": ELIGIBILITY_POLICY_VERSION,
+    }
+    try:
+        from m2_guardrail_runtime import (
+            configuration_fingerprint,
+            worker_runtime_instance_fingerprint,
+        )
+
+        actual["configuration_fingerprint"] = configuration_fingerprint(config)
+        actual.update(worker_runtime_instance_fingerprint(config))
+    except Exception:  # noqa: BLE001 - retain the reason code and other evidence.
+        actual["runtime_instance_evidence"] = "UNAVAILABLE"
+    marker = Path(
+        str(
+            getattr(
+                config,
+                "m2_guardrail_source_revision_file",
+                "/app/.source-revision",
+            )
+        )
+    )
+    try:
+        value = marker.read_text(encoding="utf-8").strip().casefold()
+        actual["worker_source_revision"] = (
+            value if re.fullmatch(r"[0-9a-f]{64}", value) else "INVALID"
+        )
+    except OSError:
+        actual["worker_source_revision"] = "UNAVAILABLE"
+    try:
+        from m2_guardrail_runtime import worker_runtime_code_revision
+
+        actual["worker_runtime_code_revision"] = worker_runtime_code_revision(config)
+    except Exception:  # noqa: BLE001 - bounded drift evidence must remain available.
+        actual["worker_runtime_code_revision"] = "UNAVAILABLE"
+    runtime_state = runtime.get("state")
+    if isinstance(runtime_state, Mapping):
+        baseline = runtime_state.get("baseline")
+        if isinstance(baseline, Mapping):
+            actual.update(
+                {
+                    "baseline_version": str(
+                        runtime_state.get("gate_baseline_version") or ""
+                    ),
+                    "worker_sha": str(baseline.get("worker_commit_sha") or ""),
+                    "webui_sha": str(baseline.get("webui_commit_sha") or ""),
+                    "container_image_id": str(
+                        baseline.get("worker_image_id") or ""
+                    ),
+                    "worker_container_id": str(
+                        baseline.get("worker_container_id") or ""
+                    ),
+                    "worker_runtime_instance_fingerprint": str(
+                        actual.get("runtime_instance_fingerprint") or "UNAVAILABLE"
+                    ),
+                }
+            )
+            actual["declared_worker_sha"] = str(
+                baseline.get("worker_commit_sha") or ""
+            )
+            actual["declared_container_image_id"] = str(
+                baseline.get("worker_image_id") or ""
+            )
+    return actual
+
+
+def _is_runtime_invalidation_error(error: BaseException) -> bool:
+    return str(getattr(error, "reason_code", "") or "") == INVALIDATED_RUNTIME
+
+
+def _runtime_invalidation_cause(error: BaseException) -> str:
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        reason = str(getattr(current, "reason_code", "") or "")
+        if reason and reason != INVALIDATED_RUNTIME:
+            return reason
+        current = current.__cause__
+    return INVALIDATED_RUNTIME
+
+
+def _persist_runtime_invalidation_after_rollback(
+    config: Any,
+    *,
+    error: BaseException,
+    runtime_state: Any,
+    runtime_result: Mapping[str, Any] | None,
+    logger: Any | None,
+) -> None:
+    """Redo a validator's rolled-back invalidation in a fresh transaction."""
+
+    cause = _runtime_invalidation_cause(error)
+    _persist_runtime_drift_invalidation(
+        config,
+        reason_code=cause,
+        runtime_state=runtime_state,
+        runtime_result=runtime_result,
+        logger=logger,
+    )
+    try:
+        trip_circuit_breaker(
+            config,
+            "runtime_change",
+            evidence={
+                "stage": "runtime_validation_after_rollback",
+                "error_code": cause,
+            },
+            logger=logger,
+        )
+    except Exception:
+        # trip_circuit_breaker sets the process-local latch before persistence.
+        pass
+
+
+def _persist_runtime_drift_invalidation(
+    config: Any,
+    *,
+    reason_code: str,
+    runtime_state: Any,
+    runtime_result: Mapping[str, Any] | None = None,
+    logger: Any | None,
+) -> None:
+    try:
+        connection = connect_observation_database(config)
+        try:
+            with immediate_transaction(connection):
+                gate = sqlite_active_gate(connection)
+                if gate is None:
+                    return
+                sqlite_invalidate_active_gate(
+                    connection,
+                    INVALIDATED_RUNTIME,
+                    evidence={
+                        "reason_code": reason_code,
+                        "expected": {
+                            "baseline_version": gate.get("baseline_version"),
+                            "worker_sha": gate.get("worker_sha"),
+                            "webui_sha": gate.get("webui_sha"),
+                            "container_image_id": gate.get("container_image_id"),
+                            "worker_container_id": gate.get("worker_container_id"),
+                            "worker_source_revision": (
+                                _gate_worker_source_revision(gate)
+                            ),
+                            "worker_runtime_code_revision": (
+                                _gate_runtime_code_revision(gate)
+                            ),
+                            "runtime_instance_fingerprint": gate.get(
+                                "worker_runtime_instance_fingerprint"
+                            ),
+                            "configuration_fingerprint": gate.get(
+                                "configuration_fingerprint"
+                            ),
+                            "decision_schema_version": gate.get(
+                                "decision_schema_version"
+                            ),
+                            "eligibility_policy_version": gate.get(
+                                "eligibility_policy_version"
+                            ),
+                        },
+                        "actual": _actual_runtime_fingerprint(
+                            config,
+                            runtime_result
+                            or {
+                                "status": "DEGRADED",
+                                "reason_code": reason_code,
+                                "state": runtime_state,
+                            },
+                        ),
+                    },
+                )
+        finally:
+            connection.close()
+        trip_circuit_breaker(
+            config,
+            "runtime_change",
+            evidence={"stage": "runtime_validation", "error_code": reason_code},
+            logger=logger,
+        )
+    except Exception as exc:  # noqa: BLE001 - admission is already fail-closed.
+        if logger is not None:
+            logger.exception("M2 runtime drift persistence failed: %s", exc)
 
 
 def trip_circuit_breaker(
@@ -573,8 +1449,23 @@ def trip_circuit_breaker(
 def public_status(config: Any) -> dict[str, Any]:
     """Return a bounded, path-free status payload suitable for operator output."""
 
-    state = _read_json_object(observation_state_path(config)) or {}
     breaker = _read_json_object(circuit_breaker_state_path(config)) or {}
+    try:
+        connection = connect_observation_database(config)
+        try:
+            gate_status = sqlite_status_summary(connection)
+        finally:
+            connection.close()
+    except Exception:  # noqa: BLE001 - status reports missing/degraded without paths.
+        gate_status = {
+            "gate_id": "",
+            "gate_status": "MISSING",
+            "gate_baseline_version": "",
+            "target_size": 20,
+            "enrolled_count": 0,
+            "settled_count": 0,
+            "strict_verified_count": 0,
+        }
     try:
         from m2_guardrail_runtime import runtime_guardrail_status
 
@@ -594,10 +1485,23 @@ def public_status(config: Any) -> dict[str, Any]:
         "gate_size": int(
             getattr(config, "m2_server_canary_observation_gate_size", 20) or 20
         ),
-        "gate_progress": _gate_progress(state),
-        "next_gate_after_verified_completed": _next_gate(state, config),
-        "gate_baseline_version": str(state.get("gate_baseline_version") or ""),
-        "counters": dict(state.get("totals") or empty_summary_counters()),
+        "gate_id": str(gate_status.get("gate_id") or ""),
+        "gate_status": str(gate_status.get("gate_status") or "MISSING"),
+        "gate_progress": int(gate_status.get("enrolled_count") or 0),
+        "frozen_cohort_progress": (
+            f"{int(gate_status.get('enrolled_count') or 0)}/"
+            f"{int(gate_status.get('target_size') or 20)}"
+        ),
+        "settled_progress": (
+            f"{int(gate_status.get('settled_count') or 0)}/"
+            f"{int(gate_status.get('target_size') or 20)}"
+        ),
+        "completed_strict_verified": int(
+            gate_status.get("strict_verified_count") or 0
+        ),
+        "gate_baseline_version": str(
+            gate_status.get("gate_baseline_version") or ""
+        ),
         "circuit_breaker": {
             "enabled": bool(
                 getattr(config, "m2_server_canary_circuit_breaker_enabled", False)
@@ -1253,6 +2157,42 @@ def _update_failure_streaks(state: dict[str, Any], outcome: Mapping[str, Any]) -
         state["identical_failure_streak"] = 1
 
 
+def _preview_failure_streaks(
+    current: Mapping[str, Any],
+    *,
+    failed: bool,
+    is_oom: bool,
+    signature: str,
+) -> dict[str, Any]:
+    """Project the idempotent breaker counters before reserving an event."""
+
+    projected = {
+        "oom_streak": int(current.get("oom_streak") or 0),
+        "identical_failure_signature": str(
+            current.get("identical_failure_signature") or ""
+        ),
+        "identical_failure_streak": int(
+            current.get("identical_failure_streak") or 0
+        ),
+    }
+    if not failed:
+        projected.update(
+            {
+                "oom_streak": 0,
+                "identical_failure_signature": "",
+                "identical_failure_streak": 0,
+            }
+        )
+        return projected
+    projected["oom_streak"] = projected["oom_streak"] + 1 if is_oom else 0
+    if signature == projected["identical_failure_signature"]:
+        projected["identical_failure_streak"] += 1
+    else:
+        projected["identical_failure_signature"] = str(signature)
+        projected["identical_failure_streak"] = 1
+    return projected
+
+
 def _breaker_reason(
     outcome: Mapping[str, Any],
     state: Mapping[str, Any],
@@ -1434,14 +2374,60 @@ def _read_json_object(path: Path) -> dict[str, Any] | None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Print bounded M2 guardrail observation status."
+        description="Manage the bounded M2 frozen observation gate."
+    )
+    parser.add_argument(
+        "command",
+        nargs="?",
+        choices=("status", "invalidate-legacy"),
+        default="status",
     )
     parser.add_argument("--config", default="config.yaml")
+    parser.add_argument("--reason", default="")
+    parser.add_argument("--expected-gate-baseline-version", default="")
+    parser.add_argument("--expected-gate-start-at", default="")
+    parser.add_argument("--expected-worker-sha", default="")
+    parser.add_argument("--expected-webui-sha", default="")
+    parser.add_argument("--expected-pre-gate-attempts", type=int, default=-1)
     args = parser.parse_args(argv)
     from config import load_config
 
     config = load_config(args.config)
-    print(json.dumps(public_status(config), ensure_ascii=False, sort_keys=True, indent=2))
+    try:
+        if args.command == "invalidate-legacy":
+            if args.reason != INVALIDATED_AUTOMATION:
+                parser.error(f"--reason must be {INVALIDATED_AUTOMATION}")
+            if any(
+                not str(value or "").strip()
+                for value in (
+                    args.expected_gate_baseline_version,
+                    args.expected_gate_start_at,
+                    args.expected_worker_sha,
+                    args.expected_webui_sha,
+                )
+            ) or args.expected_pre_gate_attempts < 0:
+                parser.error("invalidate-legacy requires every exact expected value")
+            payload = invalidate_observation_gate(
+                config,
+                reason=args.reason,
+                expected_gate_baseline_version=args.expected_gate_baseline_version,
+                expected_gate_start_at=args.expected_gate_start_at,
+                expected_worker_sha=args.expected_worker_sha,
+                expected_webui_sha=args.expected_webui_sha,
+                expected_pre_gate_attempts=args.expected_pre_gate_attempts,
+            )
+        else:
+            payload = public_status(config)
+    except (ObservationStateError, ObservationStoreError) as exc:
+        print(
+            json.dumps(
+                {"status": "DEGRADED", "reason_code": exc.reason_code},
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+        return 2
+    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
     return 0
 
 

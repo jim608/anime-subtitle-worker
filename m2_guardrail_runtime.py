@@ -40,6 +40,7 @@ REQUIRED_BREAKER_ASSERTIONS = (
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 _SOURCE_REVISION_RE = re.compile(r"[0-9a-f]{64}")
 _IMAGE_ID_RE = re.compile(r"sha256:[0-9a-f]{64}")
+_CONTAINER_ID_RE = re.compile(r"(?:sha256:)?[0-9a-f]{64}")
 _CONTAINER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
 _FAULT_RUN_RE = re.compile(r"m2-guardrail-fi-\d{8}T\d{12}Z-[0-9a-f]{8}")
 
@@ -94,6 +95,53 @@ def configuration_fingerprint(config: Any) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
+def worker_runtime_instance_fingerprint(config: Any) -> dict[str, str]:
+    """Return a path-free identity for the live Worker container instance.
+
+    Docker keeps the writable overlay across ``docker restart`` but allocates a
+    different upper layer when a container is recreated.  The hostname is
+    retained as a second, independently host-attested identity.  Tests may
+    point ``m2_guardrail_container_identity_file`` at an isolated fixture.
+    """
+
+    identity_path = Path(
+        str(
+            getattr(
+                config,
+                "m2_guardrail_container_identity_file",
+                "/etc/hostname",
+            )
+        )
+    )
+    try:
+        identity = identity_path.read_text(encoding="utf-8").strip()
+    except (OSError, TypeError, ValueError) as exc:
+        raise RuntimeContractError("worker_container_identity_unavailable") from exc
+    if not _CONTAINER_RE.fullmatch(identity):
+        raise RuntimeContractError("worker_container_identity_invalid")
+
+    rootfs_token = ""
+    mountinfo_path = Path("/proc/self/mountinfo")
+    try:
+        if mountinfo_path.is_file() and mountinfo_path.stat().st_size <= 2 * 1024 * 1024:
+            for line in mountinfo_path.read_text(encoding="utf-8").splitlines():
+                fields = line.split()
+                if len(fields) < 10 or fields[4] != "/" or " - " not in line:
+                    continue
+                match = re.search(r"(?:^|,)upperdir=([^,\s]+)", line.split(" - ", 1)[1])
+                if match:
+                    rootfs_token = "upperdir:" + match.group(1)
+                break
+    except (OSError, TypeError, ValueError):
+        rootfs_token = ""
+    canonical = rootfs_token or ("container-identity:" + identity)
+    return {
+        "container_identity": identity,
+        "runtime_instance_fingerprint": "sha256:"
+        + hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    }
+
+
 def compute_worker_source_revision(repo: str | Path) -> str:
     """Reproduce safe-update-stack.sh's Worker content revision exactly."""
 
@@ -109,6 +157,55 @@ def compute_worker_source_revision(repo: str | Path) -> str:
         if path.is_file()
     )
     return _manifest_revision(entries)
+
+
+def compute_worker_runtime_code_revision(app_root: str | Path) -> str:
+    """Hash the Worker source files actually present in the app image.
+
+    The build marker describes the intended source tree, but it remains a
+    writable file in a normal Docker overlay.  This independent digest is
+    recomputed from deployed files and is intentionally never cached.
+    """
+
+    root = Path(app_root).resolve()
+    entries: list[tuple[Path, str]] = []
+    requirements = root / "requirements.txt"
+    if requirements.is_file():
+        entries.append((requirements, "requirements.txt"))
+    entries.extend(
+        (path, f"./{path.name}")
+        for path in sorted(root.glob("*.py"), key=lambda item: item.name)
+        if path.is_file()
+    )
+    acceptance = root / "acceptance"
+    if acceptance.is_dir():
+        acceptance_files = (
+            path
+            for path in acceptance.rglob("*")
+            if path.is_file()
+            and "__pycache__" not in path.parts
+            and path.suffix.casefold() not in {".pyc", ".pyo", ".pyd"}
+        )
+        entries.extend(
+            (path, path.relative_to(root).as_posix())
+            for path in sorted(
+                acceptance_files,
+                key=lambda item: item.relative_to(root).as_posix(),
+            )
+        )
+    return _manifest_revision(entries)
+
+
+def worker_runtime_code_revision(config: Any) -> str:
+    """Return a fresh digest of the live Worker application files."""
+
+    app_root = getattr(config, "m2_guardrail_runtime_app_root", "/app")
+    try:
+        return compute_worker_runtime_code_revision(app_root)
+    except RuntimeContractError:
+        raise
+    except (OSError, TypeError, ValueError) as exc:
+        raise RuntimeContractError("worker_runtime_code_revision_unavailable") from exc
 
 
 def compute_webui_source_revision(repo: str | Path) -> str:
@@ -160,7 +257,11 @@ def runtime_guardrail_status(
         local_status, reason_code = _local_guardrail_status(config, decision)
     except RuntimeContractError as exc:
         return {"status": exc.status, "reason_code": exc.reason_code, "state": None}
-    if local_status != "ARMED":
+    # A tripped breaker stops claims, but terminal observation for work that
+    # was already running must still validate the immutable runtime baseline.
+    # Continue the read-only checks so a simultaneous code/config drift is not
+    # hidden behind the breaker latch.
+    if local_status not in {"ARMED", "TRIPPED"}:
         return {"status": local_status, "reason_code": reason_code, "state": None}
     try:
         state = load_runtime_state(config, state_path_override)
@@ -183,21 +284,49 @@ def runtime_guardrail_status(
         _require_sha(baseline.get("webui_commit_sha"), "webui_commit")
         _require_image_id(baseline.get("worker_image_id"), "worker")
         _require_image_id(baseline.get("webui_image_id"), "webui")
+        _require_container_id(baseline.get("worker_container_id"), "worker")
+        expected_container_identity = _require_container_identity(
+            baseline.get("worker_container_identity"), "worker"
+        )
+        live_instance = worker_runtime_instance_fingerprint(config)
+        if live_instance["container_identity"] != expected_container_identity:
+            raise RuntimeContractError("live_worker_container_identity_mismatch")
+        if (
+            live_instance["runtime_instance_fingerprint"]
+            != str(baseline.get("worker_runtime_instance_fingerprint") or "")
+        ):
+            raise RuntimeContractError("live_worker_container_instance_mismatch")
         expected_source_revision = _require_source_revision(
             baseline.get("worker_source_revision"),
             "worker",
         )
+        expected_runtime_code_revision = _require_source_revision(
+            baseline.get("worker_runtime_code_revision"),
+            "worker_runtime_code",
+        )
         _require_source_revision(baseline.get("webui_source_revision"), "webui")
         if _read_source_revision(marker_path) != expected_source_revision:
             raise RuntimeContractError("live_worker_source_revision_mismatch")
+        if worker_runtime_code_revision(config) != expected_runtime_code_revision:
+            raise RuntimeContractError("live_worker_runtime_code_revision_mismatch")
         if baseline.get("configuration_fingerprint") != configuration_fingerprint(config):
             raise RuntimeContractError("live_configuration_fingerprint_mismatch")
+        from m2_observation_store import ELIGIBILITY_POLICY_VERSION
+
         if (
             baseline.get("decision_schema_version") != decision["schema_version"]
             or baseline.get("decision_version") != decision["version"]
             or baseline.get("decision_contract") != decision["contract"]
         ):
             raise RuntimeContractError("live_decision_schema_mismatch")
+        if (
+            baseline.get("eligibility_policy_version")
+            != ELIGIBILITY_POLICY_VERSION
+            or gate.get("eligibility_policy_version")
+            != ELIGIBILITY_POLICY_VERSION
+            or not str(gate.get("gate_id") or "")
+        ):
+            raise RuntimeContractError("live_eligibility_policy_mismatch")
         if int(gate.get("target") or 0) != 20:
             raise RuntimeContractError("runtime_gate_target_invalid")
         progress = gate.get("progress")
@@ -267,6 +396,12 @@ def runtime_guardrail_status(
         return {"status": exc.status, "reason_code": exc.reason_code, "state": None}
     except (TypeError, ValueError):
         return {"status": "DEGRADED", "reason_code": "runtime_state_invalid", "state": None}
+    if local_status == "TRIPPED":
+        return {
+            "status": "TRIPPED",
+            "reason_code": "circuit_breaker_tripped",
+            "state": state,
+        }
     return {"status": "ARMED", "reason_code": "runtime_baseline_match", "state": state}
 
 
@@ -290,6 +425,8 @@ def probe_local_runtime(
     local_status, reason_code = _local_guardrail_status(config, decision)
     running = _snapshot_running_jobs(config)
     worker_source_revision = _read_source_revision(source_revision_file)
+    live_runtime_code_revision = worker_runtime_code_revision(config)
+    runtime_instance = worker_runtime_instance_fingerprint(config)
     fault_results = (
         validate_fault_results(
             config,
@@ -306,6 +443,11 @@ def probe_local_runtime(
         "status": local_status,
         "reason_code": reason_code,
         "worker_source_revision": worker_source_revision,
+        "worker_runtime_code_revision": live_runtime_code_revision,
+        "worker_container_identity": runtime_instance["container_identity"],
+        "worker_runtime_instance_fingerprint": runtime_instance[
+            "runtime_instance_fingerprint"
+        ],
         "configuration_fingerprint": configuration_fingerprint(config),
         "decision": decision,
         "guardrails": {
@@ -513,14 +655,35 @@ def initialize_gate(
         evidence.get("worker_source_revision"),
         "worker",
     )
+    expected_runtime_code_revision = _require_source_revision(
+        evidence.get("worker_runtime_code_revision"),
+        "worker_runtime_code",
+    )
     webui_source_revision = _require_source_revision(
         evidence.get("webui_source_revision"),
         "webui",
     )
     if worker_source_revision != expected_worker_source_revision:
         raise RuntimeContractError("worker_source_revision_changed_during_arm")
+    live_runtime_code_revision = worker_runtime_code_revision(config)
+    if live_runtime_code_revision != expected_runtime_code_revision:
+        raise RuntimeContractError("worker_runtime_code_revision_changed_during_arm")
     worker_image_id = _require_image_id(evidence.get("worker_image_id"), "worker")
     webui_image_id = _require_image_id(evidence.get("webui_image_id"), "webui")
+    worker_container_id = _require_container_id(
+        evidence.get("worker_container_id"), "worker"
+    )
+    worker_container_identity = _require_container_identity(
+        evidence.get("worker_container_identity"), "worker"
+    )
+    live_instance = worker_runtime_instance_fingerprint(config)
+    if live_instance["container_identity"] != worker_container_identity:
+        raise RuntimeContractError("worker_container_identity_changed_during_arm")
+    if (
+        str(evidence.get("worker_runtime_instance_fingerprint") or "")
+        != live_instance["runtime_instance_fingerprint"]
+    ):
+        raise RuntimeContractError("worker_runtime_instance_changed_during_arm")
     fingerprint = configuration_fingerprint(config)
     if str(evidence.get("configuration_fingerprint") or "") != fingerprint:
         raise RuntimeContractError("configuration_changed_during_arm")
@@ -572,17 +735,26 @@ def initialize_gate(
     ):
         raise RuntimeContractError("runtime_container_contract_unproven")
 
+    from m2_observation_store import ELIGIBILITY_POLICY_VERSION
+
     baseline = {
         "worker_commit_sha": worker_commit_sha,
         "webui_commit_sha": webui_commit_sha,
         "worker_source_revision": expected_worker_source_revision,
+        "worker_runtime_code_revision": expected_runtime_code_revision,
         "webui_source_revision": webui_source_revision,
         "worker_image_id": worker_image_id,
         "webui_image_id": webui_image_id,
+        "worker_container_id": worker_container_id,
+        "worker_container_identity": worker_container_identity,
+        "worker_runtime_instance_fingerprint": live_instance[
+            "runtime_instance_fingerprint"
+        ],
         "configuration_fingerprint": fingerprint,
         "decision_schema_version": decision["schema_version"],
         "decision_version": decision["version"],
         "decision_contract": decision["contract"],
+        "eligibility_policy_version": ELIGIBILITY_POLICY_VERSION,
     }
     baseline_version = _baseline_version(baseline)
     target = runtime_state_path(config, state_path_override)
@@ -597,7 +769,15 @@ def initialize_gate(
         ):
             from m2_production_observation import initialize_observation_gate
 
-            initialize_observation_gate(config, existing, now=timestamp)
+            observation_gate = initialize_observation_gate(config, existing, now=timestamp)
+            existing_gate["gate_id"] = str(observation_gate["gate_id"])
+            existing_gate["eligibility_policy_version"] = ELIGIBILITY_POLICY_VERSION
+            existing["gate_start_at"] = str(observation_gate["gate_start_at"])
+            existing["gate_start_epoch"] = float(observation_gate["gate_start_epoch"])
+            atomic_write_text(
+                target,
+                json.dumps(existing, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            )
             return existing
         raise RuntimeContractError("armed_gate_already_exists")
 
@@ -616,6 +796,8 @@ def initialize_gate(
             "progress": 0,
             "claimed_after_gate_start": 0,
             "completed_strict_verified": 0,
+            "gate_id": "",
+            "eligibility_policy_version": ELIGIBILITY_POLICY_VERSION,
         },
         "pre_gate_running": {
             "attempt_keys": running["attempt_keys"],
@@ -642,7 +824,10 @@ def initialize_gate(
     # manifest exists; it can never count jobs against a half-created gate.
     from m2_production_observation import initialize_observation_gate
 
-    initialize_observation_gate(config, state, now=timestamp)
+    observation_gate = initialize_observation_gate(config, state, now=timestamp)
+    state["gate"]["gate_id"] = str(observation_gate["gate_id"])
+    state["gate_start_at"] = str(observation_gate["gate_start_at"])
+    state["gate_start_epoch"] = float(observation_gate["gate_start_epoch"])
     atomic_write_text(
         target,
         json.dumps(state, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
@@ -677,6 +862,17 @@ def gate_claim_eligible(
         return False, "guardrails_not_armed"
     if not str(job_identity or "").strip():
         return False, "job_identity_invalid"
+    from m2_observation_store import ELIGIBILITY_POLICY_VERSION
+
+    baseline = state.get("baseline")
+    gate = state.get("gate")
+    if (
+        not isinstance(baseline, Mapping)
+        or not isinstance(gate, Mapping)
+        or baseline.get("eligibility_policy_version") != ELIGIBILITY_POLICY_VERSION
+        or gate.get("eligibility_policy_version") != ELIGIBILITY_POLICY_VERSION
+    ):
+        return False, "eligibility_policy_mismatch"
     if str(gate_baseline_version or "") != str(state.get("gate_baseline_version") or ""):
         return False, "runtime_baseline_mismatch"
     try:
@@ -726,11 +922,22 @@ def arm_runtime_on_host(
     if webui_commit != wanted_webui_commit:
         raise RuntimeContractError("webui_commit_sha_mismatch")
     worker_source_revision = compute_worker_source_revision(worker_repo)
+    worker_runtime_code_revision_expected = compute_worker_runtime_code_revision(
+        worker_repo
+    )
     webui_source_revision = compute_webui_source_revision(webui_repo)
     worker_inspect = _inspect_container(docker_binary, worker_name, run)
     webui_inspect = _inspect_container(docker_binary, webui_name, run)
     worker_image_id = _require_image_id(worker_inspect.get("Image"), "worker")
     webui_image_id = _require_image_id(webui_inspect.get("Image"), "webui")
+    worker_container_id = _require_container_id(worker_inspect.get("Id"), "worker")
+    worker_container_config = worker_inspect.get("Config")
+    worker_container_identity = _require_container_identity(
+        worker_container_config.get("Hostname")
+        if isinstance(worker_container_config, Mapping)
+        else "",
+        "worker",
+    )
     if not _container_running(worker_inspect):
         raise RuntimeContractError("worker_container_not_running")
     if not _container_running(webui_inspect):
@@ -770,6 +977,17 @@ def arm_runtime_on_host(
         )
     if probe_result.get("worker_source_revision") != worker_source_revision:
         raise RuntimeContractError("worker_source_revision_mismatch")
+    if (
+        probe_result.get("worker_runtime_code_revision")
+        != worker_runtime_code_revision_expected
+    ):
+        raise RuntimeContractError("worker_runtime_code_revision_mismatch")
+    if probe_result.get("worker_container_identity") != worker_container_identity:
+        raise RuntimeContractError("worker_container_identity_mismatch")
+    _require_image_id(
+        probe_result.get("worker_runtime_instance_fingerprint"),
+        "worker_runtime_instance",
+    )
 
     webui_revision_result = _run_command(
         [docker_binary, "exec", webui_name, "cat", webui_source_revision_file],
@@ -787,9 +1005,15 @@ def arm_runtime_on_host(
         "worker_commit_sha": worker_commit,
         "webui_commit_sha": webui_commit,
         "worker_source_revision": worker_source_revision,
+        "worker_runtime_code_revision": worker_runtime_code_revision_expected,
         "webui_source_revision": webui_source_revision,
         "worker_image_id": worker_image_id,
         "webui_image_id": webui_image_id,
+        "worker_container_id": worker_container_id,
+        "worker_container_identity": worker_container_identity,
+        "worker_runtime_instance_fingerprint": probe_result.get(
+            "worker_runtime_instance_fingerprint"
+        ),
         "configuration_fingerprint": probe_result.get("configuration_fingerprint"),
         "decision": probe_result.get("decision"),
         "fault_results": probe_result.get("fault_results"),
@@ -1141,6 +1365,9 @@ def _public_summary(state: Mapping[str, Any]) -> dict[str, Any]:
         "worker_runtime_sha": str(baseline.get("worker_commit_sha") or ""),
         "webui_runtime_sha": str(baseline.get("webui_commit_sha") or ""),
         "worker_source_revision": str(baseline.get("worker_source_revision") or ""),
+        "worker_runtime_code_revision": str(
+            baseline.get("worker_runtime_code_revision") or ""
+        ),
         "webui_source_revision": str(baseline.get("webui_source_revision") or ""),
         "worker_image_id": str(baseline.get("worker_image_id") or ""),
         "webui_image_id": str(baseline.get("webui_image_id") or ""),
@@ -1148,6 +1375,10 @@ def _public_summary(state: Mapping[str, Any]) -> dict[str, Any]:
             baseline.get("configuration_fingerprint") or ""
         ),
         "decision_schema_version": baseline.get("decision_schema_version"),
+        "eligibility_policy_version": str(
+            baseline.get("eligibility_policy_version") or ""
+        ),
+        "gate_id": str(gate.get("gate_id") or ""),
         "gate_start_at": str(state.get("gate_start_at") or ""),
         "gate_baseline_version": str(state.get("gate_baseline_version") or ""),
         "initial_gate_progress": f"{int(gate.get('progress') or 0)}/{int(gate.get('target') or 20)}",
@@ -1186,6 +1417,24 @@ def _require_image_id(value: Any, component: str) -> str:
     normalized = str(value or "").strip().casefold()
     if not _IMAGE_ID_RE.fullmatch(normalized):
         raise RuntimeContractError(f"{_safe_code(component, 'component')}_image_id_invalid")
+    return normalized
+
+
+def _require_container_id(value: Any, component: str) -> str:
+    normalized = str(value or "").strip().casefold()
+    if not _CONTAINER_ID_RE.fullmatch(normalized):
+        raise RuntimeContractError(
+            f"{_safe_code(component, 'component')}_container_id_invalid"
+        )
+    return normalized.removeprefix("sha256:")
+
+
+def _require_container_identity(value: Any, component: str) -> str:
+    normalized = str(value or "").strip()
+    if not _CONTAINER_RE.fullmatch(normalized):
+        raise RuntimeContractError(
+            f"{_safe_code(component, 'component')}_container_identity_invalid"
+        )
     return normalized
 
 

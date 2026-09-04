@@ -7,6 +7,7 @@ tmp.*.srt
 models/
 .env
 config.yaml
+config.yaml.pre-*
 work/
 logs/
 *.sqlite3

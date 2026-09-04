@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import unittest
 
 import m2_guardrail_runtime as runtime
+from m2_observation_store import ELIGIBILITY_POLICY_VERSION
 from source_analyzer import DECISION_SCHEMA_VERSION, DECISION_VERSION
 
 
@@ -19,6 +20,8 @@ WORKER_SOURCE_REVISION = "1" * 64
 WEBUI_SOURCE_REVISION = "2" * 64
 WORKER_IMAGE = "sha256:" + "c" * 64
 WEBUI_IMAGE = "sha256:" + "d" * 64
+WORKER_CONTAINER_ID = "e" * 64
+WORKER_CONTAINER_IDENTITY = "unit-test-worker"
 
 
 class M2GuardrailRuntimeTests(unittest.TestCase):
@@ -27,8 +30,26 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
         root = Path(self.temp.name)
         self.work = root / "work"
         self.work.mkdir()
+        self.container_identity = root / "container-identity"
+        self.container_identity.write_text(
+            WORKER_CONTAINER_IDENTITY + "\n",
+            encoding="utf-8",
+        )
+        (self.work / "ai_control.json").write_text(
+            json.dumps(
+                {
+                    "paused": True,
+                    "updated_at": time.time(),
+                    "requested_by": "unit-test",
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         self.config = SimpleNamespace(
             work_path=self.work,
+            m2_guardrail_container_identity_file=self.container_identity,
             input_path=root / "production-input",
             completed_delivery_path=str(root / "production-output"),
             scanner_state_path="scanner.sqlite3",
@@ -51,6 +72,7 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
         self.worker_repo = root / "worker-repo"
         self.webui_repo = root / "webui-repo"
         self._create_source_revision_repositories()
+        self.config.m2_guardrail_runtime_app_root = self.worker_repo
         self._create_queue_database()
         self.fault_summary = self._write_fault_results()
         import m2_production_observation
@@ -172,13 +194,22 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
         return summary
 
     def _evidence(self) -> dict[str, object]:
+        runtime_instance = runtime.worker_runtime_instance_fingerprint(self.config)
         return {
             "worker_commit_sha": WORKER_SHA,
             "webui_commit_sha": WEBUI_SHA,
             "worker_source_revision": WORKER_SOURCE_REVISION,
+            "worker_runtime_code_revision": (
+                runtime.compute_worker_runtime_code_revision(self.worker_repo)
+            ),
             "webui_source_revision": WEBUI_SOURCE_REVISION,
             "worker_image_id": WORKER_IMAGE,
             "webui_image_id": WEBUI_IMAGE,
+            "worker_container_id": WORKER_CONTAINER_ID,
+            "worker_container_identity": WORKER_CONTAINER_IDENTITY,
+            "worker_runtime_instance_fingerprint": runtime_instance[
+                "runtime_instance_fingerprint"
+            ],
             "configuration_fingerprint": runtime.configuration_fingerprint(self.config),
             "decision": runtime._decision_descriptor(self.config),
             "fault_results": runtime.validate_fault_results(
@@ -278,12 +309,22 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
         )
 
         self.assertEqual(state["status"], "ARMED")
-        self.assertEqual(state["gate"], {
-            "target": 20,
-            "progress": 0,
-            "claimed_after_gate_start": 0,
-            "completed_strict_verified": 0,
-        })
+        self.assertEqual(state["gate"]["target"], 20)
+        self.assertEqual(state["gate"]["progress"], 0)
+        self.assertEqual(state["gate"]["claimed_after_gate_start"], 0)
+        self.assertEqual(state["gate"]["completed_strict_verified"], 0)
+        self.assertEqual(
+            state["gate"]["eligibility_policy_version"],
+            ELIGIBILITY_POLICY_VERSION,
+        )
+        self.assertRegex(
+            state["gate"]["gate_id"],
+            r"^m2-gate-[0-9]{8}T[0-9]{12}Z-[0-9a-f]{10}$",
+        )
+        self.assertEqual(
+            state["baseline"]["eligibility_policy_version"],
+            ELIGIBILITY_POLICY_VERSION,
+        )
         self.assertEqual(state["gate_start_at"], "2026-09-03T17:02:03Z")
         self.assertEqual(state["pre_gate_running"]["attempt_count"], 1)
         self.assertEqual(state["pre_gate_running"]["queue_job_count"], 1)
@@ -299,6 +340,7 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
             now=1_788_455_000.0,
         )
         self.assertEqual(repeated["gate_start_at"], "2026-09-03T17:02:03Z")
+        self.assertEqual(repeated["gate"]["gate_id"], state["gate"]["gate_id"])
 
     def test_gate_claim_requires_post_start_matching_baseline_and_not_preexisting(self) -> None:
         state = runtime.initialize_gate(
@@ -346,6 +388,57 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
             (True, "eligible"),
         )
 
+        missing_policy = json.loads(json.dumps(state))
+        missing_policy["gate"].pop("eligibility_policy_version")
+        self.assertEqual(
+            runtime.gate_claim_eligible(
+                missing_policy,
+                job_identity="new-attempt",
+                claimed_at=101.0,
+                gate_baseline_version=baseline,
+            ),
+            (False, "eligibility_policy_mismatch"),
+        )
+
+    def test_initialize_requires_durable_pause_and_runtime_requires_gate_id(self) -> None:
+        pause = self.work / "ai_control.json"
+        pause.unlink()
+        with self.assertRaisesRegex(ValueError, "ai_claim_pause_missing"):
+            runtime.initialize_gate(
+                self.config,
+                self._evidence(),
+                source_revision_file=self.revision,
+                now=100.0,
+            )
+
+        pause.write_text(
+            json.dumps(
+                {
+                    "paused": True,
+                    "updated_at": time.time(),
+                    "requested_by": "unit-test",
+                }
+            ),
+            encoding="utf-8",
+        )
+        state = runtime.initialize_gate(
+            self.config,
+            self._evidence(),
+            source_revision_file=self.revision,
+            now=100.0,
+        )
+        state["gate"].pop("gate_id")
+        runtime.runtime_state_path(self.config).write_text(
+            json.dumps(state),
+            encoding="utf-8",
+        )
+        status = runtime.runtime_guardrail_status(
+            self.config,
+            source_revision_file=self.revision,
+        )
+        self.assertEqual(status["status"], "DEGRADED")
+        self.assertEqual(status["reason_code"], "live_eligibility_policy_mismatch")
+
     def test_runtime_status_is_limited_to_explicit_contract_states(self) -> None:
         decision = runtime._decision_descriptor(self.config)
         self.assertEqual(runtime._local_guardrail_status(self.config, decision)[0], "ARMED")
@@ -366,6 +459,13 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
             "DISARMED",
         )
         self.config.m2_server_canary_observer_enabled = True
+
+        runtime.initialize_gate(
+            self.config,
+            self._evidence(),
+            source_revision_file=self.revision,
+            now=100.0,
+        )
 
         (self.work / "breaker.json").write_text(
             json.dumps({"schema_version": 1, "tripped": True}),
@@ -408,6 +508,73 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
         self.assertEqual(changed["reason_code"], "live_worker_source_revision_mismatch")
         self.assertIsNone(changed["state"])
 
+    def test_same_container_in_place_python_mutation_degrades_runtime(self) -> None:
+        runtime.initialize_gate(
+            self.config,
+            self._evidence(),
+            source_revision_file=self.revision,
+            now=100.0,
+        )
+        original_identity = runtime.worker_runtime_instance_fingerprint(self.config)
+
+        (self.worker_repo / "worker.py").write_text("VALUE = 2\n", encoding="utf-8")
+        changed = runtime.runtime_guardrail_status(
+            self.config,
+            source_revision_file=self.revision,
+        )
+
+        self.assertEqual(
+            runtime.worker_runtime_instance_fingerprint(self.config),
+            original_identity,
+        )
+        self.assertEqual(changed["status"], "DEGRADED")
+        self.assertEqual(
+            changed["reason_code"],
+            "live_worker_runtime_code_revision_mismatch",
+        )
+        self.assertIsNone(changed["state"])
+
+    def test_initialize_rejects_live_code_that_differs_from_host_evidence(self) -> None:
+        evidence = self._evidence()
+        (self.worker_repo / "worker.py").write_text("VALUE = 2\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            runtime.RuntimeContractError,
+            "worker_runtime_code_revision_changed_during_arm",
+        ):
+            runtime.initialize_gate(
+                self.config,
+                evidence,
+                source_revision_file=self.revision,
+                now=100.0,
+            )
+
+    def test_container_recreation_is_runtime_drift_but_same_identity_restart_is_not(self) -> None:
+        state = runtime.initialize_gate(
+            self.config,
+            self._evidence(),
+            source_revision_file=self.revision,
+            now=100.0,
+        )
+        same_instance = runtime.runtime_guardrail_status(
+            self.config,
+            source_revision_file=self.revision,
+        )
+        self.assertEqual(same_instance["status"], "ARMED")
+        self.assertEqual(same_instance["state"]["gate"]["gate_id"], state["gate"]["gate_id"])
+
+        self.container_identity.write_text("recreated-worker\n", encoding="utf-8")
+        recreated = runtime.runtime_guardrail_status(
+            self.config,
+            source_revision_file=self.revision,
+        )
+        self.assertEqual(recreated["status"], "DEGRADED")
+        self.assertEqual(
+            recreated["reason_code"],
+            "live_worker_container_identity_mismatch",
+        )
+        self.assertIsNone(recreated["state"])
+
     def test_host_arm_checks_live_containers_and_returns_initialized_summary(self) -> None:
         probe = {
             "status": "ARMED",
@@ -415,7 +582,12 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
             "worker_source_revision": runtime.compute_worker_source_revision(
                 self.worker_repo
             ),
+            "worker_runtime_code_revision": (
+                runtime.compute_worker_runtime_code_revision(self.worker_repo)
+            ),
             "configuration_fingerprint": "sha256:" + "e" * 64,
+            "worker_container_identity": WORKER_CONTAINER_IDENTITY,
+            "worker_runtime_instance_fingerprint": "sha256:" + "6" * 64,
             "decision": {"schema_version": 1, "version": DECISION_VERSION, "contract": "subtitle-source-priority-v1"},
             "fault_results": {
                 "passed_count": 7,
@@ -431,6 +603,9 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
             "webui_runtime_sha": WEBUI_SHA,
             "worker_source_revision": runtime.compute_worker_source_revision(
                 self.worker_repo
+            ),
+            "worker_runtime_code_revision": (
+                runtime.compute_worker_runtime_code_revision(self.worker_repo)
             ),
             "webui_source_revision": runtime.compute_webui_source_revision(
                 self.webui_repo
@@ -458,15 +633,16 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, revision + "\n", "")
             if command[1:3] == ["inspect", "anime-subtitle-worker"]:
                 payload = [{
+                    "Id": WORKER_CONTAINER_ID,
                     "State": {"Running": True, "StartedAt": "2099-01-01T00:00:00Z"},
                     "Image": WORKER_IMAGE,
                     "Args": ["main.py", "--config", "config.yaml", "--auto-watch"],
-                    "Config": {"WorkingDir": "/app", "Cmd": ["python", "main.py", "--config", "config.yaml", "--auto-watch"]},
+                    "Config": {"Hostname": WORKER_CONTAINER_IDENTITY, "WorkingDir": "/app", "Cmd": ["python", "main.py", "--config", "config.yaml", "--auto-watch"]},
                     "Mounts": [{"Destination": "/app/config.yaml", "Source": str(self.mounted_config), "RW": False}],
                 }]
                 return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
             if command[1:3] == ["inspect", "anime-subtitle-worker-webui"]:
-                payload = [{"State": {"Running": True}, "Image": WEBUI_IMAGE, "Config": {}, "Mounts": []}]
+                payload = [{"Id": "f" * 64, "State": {"Running": True}, "Image": WEBUI_IMAGE, "Config": {}, "Mounts": []}]
                 return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
             if "probe" in command:
                 return subprocess.CompletedProcess(command, 0, json.dumps(probe), "")
@@ -481,6 +657,15 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
                 self.assertIsNotNone(stdin)
                 evidence = json.loads(str(stdin))
                 self.assertEqual(evidence["worker_image_id"], WORKER_IMAGE)
+                self.assertEqual(evidence["worker_container_id"], WORKER_CONTAINER_ID)
+                self.assertEqual(
+                    evidence["worker_container_identity"],
+                    WORKER_CONTAINER_IDENTITY,
+                )
+                self.assertEqual(
+                    evidence["worker_runtime_code_revision"],
+                    runtime.compute_worker_runtime_code_revision(self.worker_repo),
+                )
                 return subprocess.CompletedProcess(command, 0, json.dumps(initialized), "")
             raise AssertionError(f"unexpected command: {command}")
 
@@ -516,10 +701,11 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
             if command[1] == "inspect":
                 is_worker = command[2] == "anime-subtitle-worker"
                 payload = [{
+                    "Id": WORKER_CONTAINER_ID if is_worker else "f" * 64,
                     "State": {"Running": True, "StartedAt": "2099-01-01T00:00:00Z"},
                     "Image": WORKER_IMAGE if is_worker else WEBUI_IMAGE,
                     "Args": ["main.py", "--config", "config.yaml"],
-                    "Config": {"WorkingDir": "/app", "Cmd": ["python", "main.py", "--config", "config.yaml"]},
+                    "Config": {"Hostname": WORKER_CONTAINER_IDENTITY, "WorkingDir": "/app", "Cmd": ["python", "main.py", "--config", "config.yaml"]},
                     "Mounts": [{"Destination": "/app/config.yaml", "Source": str(self.mounted_config), "RW": False}],
                 }]
                 return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")

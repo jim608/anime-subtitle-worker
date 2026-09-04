@@ -154,6 +154,7 @@ class VideoScanner:
         videos: list[Path] = []
         stats: Counter[str] = Counter()
         database_error: sqlite3.DatabaseError | None = None
+        operation_error: BaseException | None = None
         self._queue_batch_added_at = time.time()
         try:
             for path in self.scan_all():
@@ -170,10 +171,15 @@ class VideoScanner:
                 videos = self._queued_ai_candidates(max_candidates=max_candidates)
         except sqlite3.DatabaseError as exc:
             database_error = exc
+        except BaseException as exc:
+            operation_error = exc
+            raise
         finally:
             self._queue_batch_added_at = None
             try:
-                self._close_state(commit=database_error is None)
+                self._close_state(
+                    commit=database_error is None and operation_error is None
+                )
             except sqlite3.DatabaseError as exc:
                 if database_error is None:
                     database_error = exc
@@ -693,6 +699,7 @@ class VideoScanner:
         """Return existing queue work without scanning the media library first."""
         self._clear_last_database_error()
         database_error: sqlite3.DatabaseError | None = None
+        operation_error: BaseException | None = None
         videos: list[Path] = []
         try:
             videos = self._queued_ai_candidates(
@@ -701,9 +708,14 @@ class VideoScanner:
             )
         except sqlite3.DatabaseError as exc:
             database_error = exc
+        except BaseException as exc:
+            operation_error = exc
+            raise
         finally:
             try:
-                self._close_state(commit=database_error is None)
+                self._close_state(
+                    commit=database_error is None and operation_error is None
+                )
             except sqlite3.DatabaseError as exc:
                 if database_error is None:
                     database_error = exc
@@ -1232,6 +1244,22 @@ class VideoScanner:
             return []
 
         acceptance_lane = load_acceptance_queue_lane(self.config)
+        result_observer = None
+        if bool(
+            getattr(self.config, "m2_server_canary_observer_enabled", False)
+        ):
+            from m2_production_observation import record_state_attempt_result
+
+            def result_observer(observed_path: Path, attempt_id: str) -> None:
+                record_state_attempt_result(
+                    self.config,
+                    state,
+                    observed_path,
+                    attempt_id,
+                    transaction_connection=state.observation_connection,
+                    logger=self.logger,
+                )
+
         if acceptance_lane is None:
             self._backfill_active_queue_obligations()
             requeued = state.requeue_stale_running(
@@ -1239,7 +1267,8 @@ class VideoScanner:
                     self.config,
                     "ai_queue_stage_stale_seconds",
                     getattr(self.config, "ai_queue_running_stale_seconds", 21600),
-                )
+                ),
+                result_observer=result_observer,
             )
         else:
             requeued = state.requeue_acceptance_running_targets(
@@ -1250,10 +1279,18 @@ class VideoScanner:
                     getattr(self.config, "ai_queue_running_stale_seconds", 21600),
                 ),
                 message="Timed-out acceptance lane job was safely requeued",
+                result_observer=result_observer,
             )
         if requeued:
             self._note_state_write()
             self._commit_state_if_needed(force=True)
+            try:
+                from m2_observation_store import publish_pending_summaries
+
+                publish_pending_summaries(self.config)
+            except Exception:
+                # The SQLite outbox retains the summary for a later retry.
+                pass
         if requeued:
             self.logger.warning("Requeued stale AI running job(s): count=%s", requeued)
 

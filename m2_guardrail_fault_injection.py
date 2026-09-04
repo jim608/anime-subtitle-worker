@@ -643,23 +643,49 @@ def _initialize_isolated_runtime(config: Any, sandbox: Path) -> None:
         _baseline_version,
         configuration_fingerprint,
         runtime_state_path,
+        worker_runtime_code_revision,
+        worker_runtime_instance_fingerprint,
     )
+    from m2_observation_store import ELIGIBILITY_POLICY_VERSION
     from source_decision import SOURCE_DECISION_CONTRACT
 
     marker = sandbox / "runtime" / "source-revision"
     marker.write_text("a" * 64 + "\n", encoding="utf-8")
     config._isolated_source_revision_file = str(marker)
+    config.m2_guardrail_source_revision_file = str(marker)
+    container_identity = sandbox / "runtime" / "container-identity"
+    container_identity.write_text("isolated-worker\n", encoding="utf-8")
+    config.m2_guardrail_container_identity_file = str(container_identity)
+    runtime_app = sandbox / "runtime" / "app"
+    runtime_app.mkdir(parents=True, exist_ok=True)
+    (runtime_app / "requirements.txt").write_text(
+        "isolated-fixture==1\n",
+        encoding="utf-8",
+    )
+    (runtime_app / "worker.py").write_text(
+        "ISOLATED_GUARDRAIL_FIXTURE = True\n",
+        encoding="utf-8",
+    )
+    config.m2_guardrail_runtime_app_root = str(runtime_app)
+    runtime_instance = worker_runtime_instance_fingerprint(config)
     baseline = {
         "worker_commit_sha": "1" * 40,
         "webui_commit_sha": "2" * 40,
         "worker_source_revision": "a" * 64,
+        "worker_runtime_code_revision": worker_runtime_code_revision(config),
         "webui_source_revision": "b" * 64,
         "worker_image_id": "sha256:" + "3" * 64,
         "webui_image_id": "sha256:" + "4" * 64,
+        "worker_container_id": "7" * 64,
+        "worker_container_identity": runtime_instance["container_identity"],
+        "worker_runtime_instance_fingerprint": runtime_instance[
+            "runtime_instance_fingerprint"
+        ],
         "configuration_fingerprint": configuration_fingerprint(config),
         "decision_schema_version": 1,
         "decision_version": "m2-source-decision-v1",
         "decision_contract": SOURCE_DECISION_CONTRACT,
+        "eligibility_policy_version": ELIGIBILITY_POLICY_VERSION,
     }
     now = time.time()
     state = {
@@ -676,6 +702,8 @@ def _initialize_isolated_runtime(config: Any, sandbox: Path) -> None:
             "progress": 0,
             "claimed_after_gate_start": 0,
             "completed_strict_verified": 0,
+            "gate_id": "",
+            "eligibility_policy_version": ELIGIBILITY_POLICY_VERSION,
         },
         "pre_gate_running": {
             "attempt_keys": [],
@@ -706,10 +734,23 @@ def _initialize_isolated_runtime(config: Any, sandbox: Path) -> None:
         "production_resources_affected": False,
     }
     atomic_write_text(
+        Path(str(config.work_path)) / "ai_control.json",
+        json.dumps(
+            {
+                "paused": True,
+                "updated_at": now,
+                "requested_by": "isolated-fault-harness",
+            },
+            sort_keys=True,
+        )
+        + "\n",
+    )
+    gate = observation.initialize_observation_gate(config, state, now=now)
+    state["gate"]["gate_id"] = str(gate["gate_id"])
+    atomic_write_text(
         runtime_state_path(config),
         json.dumps(state, sort_keys=True, indent=2) + "\n",
     )
-    observation.initialize_observation_gate(config, state, now=now)
 
 
 def _contains_completed_state(payload: Mapping[str, Any] | None) -> bool:

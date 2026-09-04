@@ -244,6 +244,18 @@ class ScanStateStore:
 
         return bool(self._conn.in_transaction)
 
+    @property
+    def observation_connection(self) -> sqlite3.Connection:
+        """Expose this transaction only to the co-located M2 gate store."""
+
+        return self._conn
+
+    def begin_immediate(self) -> None:
+        """Serialize a queue claim before its first compare-and-set write."""
+
+        if not self._conn.in_transaction:
+            self._conn.execute("BEGIN IMMEDIATE")
+
     def commit(self) -> None:
         self._conn.commit()
 
@@ -928,7 +940,7 @@ class ScanStateStore:
                     "exact canary queue target is not the expected queued failure identity"
                 )
         elif acceptance_target is None:
-            self._conn.execute(
+            changed = self._conn.execute(
                 """
                 UPDATE ai_candidate_queue
                 SET status = 'running',
@@ -936,9 +948,12 @@ class ScanStateStore:
                     next_retry_at = 0,
                     updated_at = ?
                 WHERE path = ?
+                  AND status IN ('queued', 'failed_retry')
                 """,
                 (now, now, _queue_path(path)),
-            )
+            ).rowcount
+            if int(changed or 0) != 1:
+                raise ValueError("AI queue target changed before atomic claim")
         else:
             retry_strategies = tuple(sorted(AI_QUEUE_AUTOMATIC_RETRY_STRATEGIES))
             retry_placeholders = ", ".join("?" for _item in retry_strategies)
@@ -1757,8 +1772,9 @@ class ScanStateStore:
         recovery_stage: str,
         cutoff: float | None = None,
         only_path: str | None = None,
+        result_observer: Callable[[Path, str], None] | None = None,
     ) -> list[str]:
-        """Fail closed targeted line claims while preserving queue retry budget."""
+        """Settle interrupted targeted line claims for explicit review."""
 
         clauses = [
             "q.status='running'",
@@ -1777,30 +1793,32 @@ class ScanStateStore:
             parameters.append(float(cutoff))
         rows = self._conn.execute(
             f"""
-            SELECT q.path, q.last_error, a.attempt_id
+            SELECT q.path, q.last_error, a.attempt_id, a.started_at
             FROM ai_candidate_queue q
             JOIN ai_delivery_obligations o ON o.canonical_path=q.path
             JOIN ai_delivery_attempts a ON a.obligation_id=o.obligation_id
             LEFT JOIN ai_job_state j ON j.path=q.path
             WHERE {' AND '.join(clauses)}
-            ORDER BY q.path COLLATE NOCASE, a.started_at, a.attempt_id
+            ORDER BY q.path COLLATE NOCASE, a.started_at DESC, a.attempt_id DESC
             """,
             tuple(parameters),
         ).fetchall()
         recovered: list[str] = []
-        seen_paths: set[str] = set()
-        for raw_path, last_error, attempt_id in rows:
+        latest_attempt_by_path: dict[str, tuple[str, str]] = {}
+        for raw_path, last_error, attempt_id, _started_at in rows:
             path = str(raw_path)
             self.finish_ai_delivery_attempt(
                 str(attempt_id),
-                status="deferred",
+                status="review_required",
                 stage=str(recovery_stage),
                 error_code="line_retranslation_interrupted",
                 detail=str(message),
             )
-            if path in seen_paths:
-                continue
-            seen_paths.add(path)
+            latest_attempt_by_path.setdefault(
+                path,
+                (str(attempt_id), str(last_error or message)),
+            )
+        for path, (attempt_id, last_error) in latest_attempt_by_path.items():
             changed = self._conn.execute(
                 """
                 UPDATE ai_candidate_queue
@@ -1818,10 +1836,18 @@ class ScanStateStore:
                 "failed",
                 str(last_error or message)[:1000],
             )
+            if result_observer is not None:
+                result_observer(Path(path), attempt_id)
             recovered.append(path)
         return recovered
 
-    def recover_stale_ai_queue_candidate(self, path: Path, stale_after_seconds: int) -> bool:
+    def recover_stale_ai_queue_candidate(
+        self,
+        path: Path,
+        stale_after_seconds: int,
+        *,
+        result_observer: Callable[[Path, str], None] | None = None,
+    ) -> bool:
         """Requeue exactly one running item only when its heartbeat is stale."""
 
         self.reconcile_completed_running()
@@ -1833,6 +1859,7 @@ class ScanStateStore:
             recovery_stage="stale_recovery",
             cutoff=cutoff,
             only_path=normalized_path,
+            result_observer=result_observer,
         ):
             return True
         row = self._conn.execute(
@@ -1851,6 +1878,24 @@ class ScanStateStore:
         ).fetchone()
         if row is None or str(row[0] or "") != "running" or float(row[1] or 0) > cutoff:
             return False
+        interrupted_attempts = self._conn.execute(
+            """
+            SELECT a.attempt_id
+            FROM ai_delivery_attempts a
+            JOIN ai_delivery_obligations o ON o.obligation_id=a.obligation_id
+            WHERE o.canonical_path=? AND o.state='open' AND a.status='running'
+            ORDER BY a.started_at DESC, a.attempt_id DESC
+            """,
+            (normalized_path,),
+        ).fetchall()
+        for (attempt_id,) in interrupted_attempts:
+            self.finish_ai_delivery_attempt(
+                str(attempt_id),
+                status="deferred",
+                stage="stale_recovery",
+                error_code="stale_running_recovered",
+                detail="Stale running AI job was safely requeued",
+            )
         changed = self._conn.execute(
             """
             UPDATE ai_candidate_queue
@@ -1869,6 +1914,9 @@ class ScanStateStore:
         ).rowcount
         if changed:
             self.update_ai_job_stage(path, "queued", "queued", "Recovered stale running AI job")
+            if result_observer is not None:
+                for (attempt_id,) in interrupted_attempts:
+                    result_observer(path, str(attempt_id))
         return changed == 1
 
     def pause_ai_queue_candidate(self, path: Path) -> None:
@@ -1927,8 +1975,58 @@ class ScanStateStore:
             return True
         return False
 
-    def skip_ai_queue_candidate(self, path: Path) -> None:
+    def skip_ai_queue_candidate(
+        self,
+        path: Path,
+        *,
+        result_observer: Callable[[Path, str], None] | None = None,
+    ) -> None:
         now = time.time()
+        observed_attempt_id = ""
+        if result_observer is not None:
+            obligation_row = self._conn.execute(
+                """
+                SELECT obligation_id, acceptance_run_id
+                FROM ai_delivery_obligations
+                WHERE canonical_path=? AND state='open'
+                ORDER BY eligible_at DESC, obligation_id DESC LIMIT 1
+                """,
+                (_queue_path(path),),
+            ).fetchone()
+            if obligation_row is not None:
+                running_rows = self._conn.execute(
+                    """
+                    SELECT attempt_id
+                    FROM ai_delivery_attempts
+                    WHERE obligation_id=? AND status='running'
+                    ORDER BY started_at DESC, attempt_id DESC
+                    """,
+                    (str(obligation_row[0]),),
+                ).fetchall()
+                if running_rows:
+                    observed_attempt_id = str(running_rows[0][0])
+                    for (attempt_id,) in running_rows:
+                        self.finish_ai_delivery_attempt(
+                            str(attempt_id),
+                            status="review_required",
+                            stage="manual_control",
+                            error_code="operator_skip",
+                            detail="Operator skipped an enrolled AI job",
+                        )
+                else:
+                    attempt = self.begin_ai_delivery_attempt(
+                        str(obligation_row[0]),
+                        started_at=now,
+                        acceptance_run_id=str(obligation_row[1] or ""),
+                    )
+                    observed_attempt_id = str(attempt["attempt_id"])
+                    self.finish_ai_delivery_attempt(
+                        observed_attempt_id,
+                        status="review_required",
+                        stage="manual_control",
+                        error_code="operator_skip",
+                        detail="Operator skipped an enrolled AI job",
+                    )
         self._conn.execute(
             """
             UPDATE ai_candidate_queue
@@ -1942,6 +2040,8 @@ class ScanStateStore:
             (now, _queue_path(path)),
         )
         self.update_ai_job_stage(path, "skipped", "skipped", "Manual skip")
+        if observed_attempt_id and result_observer is not None:
+            result_observer(path, observed_attempt_id)
 
     def prioritize_ai_queue_candidate(self, path: Path) -> None:
         now = time.time()
@@ -2054,6 +2154,7 @@ class ScanStateStore:
         stale_after_seconds: int,
         *,
         reconcile_completed: bool = True,
+        result_observer: Callable[[Path, str], None] | None = None,
     ) -> int:
         if reconcile_completed:
             self.reconcile_completed_running()
@@ -2064,6 +2165,7 @@ class ScanStateStore:
             message="Timed-out targeted subtitle line repair was paused safely",
             recovery_stage="stale_recovery",
             cutoff=cutoff,
+            result_observer=result_observer,
         )
         rows = self._conn.execute(
             """
@@ -2143,6 +2245,9 @@ class ScanStateStore:
                 "queued",
                 "Requeued stale running AI job",
             )
+            if result_observer is not None:
+                for (attempt_id,) in running_attempts:
+                    result_observer(Path(str(path)), str(attempt_id))
             requeued += 1
         return len(recovered_line_repairs) + requeued
 
@@ -2152,6 +2257,7 @@ class ScanStateStore:
         *,
         stale_after_seconds: int | None = None,
         message: str = "Worker restarted before this acceptance job finished",
+        result_observer: Callable[[Path, str], None] | None = None,
     ) -> int:
         """Requeue only exact running identities from the fixed acceptance lane."""
 
@@ -2246,6 +2352,11 @@ class ScanStateStore:
                     error_code=error_code,
                     detail=message,
                 )
+                if result_observer is not None:
+                    result_observer(
+                        Path(target.canonical_path),
+                        str(attempt_id),
+                    )
             self.update_ai_job_stage(
                 Path(target.canonical_path),
                 "queued",
@@ -2264,14 +2375,17 @@ class ScanStateStore:
             dict[str, Any] | None,
         ]
         | None = None,
+        result_observer: Callable[[Path, str], None] | None = None,
     ) -> int:
-        self.reconcile_completed_running(
+        reconciled = self.reconcile_completed_running(
             delivery_evidence_resolver=delivery_evidence_resolver,
+            result_observer=result_observer,
         )
         now = time.time()
         recovered_line_repairs = self._recover_interrupted_line_retranslations(
             message="Interrupted targeted subtitle line repair was paused safely",
             recovery_stage="restart_recovery",
+            result_observer=result_observer,
         )
         rows = self._conn.execute(
             """
@@ -2282,11 +2396,11 @@ class ScanStateStore:
             """
         ).fetchall()
         if not rows:
-            return len(recovered_line_repairs)
+            return reconciled + len(recovered_line_repairs)
 
         interrupted_attempts = self._conn.execute(
             """
-            SELECT a.attempt_id
+            SELECT a.attempt_id, q.path
             FROM ai_delivery_attempts a
             JOIN ai_delivery_obligations o
               ON o.obligation_id = a.obligation_id
@@ -2298,7 +2412,7 @@ class ScanStateStore:
             ORDER BY a.started_at ASC, a.attempt_id ASC
             """
         ).fetchall()
-        for (attempt_id,) in interrupted_attempts:
+        for attempt_id, _path in interrupted_attempts:
             self.finish_ai_delivery_attempt(
                 str(attempt_id),
                 status="deferred",
@@ -2322,7 +2436,10 @@ class ScanStateStore:
         )
         for (path,) in rows:
             self.update_ai_job_stage(Path(str(path)), "queued", "queued", message)
-        return len(recovered_line_repairs) + len(rows)
+        if result_observer is not None:
+            for attempt_id, path in interrupted_attempts:
+                result_observer(Path(str(path)), str(attempt_id))
+        return reconciled + len(recovered_line_repairs) + len(rows)
 
     def reconcile_completed_running(
         self,
@@ -2332,6 +2449,7 @@ class ScanStateStore:
             dict[str, Any] | None,
         ]
         | None = None,
+        result_observer: Callable[[Path, str], None] | None = None,
     ) -> int:
         """Settle crash-window completions only from strict delivery evidence.
 
@@ -2411,6 +2529,8 @@ class ScanStateStore:
                 verified_at=float(evidence["verified_at"]),
             )
             self.mark_ai_queue_done(path)
+            if result_observer is not None:
+                result_observer(path, str(attempt["attempt_id"]))
             settled += 1
         return settled
 
@@ -4466,6 +4586,11 @@ class ScanStateStore:
                 (str(now), now),
             )
         ensure_pipeline_state_schema(self._conn)
+        # M2 observation membership shares this WAL database so queue claim and
+        # frozen-cohort enrollment can commit as one transaction.
+        from m2_observation_store import ensure_observation_schema
+
+        ensure_observation_schema(self._conn)
         self._conn.commit()
 
     def _prune_stage_events(self, *, force: bool = False) -> int:

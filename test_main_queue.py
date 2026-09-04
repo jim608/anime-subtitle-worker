@@ -1146,6 +1146,10 @@ class MainQueueResultTest(unittest.TestCase):
                         "_m2_server_canary_admit_new_job",
                         return_value=True,
                     ),
+                    patch(
+                        "m2_production_observation.validate_claim_transaction",
+                        return_value={"admitted": True, "runtime_state": {}},
+                    ),
                     patch.object(main_module, "_record_m2_job_claim"),
                 ):
                     attempt_id = main_module._mark_queue_running(
@@ -4538,7 +4542,7 @@ class MainQueueResultTest(unittest.TestCase):
 
             settle_state.finish_ai_delivery_attempt.assert_called_once_with(
                 attempt["attempt_id"],
-                status="failed",
+                status="review_required",
                 stage="delivery_verification",
                 error_code="delivery_evidence_missing",
                 detail=(
