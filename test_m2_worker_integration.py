@@ -106,6 +106,95 @@ class M2WorkerIntegrationTest(unittest.TestCase):
             finally:
                 state.close()
 
+    def test_retry_from_asr_reenters_source_detection_before_analysis(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "episode.mkv"
+            video.write_bytes(b"immutable-video")
+            source = root / "episode.zh-TW.ass"
+            _write_complete_ass(source)
+            source_before = (video.read_bytes(), video.stat().st_size, video.stat().st_mtime_ns)
+            config = self._config(root)
+
+            state = ScanStateStore.from_config(config)
+            try:
+                pipeline = state.pipeline_jobs()
+                stat = video.stat()
+                job = pipeline.job_for_path(
+                    video,
+                    size=stat.st_size,
+                    mtime_ns=stat.st_mtime_ns,
+                    create=True,
+                    initial_state="QUEUED",
+                    reason_code="m2_retry_regression_fixture",
+                    evidence={"test": "m2_retry_from_asr"},
+                    confidence=1.0,
+                )
+                assert isinstance(job, dict)
+                asr_attempt = pipeline.start_stage_attempt(
+                    str(job["job_id"]),
+                    "ASR",
+                    inputs={"fixture": "advanced_before_m2"},
+                    retry_limit=2,
+                    reason_code="m2_retry_regression_fixture",
+                    evidence={"test": "m2_retry_from_asr"},
+                    confidence=1.0,
+                )
+                pipeline.finish_stage_attempt(
+                    str(asr_attempt["stage_attempt_id"]),
+                    "NEEDS_REVIEW",
+                    error_class="quality",
+                    error_code="legacy_asr_review",
+                    reason_code="m2_retry_regression_fixture",
+                    evidence={"test": "m2_retry_from_asr"},
+                    confidence=1.0,
+                )
+                state.commit()
+            finally:
+                state.close()
+
+            worker = VideoWorker(config, _logger())
+            probe = {"format": {"duration": "100"}, "streams": []}
+            with (
+                patch("source_inventory._probe_media", return_value=probe),
+                patch.object(worker, "_extract_preferred_audio") as extract_audio,
+                patch.object(worker, "_detect_source_language") as detect_language,
+                patch.object(worker, "_transcribe") as transcribe,
+            ):
+                outcome = worker._process_locked(
+                    video,
+                    root / "audio.wav",
+                    root / "vocals.wav",
+                )
+
+            self.assertEqual(("complete", "ok"), (outcome.stage, outcome.status))
+            extract_audio.assert_not_called()
+            detect_language.assert_not_called()
+            transcribe.assert_not_called()
+            self.assertEqual(
+                source_before,
+                (video.read_bytes(), video.stat().st_size, video.stat().st_mtime_ns),
+            )
+
+            state = ScanStateStore.from_config(config)
+            try:
+                pipeline = state.pipeline_jobs()
+                job = pipeline.job_for_path(
+                    video,
+                    size=video.stat().st_size,
+                    mtime_ns=video.stat().st_mtime_ns,
+                    create=False,
+                )
+                assert isinstance(job, dict)
+                attempts = pipeline.list_stage_attempts(
+                    str(job["job_id"]), "SUBTITLE_DETECTION"
+                )
+                self.assertEqual(["SUCCEEDED"], [item["status"] for item in attempts])
+                self.assertEqual("QC", job["state"])
+                self.assertEqual("", str(job.get("active_stage_attempt_id") or ""))
+            finally:
+                state.close()
+
     def test_preselected_m2_audio_is_used_without_metadata_reselection(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

@@ -1450,10 +1450,6 @@ class VideoWorker:
         )
         if not isinstance(job, dict) or not job.get("job_id"):
             raise RuntimeError("M2 source analysis could not resolve its durable job")
-        stage_attempt_id = str(job.get("active_stage_attempt_id") or "")
-        if not stage_attempt_id:
-            raise RuntimeError("M2 source analysis requires an active SUBTITLE_DETECTION attempt")
-
         identity = build_source_input_identity(video, job, config=self.config)
         thresholds = self.config.source_analyzer_thresholds()
         config_fingerprint = canonical_json_sha256(
@@ -1480,8 +1476,61 @@ class VideoWorker:
                 "thresholds": thresholds.to_dict(),
             }
         )
+        job_id = str(job["job_id"])
+        stage_attempt_id = str(job.get("active_stage_attempt_id") or "")
+        active_source_attempt = next(
+            (
+                attempt
+                for attempt in pipeline.list_stage_attempts(job_id, "SUBTITLE_DETECTION")
+                if str(attempt.get("stage_attempt_id") or "") == stage_attempt_id
+                and str(attempt.get("status") or "") == "RUNNING"
+            ),
+            None,
+        )
+        if active_source_attempt is None:
+            # Retried or pre-M2 jobs may already have advanced to ASR (or later),
+            # so the legacy preflight bridge correctly refuses to move the
+            # formal job backwards.  Source analysis is the explicit exception:
+            # re-enter it through RETRYING and bind/reuse the immutable decision
+            # on a fresh durable SUBTITLE_DETECTION attempt before model work.
+            attempt = pipeline.start_stage_attempt(
+                job_id,
+                "SUBTITLE_DETECTION",
+                inputs={
+                    **self._pipeline_stage_inputs(video),
+                    "source_input_identity": identity.to_dict(),
+                    "config_fingerprint": config_fingerprint,
+                },
+                model={
+                    "adapter": "source_analyzer",
+                    "name": str(getattr(self.config, "source_analyzer_version", "") or ""),
+                },
+                retry_limit=max(
+                    0,
+                    int(getattr(self.config, "auto_ai_max_attempts", 3) or 0) - 1,
+                ),
+                timeout_seconds=max(
+                    0.0,
+                    float(
+                        getattr(self.config, "subtitle_extract_timeout_seconds", 0)
+                        or 0
+                    ),
+                ),
+                reason_code="m2_source_analysis_stage_started",
+                evidence={
+                    "source": "m2_source_analysis",
+                    "previous_state": str(job.get("state") or ""),
+                    "resume_state": str(job.get("resume_state") or ""),
+                    "reason": "active_subtitle_detection_attempt_missing",
+                },
+                confidence=1.0,
+            )
+            stage_attempt_id = str(attempt["stage_attempt_id"])
+            # Persist the stage start before candidate extraction so a process
+            # or container interruption remains recoverable and observable.
+            self._stage_state.commit()
         context = SourceAnalysisContext(
-            job_id=str(job["job_id"]),
+            job_id=job_id,
             stage_attempt_id=stage_attempt_id,
             input_identity=identity.to_dict(),
             media_revision=str(job.get("media_revision") or ""),
