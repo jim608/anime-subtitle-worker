@@ -39,9 +39,16 @@ def reconcile_delivery_evidence_visibility_race(
     translation, and ASS generation are never invoked.
     """
 
-    from main import _ai_queue_paused, _mark_queue_result, _mark_queue_running
+    from main import (
+        _ai_queue_paused,
+        _m2_server_canary_admit_new_job,
+        _mark_queue_result_and_observe,
+        _mark_queue_running,
+    )
 
     resolved = Path(video).resolve()
+    if not _m2_server_canary_admit_new_job(config, logger=logger):
+        raise RuntimeError("M2 runtime guardrail stopped delivery recovery admission")
     if not _ai_queue_paused(config):
         raise RuntimeError("AI queue must be paused before delivery evidence recovery")
     if bool(getattr(config, "completed_delivery_enabled", False)):
@@ -156,7 +163,7 @@ def reconcile_delivery_evidence_visibility_race(
         ):
             raise RuntimeError("Republished manifest failed strict verification")
 
-        _mark_queue_result(
+        _mark_queue_result_and_observe(
             state,
             resolved,
             True,
@@ -186,7 +193,7 @@ def reconcile_delivery_evidence_visibility_race(
         }
     except Exception:
         if new_attempt_id and not settled:
-            _mark_queue_result(
+            _mark_queue_result_and_observe(
                 state,
                 resolved,
                 False,

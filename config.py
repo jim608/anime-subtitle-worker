@@ -83,6 +83,7 @@ class AppConfig:
     m2_server_canary_observation_gate_size: int = 20
     m2_server_canary_observation_state_path: str = "m2_server_canary_observation.json"
     m2_server_canary_observation_output_dir: str = "m2_server_canary_observations"
+    m2_guardrail_runtime_state_path: str = "m2_guardrail_runtime.json"
     m2_server_canary_circuit_breaker_enabled: bool = False
     m2_server_canary_circuit_breaker_state_path: str = "m2_server_canary_circuit_breaker.json"
     m2_server_canary_repeated_oom_threshold: int = 3
@@ -693,6 +694,11 @@ def load_config(config_path: str | Path) -> AppConfig:
             raw,
             "m2_server_canary_observation_output_dir",
             "m2_server_canary_observations",
+        ),
+        m2_guardrail_runtime_state_path=_as_optional_str(
+            raw,
+            "m2_guardrail_runtime_state_path",
+            "m2_guardrail_runtime.json",
         ),
         m2_server_canary_circuit_breaker_enabled=_optional_bool(
             raw,
@@ -2105,6 +2111,22 @@ def _validate_config(config: AppConfig) -> None:
         raise ConfigError(
             "max_concurrent_videos must be exactly 1 while the M2 server "
             "canary observer is enabled."
+        )
+    if (
+        config.m2_server_canary_observer_enabled
+        and not str(config.m2_guardrail_runtime_state_path).strip()
+    ):
+        raise ConfigError(
+            "m2_guardrail_runtime_state_path must not be empty while the M2 "
+            "server canary observer is enabled."
+        )
+    if (
+        config.m2_server_canary_observer_enabled
+        and not config.source_integrity_sha256_enabled
+    ):
+        raise ConfigError(
+            "source_integrity_sha256_enabled must be true while the M2 "
+            "server canary observer is enabled."
         )
 
     if config.resource_admission_enabled:

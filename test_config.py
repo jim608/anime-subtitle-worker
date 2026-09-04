@@ -88,6 +88,10 @@ qbit_password: "${{TEST_QBIT_PASSWORD:-CHANGE_ME}}"
             self.assertEqual(config.ai_subprocess_timeout_seconds, 14400)
             self.assertFalse(config.m2_server_canary_observer_enabled)
             self.assertEqual(config.m2_server_canary_observation_gate_size, 20)
+            self.assertEqual(
+                config.m2_guardrail_runtime_state_path,
+                "m2_guardrail_runtime.json",
+            )
             self.assertFalse(config.m2_server_canary_circuit_breaker_enabled)
             self.assertEqual(config.m2_server_canary_repeated_oom_threshold, 3)
             self.assertEqual(
@@ -252,6 +256,24 @@ qbit_password: "${{TEST_QBIT_PASSWORD:-CHANGE_ME}}"
                 encoding="utf-8",
             )
             with self.assertRaises(ConfigError):
+                load_config(path)
+
+    def test_m2_observer_requires_sha256_source_integrity(self):
+        base = Path("config.yaml").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.yaml"
+            path.write_text(
+                base.replace(
+                    "source_integrity_sha256_enabled: true",
+                    "source_integrity_sha256_enabled: false",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                ConfigError,
+                "source_integrity_sha256_enabled",
+            ):
                 load_config(path)
 
     def test_rejects_invalid_japanese_final_fallback_backend(self):

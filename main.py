@@ -44,6 +44,14 @@ _CONTROL_COMMAND_RECONCILE_INTERVAL_SECONDS = 60.0
 _AI_CANARY_ONCE_STRATEGY_VERSION = "canary-once-v1"
 
 
+class _M2StrictCompletionRejected(RuntimeError):
+    """Prevent a gate-bound attempt from committing an unverified completion."""
+
+    def __init__(self, failed_evidence: list[str]) -> None:
+        self.failed_evidence = tuple(str(item) for item in failed_evidence[:11])
+        super().__init__("m2_strict_completion_rejected")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Anime subtitle automation tool")
     parser.add_argument("--config", required=True, help="Path to config.yaml")
@@ -375,12 +383,12 @@ def _scan_and_process(
         update_ai_scheduler_state(
             worker.config,
             state="paused",
-            reason_code="m2_server_canary_circuit_open",
-            message="M2 server-canary circuit breaker is stopping new AI claims.",
+            reason_code="m2_guardrail_not_armed",
+            message="M2 runtime guardrail is stopping new AI claims.",
             current_video=None,
             logger=logger,
         )
-        logger.error("M2 server-canary circuit breaker is open; no new AI work will be claimed.")
+        logger.error("M2 runtime guardrail is not admitting new AI work.")
         return 0
     if (
         _ai_queue_paused(worker.config)
@@ -532,7 +540,7 @@ def _scan_and_process(
                     break
                 if not _m2_server_canary_admit_new_job(worker.config, logger=logger):
                     logger.error(
-                        "M2 server-canary circuit breaker opened; "
+                        "M2 runtime guardrail stopped admission; "
                         "the next queued video remains untouched."
                     )
                     break
@@ -707,7 +715,7 @@ def _scan_and_process(
                         return
                     if not _m2_server_canary_admit_new_job(worker.config, logger=logger):
                         logger.error(
-                            "M2 server-canary circuit breaker opened; "
+                            "M2 runtime guardrail stopped admission; "
                             "running videos may finish but no additional video will start."
                         )
                         return
@@ -5349,6 +5357,10 @@ def _run_ai_retranslate_lines_command(
     from output_manifest import delivery_identity
 
     resolved_video = Path(video).resolve()
+    if not _m2_server_canary_admit_new_job(config):
+        raise RuntimeError(
+            "M2 runtime guardrail stopped line-retranslation admission"
+        )
     acceptance_run_id = ""
     acceptance_lane = load_acceptance_queue_lane(config)
     if acceptance_lane is not None:
@@ -5363,8 +5375,14 @@ def _run_ai_retranslate_lines_command(
     if state is None:
         raise RuntimeError("AI line retranslation requires the durable delivery ledger")
     claim: dict[str, object] = {}
+    claim_pipeline_events: list[dict[str, object]] = []
     try:
         def begin_delivery_attempt() -> None:
+            claim_pipeline_events.clear()
+            if not _m2_server_canary_admit_new_job(config):
+                raise RuntimeError(
+                    "M2 runtime guardrail changed before line-retranslation claim"
+                )
             identity = delivery_identity(resolved_video, config)
             media = dict(identity["media"])
             obligation_id = str(identity["obligation_id"])
@@ -5400,11 +5418,48 @@ def _run_ai_retranslate_lines_command(
                 {
                     "attempt_id": str(attempt["attempt_id"]),
                     "obligation_id": str(obligation["obligation_id"]),
+                    "started_at": float(attempt["started_at"]),
                     **queue_claim,
                 }
             )
+            pipeline_store, pipeline_job, transition_cursor = (
+                _pipeline_queue_result_context(state, resolved_video, obligation)
+            )
+            if isinstance(pipeline_job, dict) and pipeline_store is not None:
+                pipeline_store.transition_legacy_stage(
+                    str(pipeline_job["job_id"]),
+                    "translation",
+                    "running",
+                    inputs={
+                        "queue": "line_retranslation",
+                        "delivery_attempt_id": str(attempt["attempt_id"]),
+                    },
+                    retry_limit=max(
+                        0,
+                        int(getattr(config, "auto_ai_max_attempts", 3) or 3) - 1,
+                    ),
+                    reason_code="line_retranslation_claimed",
+                    evidence={"source": "guarded_line_retranslation"},
+                    confidence=1.0,
+                    idempotency_key=(
+                        "ai-line-retranslation-claim:" + str(attempt["attempt_id"])
+                    ),
+                )
+                claim_pipeline_events.extend(
+                    _pipeline_transition_events(
+                        pipeline_store,
+                        str(pipeline_job["job_id"]),
+                        after_sequence=transition_cursor,
+                    )
+                )
 
         _commit_ai_queue_state_write(state, begin_delivery_attempt)
+        _append_pipeline_transition_events(config, None, claim_pipeline_events)
+        _record_m2_job_claim(
+            config,
+            str(claim["attempt_id"]),
+            float(claim["started_at"]),
+        )
     finally:
         state.close()
 
@@ -5437,10 +5492,31 @@ def _run_ai_retranslate_lines_command(
                 f"{operation_error}; delivery attempt could not be settled"
             ) from operation_error
         try:
+            failure_pipeline_events: list[dict[str, object]] = []
+
             def record_failure() -> None:
+                failure_pipeline_events.clear()
+                attempt = failure_state.get_ai_delivery_attempt(
+                    str(claim["attempt_id"])
+                )
+                obligation = (
+                    failure_state.get_ai_delivery_obligation(
+                        str(attempt.get("obligation_id") or "")
+                    )
+                    if isinstance(attempt, dict)
+                    else None
+                )
+                pipeline_store, pipeline_job, transition_cursor = (
+                    _pipeline_queue_result_context(
+                        failure_state,
+                        resolved_video,
+                        obligation,
+                    )
+                )
+                review_required = str(claim.get("original_status") or "") == "paused"
                 failure_state.finish_ai_delivery_attempt(
                     str(claim["attempt_id"]),
-                    status="failed",
+                    status="review_required" if review_required else "retryable_failure",
                     stage="line_retranslation",
                     error_code="line_retranslation_failed",
                     detail=f"{type(operation_error).__name__}: {operation_error}",
@@ -5459,8 +5535,29 @@ def _run_ai_retranslate_lines_command(
                 )
                 if not restored:
                     raise RuntimeError("line retranslation queue claim changed before restore")
+                failure_pipeline_events.extend(
+                    _record_pipeline_queue_result(
+                        pipeline_store,
+                        pipeline_job,
+                        transition_cursor,
+                        config=config,
+                        delivery_attempt_id=str(claim["attempt_id"]),
+                        target_state="NEEDS_REVIEW" if review_required else "RETRYING",
+                        stage="line_retranslation",
+                        reason_code="line_retranslation_failed",
+                        error_code="line_retranslation_failed",
+                        detail=f"{type(operation_error).__name__}: {operation_error}",
+                    )
+                )
 
             _commit_ai_queue_state_write(failure_state, record_failure)
+            _append_pipeline_transition_events(config, None, failure_pipeline_events)
+            _record_terminal_m2_observation(
+                failure_state,
+                resolved_video,
+                config,
+                str(claim["attempt_id"]),
+            )
         except Exception as settlement_error:
             raise RuntimeError(
                 f"{operation_error}; delivery attempt settlement failed: {settlement_error}"
@@ -5470,11 +5567,13 @@ def _run_ai_retranslate_lines_command(
         raise
 
     result = {"error": ""}
+    success_pipeline_events: list[dict[str, object]] = []
     success_state = _open_ai_queue_state(config)
     if success_state is None:
         raise RuntimeError("AI line retranslation output could not be verified in the delivery ledger")
     try:
         def verify_and_settle() -> None:
+            success_pipeline_events.clear()
             attempt_id = str(claim["attempt_id"])
             attempt = success_state.get_ai_delivery_attempt(attempt_id)
             if attempt is None:
@@ -5486,6 +5585,13 @@ def _run_ai_retranslate_lines_command(
                 raise RuntimeError(
                     f"AI delivery obligation disappeared: {claim['obligation_id']}"
                 )
+            pipeline_store, pipeline_job, transition_cursor = (
+                _pipeline_queue_result_context(
+                    success_state,
+                    resolved_video,
+                    obligation,
+                )
+            )
             evidence = _verified_ai_delivery_evidence(
                 resolved_video,
                 config,
@@ -5498,6 +5604,7 @@ def _run_ai_retranslate_lines_command(
                     "AI line retranslation returned success without current strictly "
                     "verified delivery evidence"
                 )
+                review_required = str(claim.get("original_status") or "") == "paused"
                 success_state.finish_ai_delivery_attempt(
                     attempt_id,
                     status="failed",
@@ -5519,6 +5626,20 @@ def _run_ai_retranslate_lines_command(
                 )
                 if not restored:
                     raise RuntimeError("line retranslation queue claim changed before restore")
+                success_pipeline_events.extend(
+                    _record_pipeline_queue_result(
+                        pipeline_store,
+                        pipeline_job,
+                        transition_cursor,
+                        config=config,
+                        delivery_attempt_id=attempt_id,
+                        target_state="NEEDS_REVIEW" if review_required else "RETRYING",
+                        stage="delivery_verification",
+                        reason_code="line_retranslation_delivery_evidence_missing",
+                        error_code="delivery_evidence_missing",
+                        detail=message,
+                    )
+                )
                 result["error"] = message
                 return
             success_state.finish_ai_delivery_attempt(
@@ -5543,8 +5664,50 @@ def _run_ai_retranslate_lines_command(
             )
             if not queue_done:
                 raise RuntimeError("line retranslation queue claim changed before completion")
+            try:
+                success_pipeline_events.extend(
+                    _record_pipeline_queue_result(
+                        pipeline_store,
+                        pipeline_job,
+                        transition_cursor,
+                        config=config,
+                        delivery_attempt_id=attempt_id,
+                        target_state="COMPLETED",
+                        stage="delivery_verification",
+                        reason_code="verified_line_retranslation_completed",
+                        delivery_evidence=evidence,
+                    )
+                )
+            except Exception as exc:
+                raise _M2StrictCompletionRejected(
+                    ["stage_checkpoint_history_complete"]
+                ) from exc
+            _validate_m2_completion_before_commit(
+                success_state,
+                resolved_video,
+                config,
+                attempt_id,
+            )
 
-        _commit_ai_queue_state_write(success_state, verify_and_settle)
+        try:
+            _commit_ai_queue_state_write(success_state, verify_and_settle)
+        except _M2StrictCompletionRejected as rejection:
+            success_state.rollback()
+            success_pipeline_events[:] = _commit_m2_completion_rejection(
+                success_state,
+                resolved_video,
+                config,
+                str(claim["attempt_id"]),
+                rejection,
+            )
+            result["error"] = "M2 strict completion evidence rejected line repair"
+        _append_pipeline_transition_events(config, None, success_pipeline_events)
+        _record_terminal_m2_observation(
+            success_state,
+            resolved_video,
+            config,
+            str(claim["attempt_id"]),
+        )
     finally:
         success_state.close()
     if result["error"]:
@@ -6808,15 +6971,13 @@ def _deployment_hold_active(config) -> bool:
 def _m2_server_canary_admit_new_job(config, *, logger=None) -> bool:
     """Fail closed before claims without changing running jobs or checkpoints."""
 
-    if not bool(getattr(config, "m2_server_canary_observer_enabled", False)):
-        return True
     try:
         from m2_production_observation import admit_new_job
 
         return bool(admit_new_job(config, logger=logger))
     except Exception as exc:  # noqa: BLE001 - an unavailable safety guard must fail closed.
         if logger is not None:
-            logger.exception("M2 server-canary admission guard failed: %s", exc)
+            logger.exception("M2 runtime guardrail admission failed: %s", exc)
         try:
             from m2_production_observation import trip_circuit_breaker
 
@@ -7106,6 +7267,11 @@ def _mark_queue_running(
 ) -> str:
     if state is None:
         return ""
+    if config is not None and not _m2_server_canary_admit_new_job(
+        config,
+        logger=logger,
+    ):
+        raise RuntimeError("M2 runtime guardrail stopped queue claim")
     acceptance_target = None
     acceptance_run_id = ""
     if config is not None:
@@ -7118,7 +7284,7 @@ def _mark_queue_running(
                 )
             verify_acceptance_queue_target_source(acceptance_target, config)
             acceptance_run_id = acceptance_lane.run_id
-    claimed: dict[str, str] = {"attempt_id": ""}
+    claimed: dict[str, object] = {"attempt_id": "", "started_at": 0.0}
     pipeline_events: list[dict[str, object]] = []
 
     def claim() -> None:
@@ -7162,6 +7328,7 @@ def _mark_queue_running(
             acceptance_run_id=acceptance_run_id,
         )
         claimed["attempt_id"] = str(attempt["attempt_id"])
+        claimed["started_at"] = float(attempt.get("started_at") or 0.0)
 
         pipeline_store = _pipeline_jobs_for_state(state)
         if pipeline_store is None or not all(
@@ -7226,7 +7393,51 @@ def _mark_queue_running(
 
     _commit_ai_queue_state_write(state, claim)
     _append_pipeline_transition_events(config, logger, pipeline_events)
-    return claimed["attempt_id"]
+    attempt_id = str(claimed["attempt_id"] or "")
+    if config is not None and attempt_id:
+        _record_m2_job_claim(
+            config,
+            attempt_id,
+            float(claimed["started_at"] or 0),
+            logger=logger,
+        )
+    return attempt_id
+
+
+def _record_m2_job_claim(
+    config,
+    delivery_attempt_id: str,
+    claimed_at: float,
+    *,
+    logger=None,
+) -> None:
+    """Bind a committed attempt without interrupting work already claimed."""
+
+    if not bool(getattr(config, "m2_server_canary_observer_enabled", False)):
+        return
+    try:
+        from m2_production_observation import record_job_claim
+
+        record_job_claim(
+            config,
+            job_identity=delivery_attempt_id,
+            claimed_at=float(claimed_at),
+            logger=logger,
+        )
+    except Exception as exc:  # noqa: BLE001 - preserve the committed running claim.
+        if logger is not None:
+            logger.exception("M2 guardrail claim binding failed: %s", exc)
+        try:
+            from m2_production_observation import trip_circuit_breaker
+
+            trip_circuit_breaker(
+                config,
+                "claim_observation_failure",
+                evidence={"stage": "queue_claim"},
+                logger=logger,
+            )
+        except Exception:  # noqa: BLE001 - running job must not be interrupted.
+            pass
 
 
 def _verified_ai_delivery_evidence(
@@ -7280,7 +7491,7 @@ def _verified_ai_delivery_evidence(
             completed_delivery_receipt = completed_delivery_receipt_path(video, config)
             completed_receipt_sha256 = sha256_file(completed_delivery_receipt)
             completed_receipt_text = completed_delivery_receipt.read_text(encoding="utf-8")
-            if not validate_completed_delivery(video, config, verify_streams=False):
+            if not validate_completed_delivery(video, config, verify_streams=True):
                 return None
             if sha256_file(completed_delivery_receipt) != completed_receipt_sha256:
                 return None
@@ -7633,7 +7844,7 @@ def _mark_queue_result_and_observe(
     delivery_attempt_id: str = "",
     logger=None,
 ) -> None:
-    """Commit the terminal queue state, then emit bounded canary evidence."""
+    """Commit the terminal queue state, then emit bounded guardrail evidence."""
 
     _mark_queue_result(
         state,
@@ -7643,6 +7854,25 @@ def _mark_queue_result_and_observe(
         delivery_attempt_id=delivery_attempt_id,
         logger=logger,
     )
+    _record_terminal_m2_observation(
+        state,
+        video,
+        config,
+        delivery_attempt_id,
+        logger=logger,
+    )
+
+
+def _record_terminal_m2_observation(
+    state,
+    video,
+    config,
+    delivery_attempt_id: str,
+    *,
+    logger=None,
+) -> None:
+    """Verify and record a committed terminal attempt without exposing its path."""
+
     if (
         state is None
         or not delivery_attempt_id
@@ -7650,28 +7880,28 @@ def _mark_queue_result_and_observe(
     ):
         return
     try:
-        attempt = state.get_ai_delivery_attempt(delivery_attempt_id)
-        if not isinstance(attempt, dict):
-            raise RuntimeError("terminal delivery attempt is unavailable")
-        status = str(attempt.get("status") or "").strip().casefold()
+        from m2_guardrail_runtime import load_runtime_state
         from m2_production_observation import record_job_result
+        from m2_strict_runtime_evidence import build_m2_strict_runtime_evidence
+
+        strict_result = build_m2_strict_runtime_evidence(
+            state,
+            video,
+            config,
+            delivery_attempt_id,
+            load_runtime_state(config),
+        )
 
         record_job_result(
             config,
             job_identity=delivery_attempt_id,
-            outcome={
-                "verified_completed": status == "succeeded",
-                "failed": status != "succeeded",
-                "stage": str(attempt.get("stage") or "worker"),
-                "error_code": str(attempt.get("error_code") or ""),
-                "reason_code": status,
-                "detail": str(attempt.get("detail") or ""),
-            },
+            outcome=strict_result["outcome"],
+            strict_evidence=strict_result["evidence"],
             logger=logger,
         )
     except Exception as exc:  # noqa: BLE001 - preserve the committed job and stop future claims.
         if logger is not None:
-            logger.exception("M2 server-canary observation failed: %s", exc)
+            logger.exception("M2 strict observation failed: %s", exc)
         try:
             from m2_production_observation import trip_circuit_breaker
 
@@ -7752,6 +7982,12 @@ def _mark_queue_result(
                             reason_code="verified_delivery_completed",
                             delivery_evidence=evidence,
                         )
+                    )
+                    _validate_m2_completion_before_commit(
+                        state,
+                        video,
+                        config,
+                        delivery_attempt_id,
                     )
                     metric_result["ok"] = True
                     return
@@ -8020,7 +8256,19 @@ def _mark_queue_result(
                     )
                 )
 
-    _commit_ai_queue_state_write(state, write_result)
+    try:
+        _commit_ai_queue_state_write(state, write_result)
+    except _M2StrictCompletionRejected as rejection:
+        state.rollback()
+        metric_result["ok"] = False
+        pipeline_events[:] = _commit_m2_completion_rejection(
+            state,
+            video,
+            config,
+            delivery_attempt_id,
+            rejection,
+            logger=logger,
+        )
     _append_pipeline_transition_events(config, logger, pipeline_events)
     try:
         from control_state import increment_daily_metric
@@ -8030,6 +8278,170 @@ def _mark_queue_result(
         # Metrics are observational and must never turn a completed subtitle
         # transition into a failed queue operation.
         pass
+
+
+def _commit_m2_completion_rejection(
+    state,
+    video,
+    config,
+    delivery_attempt_id: str,
+    rejection: _M2StrictCompletionRejected,
+    *,
+    logger=None,
+) -> list[dict[str, object]]:
+    """Commit NEEDS_REVIEW after the rejected success transaction was rolled back."""
+
+    pipeline_events: list[dict[str, object]] = []
+    rejection_message = (
+        "M2 strict completion evidence was incomplete; outputs and checkpoints "
+        "were preserved for review"
+    )
+
+    def write_rejection() -> None:
+        pipeline_events.clear()
+        attempt = state.get_ai_delivery_attempt(delivery_attempt_id)
+        if not isinstance(attempt, dict) or str(attempt.get("status") or "") != "running":
+            raise RuntimeError("M2 completion rejection lost its running attempt")
+        obligation = state.get_ai_delivery_obligation(
+            str(attempt.get("obligation_id") or "")
+        )
+        if not isinstance(obligation, dict) or str(obligation.get("state") or "") != "open":
+            raise RuntimeError("M2 completion rejection lost its open obligation")
+        pipeline_store, pipeline_job, transition_cursor = _pipeline_queue_result_context(
+            state,
+            video,
+            obligation,
+        )
+        state.mark_ai_queue_review_required(
+            video,
+            rejection_message,
+            source="m2_guardrail",
+            error_code="incorrect_completion",
+        )
+        state.finish_ai_delivery_attempt(
+            delivery_attempt_id,
+            status="review_required",
+            stage="m2_strict_completion",
+            error_code="incorrect_completion",
+            detail=rejection_message,
+        )
+        pipeline_events.extend(
+            _record_pipeline_queue_result(
+                pipeline_store,
+                pipeline_job,
+                transition_cursor,
+                config=config,
+                delivery_attempt_id=delivery_attempt_id,
+                target_state="NEEDS_REVIEW",
+                stage="m2_strict_completion",
+                reason_code="incorrect_completion_intercepted",
+                error_code="incorrect_completion",
+                detail=rejection_message,
+            )
+        )
+
+    _commit_ai_queue_state_write(state, write_rejection)
+    try:
+        from m2_production_observation import trip_circuit_breaker
+
+        trip_circuit_breaker(
+            config,
+            "incorrect_completion",
+            evidence={
+                "stage": "m2_strict_completion",
+                "strict_failure_count": len(rejection.failed_evidence),
+                "strict_failure_code": (
+                    rejection.failed_evidence[0]
+                    if rejection.failed_evidence
+                    else "strict_evidence_unavailable"
+                ),
+            },
+            logger=logger,
+        )
+    except Exception:  # noqa: BLE001 - terminal review state is already durable.
+        pass
+    return pipeline_events
+
+
+def _validate_m2_completion_before_commit(
+    state,
+    video,
+    config,
+    delivery_attempt_id: str,
+) -> None:
+    """Reject a post-gate completion inside the same queue transaction."""
+
+    if not bool(getattr(config, "m2_server_canary_observer_enabled", False)):
+        return
+    from m2_guardrail_runtime import gate_claim_eligible, load_runtime_state
+    from m2_production_observation import (
+        _sanitize_outcome,
+        _strict_outcome_from_sanitized,
+        has_durable_gate_claim_binding,
+    )
+    from m2_strict_observation import qualify_strict_output
+    from m2_strict_runtime_evidence import build_m2_strict_runtime_evidence
+
+    attempt = state.get_ai_delivery_attempt(delivery_attempt_id)
+    try:
+        bound_to_gate = has_durable_gate_claim_binding(
+            config,
+            job_identity=delivery_attempt_id,
+        )
+    except Exception:  # noqa: BLE001 - a gate-bound success must fail closed.
+        bound_to_gate = False
+    try:
+        runtime_state = load_runtime_state(config)
+    except Exception:  # noqa: BLE001 - missing baseline becomes false evidence.
+        runtime_state = None
+    explicit_pre_gate = False
+    if isinstance(runtime_state, dict) and isinstance(attempt, dict):
+        eligible, reason = gate_claim_eligible(
+            runtime_state,
+            job_identity=delivery_attempt_id,
+            claimed_at=float(attempt.get("started_at") or 0),
+            gate_baseline_version=str(runtime_state.get("gate_baseline_version") or ""),
+        )
+        explicit_pre_gate = not eligible and reason in {
+            "claimed_before_gate_start",
+            "running_before_gate_start",
+        }
+    if not bound_to_gate and explicit_pre_gate:
+        return
+    try:
+        strict_result = build_m2_strict_runtime_evidence(
+            state,
+            video,
+            config,
+            delivery_attempt_id,
+            runtime_state,
+        )
+    except Exception as exc:  # noqa: BLE001 - never commit an unprovable completion.
+        raise _M2StrictCompletionRejected(
+            ["runtime_commit_matches_gate_baseline"]
+        ) from exc
+    evidence = strict_result.get("evidence")
+    try:
+        sanitized = _sanitize_outcome(
+            delivery_attempt_id,
+            strict_result.get("outcome") or {},
+        )
+        strict_outcome = _strict_outcome_from_sanitized(
+            sanitized,
+            claimed_after_gate_start=True,
+        )
+        qualification = qualify_strict_output(
+            strict_outcome,
+            evidence,
+        )
+    except Exception as exc:
+        raise _M2StrictCompletionRejected(
+            ["runtime_commit_matches_gate_baseline"]
+        ) from exc
+    if qualification.get("qualified") is not True:
+        raise _M2StrictCompletionRejected(
+            list(qualification.get("failed_evidence") or [])
+        )
 
 
 def _ai_failure_policy(stage: str, message: str) -> tuple[str, str]:

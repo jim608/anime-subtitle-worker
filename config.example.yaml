@@ -30,6 +30,7 @@ m2_server_canary_observer_enabled: true
 m2_server_canary_observation_gate_size: 20
 m2_server_canary_observation_state_path: "m2_server_canary_observation.json"
 m2_server_canary_observation_output_dir: "m2_server_canary_observations"
+m2_guardrail_runtime_state_path: "m2_guardrail_runtime.json"
 m2_server_canary_circuit_breaker_enabled: true
 m2_server_canary_circuit_breaker_state_path: "m2_server_canary_circuit_breaker.json"
 m2_server_canary_repeated_oom_threshold: 3

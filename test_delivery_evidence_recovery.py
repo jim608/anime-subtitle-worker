@@ -118,8 +118,12 @@ class DeliveryEvidenceRecoveryTest(unittest.TestCase):
                     return_value=manifest,
                 ) as republish,
                 patch("main._ai_queue_paused", return_value=True),
+                patch("main._m2_server_canary_admit_new_job", return_value=True),
                 patch("main._mark_queue_running", return_value="new-attempt") as claim,
-                patch("main._mark_queue_result", side_effect=mark_result) as settle,
+                patch(
+                    "main._mark_queue_result_and_observe",
+                    side_effect=mark_result,
+                ) as settle,
             ):
                 result = reconcile_delivery_evidence_visibility_race(
                     SimpleNamespace(
@@ -139,6 +143,27 @@ class DeliveryEvidenceRecoveryTest(unittest.TestCase):
         settle.assert_called_once()
         self.assertTrue(state.closed)
         lock.release.assert_called_once()
+
+    def test_guardrail_refuses_recovery_before_queue_or_checkpoint_mutation(self) -> None:
+        config = SimpleNamespace(completed_delivery_enabled=False)
+        state = _State()
+        with (
+            patch(
+                "delivery_evidence_recovery.ScanStateStore.from_config",
+                return_value=state,
+            ) as open_state,
+            patch("main._m2_server_canary_admit_new_job", return_value=False),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "guardrail stopped"):
+                reconcile_delivery_evidence_visibility_race(
+                    config,
+                    Path("synthetic.mkv"),
+                    expected_media_mtime_ns=123,
+                    expected_failure_revision="a" * 24,
+                    expected_attempt_id="old-attempt",
+                )
+
+        open_state.assert_not_called()
 
 
 if __name__ == "__main__":

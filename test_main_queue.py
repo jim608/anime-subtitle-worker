@@ -1086,6 +1086,138 @@ class MainQueueResultTest(unittest.TestCase):
             finally:
                 state.close()
 
+    def test_m2_strict_failure_rolls_back_false_completion_to_review(self) -> None:
+        from m2_strict_observation import strict_evidence_template
+        from output_manifest import write_output_manifest
+        from scan_state import ScanStateStore
+        import m2_production_observation as observation
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Episode 01.mkv"
+            outputs = [
+                root / "Episode 01.AI.ja.ass",
+                root / "Episode 01.AI.zh-CN.ass",
+                root / "Episode 01.AI.zh-TW.ass",
+            ]
+            video.write_bytes(b"media")
+            source_before = video.read_bytes()
+            for output in outputs:
+                output.write_text("verified subtitle", encoding="utf-8")
+            config = SimpleNamespace(
+                work_path=root,
+                log_path=root / "logs",
+                scanner_state_path=root / "scanner_state.sqlite3",
+                ai_output_manifest_path="manifests",
+                control_state_path="control.sqlite3",
+                auto_ai_failure_cooldown_seconds=0,
+                auto_ai_max_attempts=3,
+                ai_japanese_ass_suffix=".AI.ja.ass",
+                ai_simplified_chinese_ass_suffix=".AI.zh-CN.ass",
+                ai_traditional_chinese_ass_suffix=".AI.zh-TW.ass",
+                m2_server_canary_observer_enabled=True,
+                m2_server_canary_circuit_breaker_enabled=True,
+                m2_server_canary_circuit_breaker_state_path="breaker.json",
+            )
+            strict_evidence = strict_evidence_template(passed=True)
+            strict_evidence["hard_qc_pass"] = False
+            strict_result = {
+                "outcome": {
+                    "verified_completed": True,
+                    "failed": False,
+                    "terminal_status": "COMPLETED",
+                    "processing_strategy": "ASR_JA_AUDIO",
+                    "claimed_after_gate_start": True,
+                },
+                "evidence": strict_evidence,
+                "processing_strategy": "ASR_JA_AUDIO",
+            }
+            state = ScanStateStore.from_config(config)
+            try:
+                state.upsert_ai_queue_candidate(video, video.stat().st_mtime_ns)
+                state.commit()
+                with (
+                    patch.object(
+                        main_module,
+                        "_m2_server_canary_admit_new_job",
+                        return_value=True,
+                    ),
+                    patch.object(main_module, "_record_m2_job_claim"),
+                ):
+                    attempt_id = main_module._mark_queue_running(
+                        state,
+                        video,
+                        config,
+                    )
+                write_output_manifest(
+                    video,
+                    config,
+                    outputs,
+                    publication_kind="translated_trilingual",
+                    output_languages=("ja", "zh-CN", "zh-TW"),
+                )
+
+                with (
+                    patch(
+                        "m2_production_observation.has_durable_gate_claim_binding",
+                        return_value=True,
+                    ),
+                    patch(
+                        "m2_guardrail_runtime.load_runtime_state",
+                        return_value={"status": "ARMED"},
+                    ),
+                    patch(
+                        "m2_strict_runtime_evidence.build_m2_strict_runtime_evidence",
+                        return_value=strict_result,
+                    ),
+                ):
+                    main_module._mark_queue_result(
+                        state,
+                        video,
+                        True,
+                        config,
+                        delivery_attempt_id=attempt_id,
+                    )
+
+                attempt = state.get_ai_delivery_attempt(attempt_id)
+                obligation = state.get_ai_delivery_obligation(
+                    str(attempt["obligation_id"])
+                )
+                queue_status = state._conn.execute(
+                    "SELECT status FROM ai_candidate_queue WHERE path=?",
+                    (str(video.resolve()),),
+                ).fetchone()[0]
+                pipeline = state.pipeline_jobs()
+                job = pipeline.job_for_path(
+                    video,
+                    size=video.stat().st_size,
+                    mtime_ns=video.stat().st_mtime_ns,
+                    create=False,
+                )
+                self.assertEqual(attempt["status"], "review_required")
+                self.assertEqual(obligation["state"], "open")
+                self.assertEqual(queue_status, "paused")
+                self.assertEqual(job["state"], "NEEDS_REVIEW")
+                self.assertNotIn(
+                    "COMPLETED",
+                    [
+                        row["to_state"]
+                        for row in pipeline.list_transitions(str(job["job_id"]))
+                    ],
+                )
+                self.assertTrue(observation.circuit_breaker_active(config))
+                breaker = json.loads(
+                    (root / "breaker.json").read_text(encoding="utf-8")
+                )
+                self.assertIn(
+                    "incorrect_completion",
+                    [item["reason_code"] for item in breaker["reasons"]],
+                )
+                self.assertEqual(video.read_bytes(), source_before)
+                self.assertTrue(all(path.is_file() for path in outputs))
+            finally:
+                state.close()
+
     def test_worker_ok_without_delivery_evidence_is_retryable_not_success(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
