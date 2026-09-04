@@ -10,6 +10,10 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 
+from test_support import configure_isolated_test_tempdir
+
+configure_isolated_test_tempdir()
+
 from event_watcher import _FilesystemEventQueue
 from pipeline_event_log import append_pipeline_event
 from pipeline_state import (

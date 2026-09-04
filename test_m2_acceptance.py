@@ -11,6 +11,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from test_support import configure_isolated_test_tempdir
+
+configure_isolated_test_tempdir()
+
 from pipeline_state import PipelineJobStore
 from source_analysis_service import (
     CandidateInventory,

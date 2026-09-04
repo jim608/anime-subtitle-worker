@@ -11,6 +11,10 @@ import time
 import unittest
 from unittest.mock import ANY, Mock, call, patch
 
+from test_support import configure_isolated_test_tempdir
+
+configure_isolated_test_tempdir()
+
 import main as main_module
 from acceptance_runtime import (
     ACCEPTANCE_ATTEMPT_CONTEXT_ENV,

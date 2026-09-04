@@ -10,6 +10,10 @@ import time
 import unittest
 from unittest import mock
 
+from test_support import configure_isolated_test_tempdir
+
+configure_isolated_test_tempdir()
+
 from pipeline_state import (
     InvalidPipelineTransition,
     PIPELINE_STATES,
@@ -35,7 +39,7 @@ class PipelineJobStoreTest(unittest.TestCase):
         self.store.close()
         self.tempdir.cleanup()
 
-    def test_final_artifact_path_distinguishes_system_temp_sandbox(self) -> None:
+    def test_final_artifact_path_rejects_temp_descendants(self) -> None:
         system_temp_root = self.root / "tmp"
         isolated_root = system_temp_root / "tmp-isolated-case"
         isolated_root.mkdir(parents=True)
@@ -48,13 +52,9 @@ class PipelineJobStoreTest(unittest.TestCase):
         staged_artifact = nested_staging / "delivery.manifest.json"
         staged_artifact.write_text("not-final", encoding="utf-8")
 
-        with mock.patch(
-            "pipeline_state.tempfile.gettempdir",
-            return_value=str(system_temp_root),
-        ):
-            self.assertTrue(PipelineJobStore._is_final_artifact_path(nested_artifact))
-            self.assertFalse(PipelineJobStore._is_final_artifact_path(direct_artifact))
-            self.assertFalse(PipelineJobStore._is_final_artifact_path(staged_artifact))
+        self.assertFalse(PipelineJobStore._is_final_artifact_path(nested_artifact))
+        self.assertFalse(PipelineJobStore._is_final_artifact_path(direct_artifact))
+        self.assertFalse(PipelineJobStore._is_final_artifact_path(staged_artifact))
 
     def _observe(self, state: str = "STABILIZING", event_type: str = "created") -> tuple[dict, dict]:
         stat = self.media.stat()

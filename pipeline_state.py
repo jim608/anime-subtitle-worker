@@ -9,7 +9,6 @@ import math
 import os
 import re
 import sqlite3
-import tempfile
 import time
 from typing import Any, Iterator, Mapping, Sequence
 import uuid
@@ -2807,25 +2806,14 @@ class PipelineJobStore:
     def _is_final_artifact_path(path: Path) -> bool:
         forbidden_markers = {"tmp", "part", "partial", "publishing", "staging"}
         filename_markers = set(path.name.casefold().split(".")[1:])
-        try:
-            resolved = path.resolve(strict=False)
-            system_temp_root = Path(tempfile.gettempdir()).resolve(strict=False)
-        except OSError:
-            return False
-        if not resolved.is_file() or forbidden_markers.intersection(filename_markers):
-            return False
-        for parent in resolved.parents:
-            marker = parent.name.casefold().strip(".")
-            if parent == system_temp_root:
-                # A file published directly into the shared system temp root is
-                # never final.  A unique child sandbox is allowed so POSIX
-                # validation can exercise the real completion gate under /tmp.
-                if resolved.parent == system_temp_root:
-                    return False
-                continue
-            if marker in forbidden_markers:
-                return False
-        return True
+        directory_markers = {
+            part.casefold().strip(".") for part in path.parts[:-1] if part
+        }
+        return (
+            path.is_file()
+            and not bool(forbidden_markers.intersection(filename_markers))
+            and not bool(forbidden_markers.intersection(directory_markers))
+        )
 
     @staticmethod
     def _valid_sha256(value: object) -> bool:

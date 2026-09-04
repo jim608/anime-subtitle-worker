@@ -10,6 +10,10 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
+from test_support import configure_isolated_test_tempdir
+
+configure_isolated_test_tempdir()
+
 from ass_utils import format_ass
 from audio import AudioStreamInfo
 from srt_utils import SrtBlock, read_srt, validate_translation, write_srt

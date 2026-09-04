@@ -9,6 +9,10 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
+from test_support import configure_isolated_test_tempdir
+
+configure_isolated_test_tempdir()
+
 from m2_guardrail_runtime import configuration_fingerprint
 from m2_strict_observation import STRICT_EVIDENCE_KEYS
 from m2_strict_runtime_evidence import build_m2_strict_runtime_evidence
