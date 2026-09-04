@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 import os
 from pathlib import Path
 import re
 from typing import Any
+
+from source_analyzer import (
+    ANALYZER_VERSION as DEFAULT_SOURCE_ANALYZER_VERSION,
+    DECISION_SCHEMA_VERSION as DEFAULT_SOURCE_DECISION_SCHEMA_VERSION,
+    DECISION_VERSION as DEFAULT_SOURCE_DECISION_VERSION,
+    AnalyzerThresholds,
+)
 
 
 REQUIRED_FIELDS = {
@@ -123,6 +131,15 @@ class AppConfig:
     scanner_recent_first: bool = True
     scanner_queue_enabled: bool = True
     pipeline_job_store_required: bool = True
+    source_analyzer_enabled: bool = False
+    source_analyzer_high_confidence: float = 0.90
+    source_analyzer_low_confidence: float = 0.60
+    source_analyzer_min_dialogue_completeness_score: float = 0.68
+    source_analyzer_min_subtitle_coverage_ratio: float = 0.60
+    source_analyzer_tie_margin: float = 0.025
+    source_analyzer_version: str = DEFAULT_SOURCE_ANALYZER_VERSION
+    source_decision_schema_version: int = DEFAULT_SOURCE_DECISION_SCHEMA_VERSION
+    source_decision_version: str = DEFAULT_SOURCE_DECISION_VERSION
     source_integrity_sha256_enabled: bool = False
     ai_canary_once_enabled: bool = False
     acceptance_queue_lane_enabled: bool = False
@@ -504,6 +521,24 @@ class AppConfig:
     transformers_whisper_task: str | None = None
     transformers_whisper_stable_ts: bool = False
 
+    def source_analyzer_thresholds(self) -> AnalyzerThresholds:
+        """Build the analyzer policy from the validated application config."""
+
+        defaults = AnalyzerThresholds()
+        return AnalyzerThresholds(
+            auto_accept_confidence=self.source_analyzer_high_confidence,
+            review_confidence=self.source_analyzer_low_confidence,
+            min_subtitle_coverage_ratio=self.source_analyzer_min_subtitle_coverage_ratio,
+            min_dialogue_completeness_score=(
+                self.source_analyzer_min_dialogue_completeness_score
+            ),
+            close_candidate_score_margin=self.source_analyzer_tie_margin,
+            exact_tie_score_epsilon=min(
+                defaults.exact_tie_score_epsilon,
+                self.source_analyzer_tie_margin,
+            ),
+        )
+
 
 class ConfigError(ValueError):
     pass
@@ -784,6 +819,47 @@ def load_config(config_path: str | Path) -> AppConfig:
             raw,
             "pipeline_job_store_required",
             True,
+        ),
+        source_analyzer_enabled=_optional_bool(raw, "source_analyzer_enabled", False),
+        source_analyzer_high_confidence=_optional_probability(
+            raw,
+            "source_analyzer_high_confidence",
+            0.90,
+        ),
+        source_analyzer_low_confidence=_optional_probability(
+            raw,
+            "source_analyzer_low_confidence",
+            0.60,
+        ),
+        source_analyzer_min_dialogue_completeness_score=_optional_probability(
+            raw,
+            "source_analyzer_min_dialogue_completeness_score",
+            0.68,
+        ),
+        source_analyzer_min_subtitle_coverage_ratio=_optional_probability(
+            raw,
+            "source_analyzer_min_subtitle_coverage_ratio",
+            0.60,
+        ),
+        source_analyzer_tie_margin=_optional_probability(
+            raw,
+            "source_analyzer_tie_margin",
+            0.025,
+        ),
+        source_analyzer_version=_as_optional_str(
+            raw,
+            "source_analyzer_version",
+            DEFAULT_SOURCE_ANALYZER_VERSION,
+        ),
+        source_decision_schema_version=_optional_positive_int(
+            raw,
+            "source_decision_schema_version",
+            DEFAULT_SOURCE_DECISION_SCHEMA_VERSION,
+        ),
+        source_decision_version=_as_optional_str(
+            raw,
+            "source_decision_version",
+            DEFAULT_SOURCE_DECISION_VERSION,
         ),
         source_integrity_sha256_enabled=_optional_bool(
             raw,
@@ -1674,6 +1750,19 @@ def _optional_allow_empty_str(raw: dict[str, Any], key: str, default: str = "") 
     return value.strip()
 
 
+def _optional_probability(raw: dict[str, Any], key: str, default: float) -> float:
+    value = raw.get(key, default)
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int | float)
+        or not math.isfinite(float(value))
+        or float(value) < 0.0
+        or float(value) > 1.0
+    ):
+        raise ConfigError(f"{key} must be a finite number between 0 and 1.")
+    return float(value)
+
+
 def _optional_float(raw: dict[str, Any], key: str, default: float | None) -> float | None:
     value = raw.get(key, default)
     if value is None:
@@ -1917,6 +2006,41 @@ def _validate_config(config: AppConfig) -> None:
 
     if config.batch_size < 1 or config.batch_size > 30:
         raise ConfigError("batch_size must be between 1 and 30 for stable subtitle translation.")
+
+    if not (
+        0.0
+        <= config.source_analyzer_low_confidence
+        < config.source_analyzer_high_confidence
+        <= 1.0
+    ):
+        raise ConfigError(
+            "source analyzer confidence must satisfy "
+            "0 <= source_analyzer_low_confidence < "
+            "source_analyzer_high_confidence <= 1."
+        )
+    if not 0.0 <= config.source_analyzer_min_dialogue_completeness_score <= 1.0:
+        raise ConfigError(
+            "source_analyzer_min_dialogue_completeness_score must be between 0 and 1."
+        )
+    if not 0.0 <= config.source_analyzer_min_subtitle_coverage_ratio <= 1.0:
+        raise ConfigError(
+            "source_analyzer_min_subtitle_coverage_ratio must be between 0 and 1."
+        )
+    if not 0.0 <= config.source_analyzer_tie_margin <= 1.0:
+        raise ConfigError("source_analyzer_tie_margin must be between 0 and 1.")
+    if not str(config.source_analyzer_version).strip():
+        raise ConfigError("source_analyzer_version must not be empty.")
+    if (
+        isinstance(config.source_decision_schema_version, bool)
+        or config.source_decision_schema_version <= 0
+    ):
+        raise ConfigError("source_decision_schema_version must be a positive integer.")
+    if not str(config.source_decision_version).strip():
+        raise ConfigError("source_decision_version must not be empty.")
+    if config.source_analyzer_enabled and not config.pipeline_job_store_required:
+        raise ConfigError(
+            "source_analyzer_enabled requires pipeline_job_store_required so decisions are durable."
+        )
 
     if config.resource_admission_enabled:
         if config.max_concurrent_videos != 1:

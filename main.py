@@ -7909,6 +7909,13 @@ def _ai_failure_policy(stage: str, message: str) -> tuple[str, str]:
         return "translation_safe_omission", "bounded_retry"
     normalized_stage = str(stage or "").strip().casefold()
     normalized_message = str(message or "").strip().casefold()
+    if (
+        normalized_stage == "source_selection_unsupported"
+        or "[source_unsupported]" in normalized_message
+    ):
+        return "source_unsupported", "permanent"
+    if normalized_stage == "source_selection_review":
+        return "source_selection_needs_review", "manual_review"
     if normalized_stage == "resource_runtime" and any(
         marker in normalized_message for marker in ("sigkill", "returncode=-9", "returncode=137", "oom")
     ):

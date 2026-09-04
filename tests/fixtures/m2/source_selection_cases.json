@@ -1,0 +1,153 @@
+{
+  "schema_version": "m2-representative-fixtures-v1",
+  "media_duration_seconds": 1440.0,
+  "subtitle_templates": {
+    "zh_tw": {
+      "codec": "ass",
+      "source_kind": "embedded",
+      "container_language_tag": "zh-TW",
+      "event_count": 240,
+      "first_timestamp_seconds": 12.0,
+      "last_timestamp_seconds": 1425.0,
+      "valid_timing_count": 240,
+      "empty_event_count": 0,
+      "sample_text": "這裡是臺灣繁體中文字幕，歡迎大家一起觀看動畫。我們會繼續努力，讓每個人都能學習並選擇優質內容。"
+    },
+    "zh_cn": {
+      "codec": "ass",
+      "source_kind": "embedded",
+      "container_language_tag": "zh-CN",
+      "event_count": 240,
+      "first_timestamp_seconds": 12.0,
+      "last_timestamp_seconds": 1425.0,
+      "valid_timing_count": 240,
+      "empty_event_count": 0,
+      "sample_text": "这里是台湾简体中文字幕，欢迎大家一起观看动画。我们会继续努力，让每个人都能学习并选择优质内容。"
+    },
+    "ja": {
+      "codec": "ass",
+      "source_kind": "embedded",
+      "container_language_tag": "ja",
+      "event_count": 240,
+      "first_timestamp_seconds": 12.0,
+      "last_timestamp_seconds": 1425.0,
+      "valid_timing_count": 240,
+      "empty_event_count": 0,
+      "sample_text": "これは日本語の会話字幕です。みんなで一緒にアニメを見ましょう。今日は楽しいですね。続きのお話も楽しみにしています。"
+    }
+  },
+  "audio_templates": {
+    "ja_main": {
+      "codec": "aac",
+      "source_kind": "embedded",
+      "container_language_tag": "ja",
+      "title": "Japanese Main",
+      "default": true,
+      "commentary": false,
+      "channels": 2,
+      "sample_rate": 48000,
+      "duration_seconds": 1440.0,
+      "detection_source": "container_metadata_only"
+    }
+  },
+  "cases": [
+    {
+      "name": "complete_traditional_chinese",
+      "subtitles": [{"template": "zh_tw", "track_index": 0}],
+      "expected_strategy": "USE_EXISTING_ZH_TW",
+      "expected_subtitle_track": 0
+    },
+    {
+      "name": "complete_simplified_chinese",
+      "subtitles": [{"template": "zh_cn", "track_index": 1}],
+      "expected_strategy": "CONVERT_ZH_CN",
+      "expected_subtitle_track": 1
+    },
+    {
+      "name": "complete_japanese",
+      "subtitles": [{"template": "ja", "track_index": 2}],
+      "expected_strategy": "TRANSLATE_JA_SUBTITLE",
+      "expected_subtitle_track": 2
+    },
+    {
+      "name": "chinese_and_japanese_subtitles",
+      "subtitles": [
+        {"template": "ja", "track_index": 3},
+        {"template": "zh_tw", "track_index": 4}
+      ],
+      "expected_strategy": "USE_EXISTING_ZH_TW",
+      "expected_subtitle_track": 4
+    },
+    {
+      "name": "forced_signs_only_with_complete_japanese",
+      "subtitles": [
+        {
+          "template": "zh_tw",
+          "track_index": 5,
+          "forced": true,
+          "title": "Signs and Songs",
+          "event_count": 24,
+          "valid_timing_count": 24,
+          "last_timestamp_seconds": 180.0,
+          "sample_text": "招牌 店名 下一集 敬請期待"
+        },
+        {"template": "ja", "track_index": 6}
+      ],
+      "expected_strategy": "TRANSLATE_JA_SUBTITLE",
+      "expected_subtitle_track": 6
+    },
+    {
+      "name": "metadata_wrong_content_japanese",
+      "subtitles": [
+        {"template": "ja", "track_index": 7, "container_language_tag": "zh-CN"}
+      ],
+      "expected_strategy": "TRANSLATE_JA_SUBTITLE",
+      "expected_subtitle_track": 7
+    },
+    {
+      "name": "metadata_missing_traditional_content",
+      "subtitles": [
+        {"template": "zh_tw", "track_index": 8, "container_language_tag": "und"}
+      ],
+      "expected_strategy": "NORMALIZE_ZH_HANT",
+      "expected_subtitle_track": 8
+    },
+    {
+      "name": "multiple_japanese_audio_tracks",
+      "audios": [
+        {
+          "template": "ja_main",
+          "track_index": 9,
+          "title": "Japanese Commentary",
+          "commentary": true
+        },
+        {
+          "template": "ja_main",
+          "track_index": 10,
+          "title": "Japanese Main",
+          "default": false
+        }
+      ],
+      "expected_strategy": "ASR_JA_AUDIO",
+      "expected_audio_track": 10
+    },
+    {
+      "name": "no_usable_source",
+      "expected_strategy": "UNSUPPORTED"
+    },
+    {
+      "name": "anomalous_timeline",
+      "subtitles": [
+        {
+          "template": "zh_tw",
+          "track_index": 11,
+          "first_timestamp_seconds": 900.0,
+          "last_timestamp_seconds": 100.0,
+          "valid_timing_count": 50,
+          "empty_event_count": 180
+        }
+      ],
+      "expected_strategy": "NEEDS_REVIEW"
+    }
+  ]
+}

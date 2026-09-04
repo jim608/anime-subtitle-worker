@@ -5,14 +5,16 @@ from contextlib import contextmanager
 from pathlib import Path
 import hashlib
 import json
+import math
 import os
+import re
 import sqlite3
 import time
 from typing import Any, Iterator, Mapping, Sequence
 import uuid
 
 
-PIPELINE_SCHEMA_VERSION = 1
+PIPELINE_SCHEMA_VERSION = 2
 PIPELINE_STATES = (
     "DISCOVERED",
     "STABILIZING",
@@ -56,6 +58,17 @@ STAGE_ATTEMPT_STATUSES = frozenset(
 )
 STAGE_ERROR_CLASSES = frozenset(
     {"", "transient", "resource", "quality", "permanent", "interrupted"}
+)
+SOURCE_DECISION_STRATEGIES = frozenset(
+    {
+        "USE_EXISTING_ZH_TW",
+        "NORMALIZE_ZH_HANT",
+        "CONVERT_ZH_CN",
+        "TRANSLATE_JA_SUBTITLE",
+        "ASR_JA_AUDIO",
+        "NEEDS_REVIEW",
+        "UNSUPPORTED",
+    }
 )
 
 ALLOWED_PIPELINE_TRANSITIONS: dict[str, frozenset[str]] = {
@@ -112,13 +125,453 @@ class StageAttemptError(PipelineStateError):
     pass
 
 
-def ensure_pipeline_state_schema(connection: sqlite3.Connection) -> None:
-    """Install the M1 job/state schema in the existing scanner SQLite DB."""
+_M1_REQUIRED_TABLE_COLUMNS: dict[str, frozenset[str]] = {
+    "pipeline_schema_meta": frozenset({"key", "value", "updated_at"}),
+    "pipeline_jobs": frozenset(
+        {
+            "job_id",
+            "canonical_path",
+            "media_revision",
+            "media_fingerprint",
+            "identity_kind",
+            "media_size",
+            "media_mtime_ns",
+            "state",
+            "state_version",
+            "active_stage_attempt_id",
+            "retry_count",
+            "next_retry_at",
+            "resume_state",
+            "terminal_reason_code",
+            "terminal_error_json",
+            "created_at",
+            "updated_at",
+            "completed_at",
+        }
+    ),
+    "pipeline_job_paths": frozenset(
+        {"job_id", "canonical_path", "first_seen_at", "last_seen_at"}
+    ),
+    "pipeline_ingest_observations": frozenset(
+        {
+            "canonical_path",
+            "job_id",
+            "media_revision",
+            "media_fingerprint",
+            "size",
+            "mtime_ns",
+            "state",
+            "first_seen_at",
+            "last_seen_at",
+            "stable_since_at",
+            "observation_count",
+            "last_event_type",
+            "close_observed",
+            "evidence_json",
+        }
+    ),
+    "pipeline_job_transitions": frozenset(
+        {
+            "transition_id",
+            "job_id",
+            "sequence",
+            "from_state",
+            "to_state",
+            "reason_code",
+            "evidence_json",
+            "confidence",
+            "actor",
+            "stage_attempt_id",
+            "idempotency_key",
+            "created_at",
+        }
+    ),
+    "pipeline_stage_attempts": frozenset(
+        {
+            "stage_attempt_id",
+            "job_id",
+            "stage",
+            "attempt_number",
+            "status",
+            "input_json",
+            "input_sha256",
+            "output_json",
+            "outputs_verified",
+            "model_json",
+            "retry_count",
+            "retry_limit",
+            "timeout_seconds",
+            "checkpoint_json",
+            "checkpoint_sha256",
+            "error_class",
+            "error_code",
+            "error_json",
+            "idempotency_key",
+            "started_at",
+            "heartbeat_at",
+            "finished_at",
+            "updated_at",
+        }
+    ),
+    "pipeline_stage_events": frozenset(
+        {
+            "id",
+            "job_id",
+            "stage_attempt_id",
+            "event_type",
+            "stage",
+            "status",
+            "reason_code",
+            "evidence_json",
+            "confidence",
+            "payload_json",
+            "created_at",
+        }
+    ),
+    "pipeline_operation_idempotency": frozenset(
+        {
+            "job_id",
+            "idempotency_key",
+            "operation_kind",
+            "request_sha256",
+            "stage_attempt_id",
+            "created_at",
+        }
+    ),
+}
+
+_M1_REQUIRED_INDEXES: dict[str, tuple[str, tuple[str, ...], bool]] = {
+    "idx_pipeline_jobs_path_updated": (
+        "pipeline_jobs",
+        ("canonical_path", "updated_at"),
+        False,
+    ),
+    "idx_pipeline_jobs_state_updated": ("pipeline_jobs", ("state", "updated_at"), False),
+    "idx_pipeline_job_paths_path": (
+        "pipeline_job_paths",
+        ("canonical_path", "last_seen_at"),
+        False,
+    ),
+    "idx_pipeline_ingest_state_seen": (
+        "pipeline_ingest_observations",
+        ("state", "last_seen_at"),
+        False,
+    ),
+    "idx_pipeline_transitions_job_created": (
+        "pipeline_job_transitions",
+        ("job_id", "created_at"),
+        False,
+    ),
+    "idx_pipeline_attempts_job_stage": (
+        "pipeline_stage_attempts",
+        ("job_id", "stage", "attempt_number"),
+        False,
+    ),
+    "idx_pipeline_attempts_running": (
+        "pipeline_stage_attempts",
+        ("status", "heartbeat_at"),
+        False,
+    ),
+    "idx_pipeline_stage_events_attempt": (
+        "pipeline_stage_events",
+        ("stage_attempt_id", "id"),
+        False,
+    ),
+}
+
+_M2_REQUIRED_TABLE_COLUMNS: dict[str, frozenset[str]] = {
+    "pipeline_source_decisions": frozenset(
+        {
+            "decision_id",
+            "job_id",
+            "stage_attempt_id",
+            "input_identity_json",
+            "input_identity_sha256",
+            "media_revision",
+            "source_fingerprint",
+            "analyzer_version",
+            "decision_schema_version",
+            "decision_version",
+            "config_fingerprint",
+            "candidate_fingerprint",
+            "strategy",
+            "confidence",
+            "reason_code",
+            "decision_json",
+            "decision_sha256",
+            "idempotency_key",
+            "created_at",
+        }
+    )
+}
+
+_M2_REQUIRED_INDEXES: dict[str, tuple[str, tuple[str, ...], bool]] = {
+    "idx_pipeline_source_decisions_job_created": (
+        "pipeline_source_decisions",
+        ("job_id", "created_at", "decision_id"),
+        False,
+    ),
+    "uq_pipeline_source_decisions_stage_attempt": (
+        "pipeline_source_decisions",
+        ("stage_attempt_id",),
+        True,
+    ),
+}
+
+
+def _m2_source_decision_constraint_issues(
+    connection: sqlite3.Connection,
+) -> list[str]:
+    table_name = "pipeline_source_decisions"
+    table_row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+        (table_name,),
+    ).fetchone()
+    if table_row is None:
+        return []
+
+    rows = connection.execute(f'PRAGMA table_info("{table_name}")').fetchall()
+    by_name = {str(row[1]): row for row in rows}
+    expected_types = {
+        "decision_id": "TEXT",
+        "job_id": "TEXT",
+        "stage_attempt_id": "TEXT",
+        "input_identity_json": "TEXT",
+        "input_identity_sha256": "TEXT",
+        "media_revision": "TEXT",
+        "source_fingerprint": "TEXT",
+        "analyzer_version": "TEXT",
+        "decision_schema_version": "TEXT",
+        "decision_version": "TEXT",
+        "config_fingerprint": "TEXT",
+        "candidate_fingerprint": "TEXT",
+        "strategy": "TEXT",
+        "confidence": "REAL",
+        "reason_code": "TEXT",
+        "decision_json": "TEXT",
+        "decision_sha256": "TEXT",
+        "idempotency_key": "TEXT",
+        "created_at": "REAL",
+    }
+    issues: list[str] = []
+    for column_name, expected_type in expected_types.items():
+        row = by_name.get(column_name)
+        if row is not None and str(row[2]).upper() != expected_type:
+            issues.append(f"column {table_name}.{column_name} type is invalid")
+
+    primary_key = tuple(
+        str(row[1])
+        for row in sorted((row for row in rows if int(row[5]) > 0), key=lambda row: int(row[5]))
+    )
+    if primary_key != ("decision_id",):
+        issues.append(f"table {table_name} primary key is invalid")
+    for column_name in sorted(set(expected_types) - {"decision_id", "idempotency_key"}):
+        row = by_name.get(column_name)
+        if row is not None and not bool(row[3]):
+            issues.append(f"column {table_name}.{column_name} must be NOT NULL")
+
+    unique_column_sets: set[tuple[str, ...]] = set()
+    for index_row in connection.execute(f'PRAGMA index_list("{table_name}")').fetchall():
+        if not bool(index_row[2]):
+            continue
+        index_name = str(index_row[1])
+        columns = tuple(
+            str(row[2])
+            for row in sorted(
+                connection.execute(f'PRAGMA index_info("{index_name}")').fetchall(),
+                key=lambda row: int(row[0]),
+            )
+        )
+        unique_column_sets.add(columns)
+    required_unique_sets = (
+        (
+            "job_id",
+            "input_identity_sha256",
+            "media_revision",
+            "source_fingerprint",
+            "analyzer_version",
+            "decision_schema_version",
+            "decision_version",
+            "config_fingerprint",
+            "candidate_fingerprint",
+        ),
+        ("job_id", "idempotency_key"),
+        ("stage_attempt_id",),
+    )
+    for columns in required_unique_sets:
+        if columns not in unique_column_sets:
+            issues.append(f"table {table_name} is missing UNIQUE{columns}")
+
+    foreign_keys = {
+        (str(row[2]), str(row[3]), str(row[4]), str(row[6]).upper())
+        for row in connection.execute(f'PRAGMA foreign_key_list("{table_name}")').fetchall()
+    }
+    for required in (
+        ("pipeline_jobs", "job_id", "job_id", "CASCADE"),
+        ("pipeline_stage_attempts", "stage_attempt_id", "stage_attempt_id", "RESTRICT"),
+    ):
+        if required not in foreign_keys:
+            issues.append(f"table {table_name} is missing foreign key {required}")
+
+    create_sql = str(table_row[0] or "")
+    strategy_check = re.search(
+        r"CHECK\s*\(\s*strategy\s+IN\s*\((?P<values>[^)]*)\)\s*\)",
+        create_sql,
+        re.IGNORECASE | re.DOTALL,
+    )
+    strategy_values: list[str] = []
+    if strategy_check is not None:
+        for raw_value in strategy_check.group("values").split(","):
+            token = raw_value.strip()
+            literal = re.fullmatch(r"'((?:''|[^'])*)'", token)
+            if literal is None:
+                strategy_values = []
+                break
+            strategy_values.append(literal.group(1).replace("''", "'"))
+    if (
+        strategy_check is None
+        or len(strategy_values) != len(SOURCE_DECISION_STRATEGIES)
+        or set(strategy_values) != set(SOURCE_DECISION_STRATEGIES)
+    ):
+        issues.append(f"table {table_name} strategy CHECK is missing")
+    if not re.search(
+        r"CHECK\s*\(\s*confidence\s*>=\s*0\s+AND\s+confidence\s*<=\s*1\s*\)",
+        create_sql,
+        re.IGNORECASE,
+    ):
+        issues.append(f"table {table_name} confidence CHECK is missing")
+    return issues
+
+
+def _schema_issues(
+    connection: sqlite3.Connection,
+    *,
+    include_m2: bool,
+) -> list[str]:
+    required_tables = dict(_M1_REQUIRED_TABLE_COLUMNS)
+    required_indexes = dict(_M1_REQUIRED_INDEXES)
+    if include_m2:
+        required_tables.update(_M2_REQUIRED_TABLE_COLUMNS)
+        required_indexes.update(_M2_REQUIRED_INDEXES)
+
+    issues: list[str] = []
+    for table_name, required_columns in required_tables.items():
+        exists = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (table_name,),
+        ).fetchone()
+        if exists is None:
+            issues.append(f"missing table {table_name}")
+            continue
+        actual_columns = {
+            str(row[1])
+            for row in connection.execute(f'PRAGMA table_info("{table_name}")').fetchall()
+        }
+        for column_name in sorted(required_columns - actual_columns):
+            issues.append(f"missing column {table_name}.{column_name}")
+
+    if include_m2:
+        issues.extend(_m2_source_decision_constraint_issues(connection))
+
+    for index_name, (table_name, expected_columns, expected_unique) in sorted(
+        required_indexes.items()
+    ):
+        index_row = connection.execute(
+            "SELECT tbl_name FROM sqlite_master WHERE type='index' AND name=?",
+            (index_name,),
+        ).fetchone()
+        if index_row is None:
+            issues.append(f"missing index {index_name}")
+            continue
+        if str(index_row[0]) != table_name:
+            issues.append(f"index {index_name} belongs to the wrong table")
+            continue
+        index_list_row = next(
+            (
+                row
+                for row in connection.execute(
+                    f'PRAGMA index_list("{table_name}")'
+                ).fetchall()
+                if str(row[1]) == index_name
+            ),
+            None,
+        )
+        if index_list_row is None:
+            issues.append(f"index {index_name} is not attached to {table_name}")
+            continue
+        if bool(index_list_row[2]) != expected_unique:
+            issues.append(f"index {index_name} uniqueness is invalid")
+        if len(index_list_row) > 4 and bool(index_list_row[4]):
+            issues.append(f"index {index_name} must not be partial")
+        actual_columns = tuple(
+            str(row[2])
+            for row in sorted(
+                connection.execute(f'PRAGMA index_info("{index_name}")').fetchall(),
+                key=lambda row: int(row[0]),
+            )
+        )
+        if actual_columns != expected_columns:
+            issues.append(f"index {index_name} columns are invalid")
+    return issues
+
+
+def _execute_schema_script(
+    connection: sqlite3.Connection,
+    script: str,
+) -> None:
+    """Execute static schema statements without sqlite3.executescript auto-commit."""
+
+    pending: list[str] = []
+    for line in script.splitlines():
+        pending.append(line)
+        candidate = "\n".join(pending).strip()
+        if candidate and sqlite3.complete_statement(candidate):
+            connection.execute(candidate)
+            pending.clear()
+    if "\n".join(pending).strip():
+        raise PipelineStateError("pipeline schema script contains an incomplete statement")
+
+
+def _ensure_pipeline_state_schema_unprotected(connection: sqlite3.Connection) -> None:
+    """Install or additively migrate the durable pipeline schema."""
 
     connection.execute("PRAGMA foreign_keys=ON")
+    stored_version = 0
+    meta_exists = connection.execute(
+        """
+        SELECT 1 FROM sqlite_master
+        WHERE type='table' AND name='pipeline_schema_meta'
+        """
+    ).fetchone()
+    if meta_exists is not None:
+        current_row = connection.execute(
+            "SELECT value FROM pipeline_schema_meta WHERE key='schema_version'"
+        ).fetchone()
+        if current_row is not None:
+            try:
+                current_version = int(current_row[0])
+            except (TypeError, ValueError) as exc:
+                raise PipelineStateError("pipeline schema version is malformed") from exc
+            stored_version = current_version
+            if current_version > PIPELINE_SCHEMA_VERSION:
+                raise PipelineStateError(
+                    "pipeline database schema is newer than this worker: "
+                    f"database={current_version} worker={PIPELINE_SCHEMA_VERSION}"
+                )
+            if current_version == PIPELINE_SCHEMA_VERSION:
+                issues = _schema_issues(connection, include_m2=True)
+                if issues:
+                    raise PipelineStateError(
+                        "pipeline schema metadata is current but its shape is invalid: "
+                        + ", ".join(issues)
+                    )
+                # Do not run executescript on every facade open: sqlite3 would
+                # implicitly commit a caller-owned transaction. Version plus
+                # required-object verification is the cheap migration sentinel.
+                return
     states_sql = ", ".join(f"'{state}'" for state in PIPELINE_STATES)
     attempts_sql = ", ".join(f"'{status}'" for status in sorted(STAGE_ATTEMPT_STATUSES))
-    connection.executescript(
+    v1_schema_sql = (
         f"""
         CREATE TABLE IF NOT EXISTS pipeline_schema_meta (
             key TEXT PRIMARY KEY,
@@ -266,15 +719,124 @@ def ensure_pipeline_state_schema(connection: sqlite3.Connection) -> None:
         );
         """
     )
+    if stored_version < 1:
+        _execute_schema_script(connection, v1_schema_sql)
+    version_row = connection.execute(
+        "SELECT value FROM pipeline_schema_meta WHERE key='schema_version'"
+    ).fetchone()
+    try:
+        stored_version = int(version_row[0]) if version_row is not None else 0
+    except (TypeError, ValueError) as exc:
+        raise PipelineStateError("pipeline schema version is malformed") from exc
+    if stored_version > PIPELINE_SCHEMA_VERSION:
+        raise PipelineStateError(
+            "pipeline database schema is newer than this worker: "
+            f"database={stored_version} worker={PIPELINE_SCHEMA_VERSION}"
+        )
+
+    if stored_version >= 1:
+        issues = _schema_issues(connection, include_m2=False)
+        if issues:
+            raise PipelineStateError(
+                "pipeline schema version 1 prerequisites are invalid: " + ", ".join(issues)
+            )
+
     now = time.time()
-    connection.execute(
-        """
-        INSERT INTO pipeline_schema_meta(key, value, updated_at)
-        VALUES('schema_version', ?, ?)
-        ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
-        """,
-        (str(PIPELINE_SCHEMA_VERSION), now),
-    )
+    if stored_version < 1:
+        connection.execute(
+            """
+            INSERT INTO pipeline_schema_meta(key, value, updated_at)
+            VALUES('schema_version', '1', ?)
+            ON CONFLICT(key) DO UPDATE SET value='1', updated_at=excluded.updated_at
+            """,
+            (now,),
+        )
+        stored_version = 1
+
+    if stored_version < 2:
+        strategies_sql = ", ".join(
+            f"'{strategy}'" for strategy in sorted(SOURCE_DECISION_STRATEGIES)
+        )
+        connection.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS pipeline_source_decisions (
+                decision_id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                stage_attempt_id TEXT NOT NULL,
+                input_identity_json TEXT NOT NULL,
+                input_identity_sha256 TEXT NOT NULL,
+                media_revision TEXT NOT NULL,
+                source_fingerprint TEXT NOT NULL,
+                analyzer_version TEXT NOT NULL,
+                decision_schema_version TEXT NOT NULL,
+                decision_version TEXT NOT NULL,
+                config_fingerprint TEXT NOT NULL,
+                candidate_fingerprint TEXT NOT NULL,
+                strategy TEXT NOT NULL CHECK(strategy IN ({strategies_sql})),
+                confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+                reason_code TEXT NOT NULL,
+                decision_json TEXT NOT NULL,
+                decision_sha256 TEXT NOT NULL,
+                idempotency_key TEXT,
+                created_at REAL NOT NULL,
+                UNIQUE(
+                    job_id, input_identity_sha256, media_revision,
+                    source_fingerprint, analyzer_version,
+                    decision_schema_version, decision_version,
+                    config_fingerprint, candidate_fingerprint
+                ),
+                UNIQUE(job_id, idempotency_key),
+                FOREIGN KEY(job_id) REFERENCES pipeline_jobs(job_id) ON DELETE CASCADE,
+                FOREIGN KEY(stage_attempt_id)
+                    REFERENCES pipeline_stage_attempts(stage_attempt_id) ON DELETE RESTRICT
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_pipeline_source_decisions_job_created
+            ON pipeline_source_decisions(job_id, created_at DESC, decision_id DESC)
+            """
+        )
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_pipeline_source_decisions_stage_attempt
+            ON pipeline_source_decisions(stage_attempt_id)
+            """
+        )
+        connection.execute(
+            """
+            UPDATE pipeline_schema_meta
+            SET value='2', updated_at=?
+            WHERE key='schema_version'
+            """,
+            (time.time(),),
+        )
+
+
+def ensure_pipeline_state_schema(connection: sqlite3.Connection) -> None:
+    """Install or migrate the schema atomically without committing caller work."""
+
+    connection.execute("PRAGMA foreign_keys=ON")
+    foreign_keys_row = connection.execute("PRAGMA foreign_keys").fetchone()
+    if foreign_keys_row is None or int(foreign_keys_row[0]) != 1:
+        raise PipelineStateError(
+            "SQLite foreign_keys must be enabled before opening a pipeline store transaction"
+        )
+    savepoint = "pipeline_schema_migration_v2"
+    connection.execute(f"SAVEPOINT {savepoint}")
+    try:
+        _ensure_pipeline_state_schema_unprotected(connection)
+        issues = _schema_issues(connection, include_m2=True)
+        if issues:
+            raise PipelineStateError(
+                "pipeline schema migration produced an invalid shape: " + ", ".join(issues)
+            )
+    except BaseException:
+        connection.execute(f"ROLLBACK TO {savepoint}")
+        connection.execute(f"RELEASE {savepoint}")
+        raise
+    connection.execute(f"RELEASE {savepoint}")
 
 
 class PipelineJobStore:
@@ -305,16 +867,17 @@ class PipelineJobStore:
             inferred_ownership = False
         self._conn = connection
         self._owns_connection = inferred_ownership if owns_connection is None else bool(owns_connection)
-        schema_ready = self._conn.execute(
-            """
-            SELECT 1 FROM sqlite_master
-            WHERE type='table' AND name='pipeline_operation_idempotency'
-            """
-        ).fetchone()
-        if schema_ready is None:
+        # Always run the cheap, idempotent version check.  The old sentinel
+        # table only proved that M1 existed and would otherwise skip additive
+        # migrations on an already deployed database.
+        try:
             ensure_pipeline_state_schema(self._conn)
+        except Exception:
             if self._owns_connection:
-                self._conn.commit()
+                self._conn.close()
+            raise
+        if self._owns_connection:
+            self._conn.commit()
 
     @classmethod
     def from_config(cls, config: Any) -> "PipelineJobStore":
@@ -375,6 +938,57 @@ class PipelineJobStore:
     @staticmethod
     def _json(value: Any) -> str:
         return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+    @classmethod
+    def _strict_json_value(cls, value: Any, field: str) -> Any:
+        """Return a JSON-only value without lossy implicit coercions."""
+
+        if value is None or isinstance(value, (str, bool, int)):
+            return value
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                raise ValueError(f"{field} contains a non-finite number")
+            return value
+        if isinstance(value, Mapping):
+            result: dict[str, Any] = {}
+            for key, item in value.items():
+                if not isinstance(key, str):
+                    raise ValueError(f"{field} contains a non-string object key")
+                result[key] = cls._strict_json_value(item, f"{field}.{key}")
+            return result
+        if isinstance(value, (list, tuple)):
+            return [
+                cls._strict_json_value(item, f"{field}[{index}]")
+                for index, item in enumerate(value)
+            ]
+        raise ValueError(f"{field} contains a non-JSON value: {type(value).__name__}")
+
+    @classmethod
+    def _strict_mapping(cls, value: Mapping[str, Any], field: str) -> dict[str, Any]:
+        if not isinstance(value, Mapping):
+            raise ValueError(f"{field} must be a mapping")
+        normalized = cls._strict_json_value(value, field)
+        if not isinstance(normalized, dict):
+            raise ValueError(f"{field} must be a JSON object")
+        return normalized
+
+    @classmethod
+    def _strict_json(cls, value: Any, field: str) -> str:
+        normalized = cls._strict_json_value(value, field)
+        return json.dumps(
+            normalized,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+
+    @staticmethod
+    def _required_text(value: Any, field: str) -> str:
+        result = str(value or "").strip()
+        if not result:
+            raise ValueError(f"{field} is required")
+        return result
 
     @classmethod
     def _structured(cls, value: Mapping[str, Any] | None, field: str) -> dict[str, Any]:
@@ -498,6 +1112,908 @@ class PipelineJobStore:
                 (str(job_id), str(stage).upper()),
             )
         return [self._decode_row(row) or {} for row in rows]
+
+    @classmethod
+    def _source_decision_core(
+        cls,
+        payload: Mapping[str, Any],
+    ) -> tuple[str, float, str, dict[str, Any], str]:
+        strategy = cls._required_text(payload.get("strategy"), "decision.strategy").upper()
+        if strategy not in SOURCE_DECISION_STRATEGIES:
+            raise ValueError(f"unsupported source decision strategy: {strategy}")
+        confidence = cls._confidence(payload.get("confidence"))
+        reason_code = cls._reason(str(payload.get("reason_code") or ""))
+        evidence = payload.get("evidence")
+        if not isinstance(evidence, Mapping):
+            raise ValueError("decision.evidence must be a mapping")
+        normalized_evidence = cls._strict_mapping(evidence, "decision.evidence")
+        if not normalized_evidence:
+            raise ValueError("decision.evidence must not be empty")
+
+        missing = [
+            field
+            for field in (
+                "selected_subtitle_track",
+                "selected_audio_track",
+                "candidates",
+                "unselected_reasons",
+            )
+            if field not in payload
+        ]
+        if missing:
+            raise ValueError(
+                "decision is missing required analysis fields: " + ", ".join(missing)
+            )
+        selected_subtitle = payload.get("selected_subtitle_track")
+        selected_audio = payload.get("selected_audio_track")
+        for selected, field in (
+            (selected_subtitle, "selected_subtitle_track"),
+            (selected_audio, "selected_audio_track"),
+        ):
+            if selected is not None and (
+                not isinstance(selected, Mapping)
+                or not cls._strict_mapping(selected, f"decision.{field}")
+            ):
+                raise ValueError(f"decision.{field} must be a non-empty mapping or null")
+        if strategy in {
+            "USE_EXISTING_ZH_TW",
+            "NORMALIZE_ZH_HANT",
+            "CONVERT_ZH_CN",
+            "TRANSLATE_JA_SUBTITLE",
+        } and selected_subtitle is None:
+            raise ValueError(f"{strategy} requires selected_subtitle_track")
+        if strategy == "ASR_JA_AUDIO" and selected_audio is None:
+            raise ValueError("ASR_JA_AUDIO requires selected_audio_track")
+
+        candidates = payload.get("candidates")
+        if not isinstance(candidates, list):
+            raise ValueError("decision.candidates must be a list")
+        candidate_keys: set[tuple[str, int]] = set()
+        selected_candidates: list[dict[str, Any]] = []
+        for index, candidate in enumerate(candidates):
+            if not isinstance(candidate, Mapping):
+                raise ValueError(f"decision.candidates[{index}] must be a mapping")
+            normalized_candidate = cls._strict_mapping(
+                candidate, f"decision.candidates[{index}]"
+            )
+            kind = str(normalized_candidate.get("kind") or "").strip().casefold()
+            if kind not in {"subtitle", "audio"}:
+                raise ValueError(
+                    f"decision.candidates[{index}].kind must be subtitle or audio"
+                )
+            candidate_index = normalized_candidate.get("index")
+            if isinstance(candidate_index, bool) or not isinstance(candidate_index, int):
+                raise ValueError(f"decision.candidates[{index}].index must be an integer")
+            candidate_key = (kind, candidate_index)
+            if candidate_key in candidate_keys:
+                raise ValueError(f"decision.candidates contains duplicate {candidate_key}")
+            candidate_keys.add(candidate_key)
+            score = normalized_candidate.get("score")
+            if isinstance(score, bool) or not isinstance(score, (int, float)):
+                raise ValueError(f"decision.candidates[{index}].score must be numeric")
+            if not math.isfinite(float(score)) or not 0.0 <= float(score) <= 1.0:
+                raise ValueError(
+                    f"decision.candidates[{index}].score must be finite and in [0, 1]"
+                )
+            if not isinstance(normalized_candidate.get("selected"), bool):
+                raise ValueError(f"decision.candidates[{index}].selected must be boolean")
+            if bool(normalized_candidate["selected"]):
+                selected_candidates.append(normalized_candidate)
+
+        subtitle_strategies = {
+            "USE_EXISTING_ZH_TW",
+            "NORMALIZE_ZH_HANT",
+            "CONVERT_ZH_CN",
+            "TRANSLATE_JA_SUBTITLE",
+        }
+        expected_selected = selected_subtitle if strategy in subtitle_strategies else selected_audio
+        if strategy in subtitle_strategies and selected_audio is not None:
+            raise ValueError(f"{strategy} cannot select an audio track")
+        if strategy == "ASR_JA_AUDIO" and selected_subtitle is not None:
+            raise ValueError("ASR_JA_AUDIO cannot select a subtitle track")
+        if strategy in {"NEEDS_REVIEW", "UNSUPPORTED"} and (
+            selected_subtitle is not None or selected_audio is not None
+        ):
+            raise ValueError(f"{strategy} cannot select a source track")
+        if expected_selected is None:
+            if selected_candidates:
+                raise ValueError(f"{strategy} cannot mark a candidate selected")
+        elif len(selected_candidates) != 1 or selected_candidates[0] != dict(expected_selected):
+            raise ValueError(
+                "decision selected track must exactly match its single selected candidate"
+            )
+
+        unselected = payload.get("unselected_reasons")
+        if not isinstance(unselected, list):
+            raise ValueError("decision.unselected_reasons must be a list")
+        unselected_keys: set[str] = set()
+        for index, item in enumerate(unselected):
+            if not isinstance(item, Mapping):
+                raise ValueError(
+                    f"decision.unselected_reasons[{index}] must be a mapping"
+                )
+            normalized_item = cls._strict_mapping(
+                item,
+                f"decision.unselected_reasons[{index}]",
+            )
+            candidate_key = cls._required_text(
+                normalized_item.get("candidate"),
+                f"decision.unselected_reasons[{index}].candidate",
+            )
+            reasons = normalized_item.get("reasons")
+            if (
+                candidate_key in unselected_keys
+                or not isinstance(reasons, list)
+                or not reasons
+                or any(not str(reason).strip() for reason in reasons)
+            ):
+                raise ValueError(
+                    f"decision.unselected_reasons[{index}] is invalid"
+                )
+            unselected_keys.add(candidate_key)
+
+        candidate_json = cls._strict_json(candidates, "decision.candidates")
+        candidate_sha256 = hashlib.sha256(candidate_json.encode("utf-8")).hexdigest()
+        return strategy, confidence, reason_code, normalized_evidence, candidate_sha256
+
+    @classmethod
+    def _normalized_source_decision_record(
+        cls,
+        decision: Mapping[str, Any],
+        *,
+        job_id: str,
+        input_identity: Mapping[str, Any],
+        media_revision: str,
+        source_fingerprint: str,
+        analyzer_version: str,
+        decision_schema_version: str,
+        decision_version: str,
+        config_fingerprint: str,
+        candidate_fingerprint: str,
+        created_at: float,
+    ) -> dict[str, Any]:
+        payload = cls._strict_mapping(decision, "decision")
+        for reserved in ("decision_id", "stage_attempt_id"):
+            if reserved in payload:
+                raise ValueError(f"decision.{reserved} is persistence-owned")
+        strategy, confidence, reason_code, normalized_evidence, candidates_sha256 = (
+            cls._source_decision_core(payload)
+        )
+        supplied_results_sha256 = str(
+            payload.get("candidate_results_sha256") or ""
+        ).strip()
+        if supplied_results_sha256 and (
+            not cls._valid_sha256(supplied_results_sha256)
+            or supplied_results_sha256.casefold() != candidates_sha256.casefold()
+        ):
+            raise PipelineStateConflict(
+                "candidate_results_sha256 does not match canonical decision.candidates"
+            )
+
+        identity_payload = cls._strict_mapping(input_identity, "input_identity")
+        if not identity_payload:
+            raise ValueError("input_identity must not be empty")
+        authoritative: dict[str, Any] = {
+            "job_id": str(job_id),
+            "input_identity": identity_payload,
+            "media_revision": media_revision,
+            "source_fingerprint": source_fingerprint,
+            "analyzer_version": analyzer_version,
+            "decision_schema_version": decision_schema_version,
+            "decision_version": decision_version,
+            "config_fingerprint": config_fingerprint,
+            "candidate_fingerprint": candidate_fingerprint,
+        }
+        for field, expected in authoritative.items():
+            if field not in payload:
+                continue
+            supplied = payload[field]
+            if field == "input_identity":
+                supplied = cls._strict_mapping(supplied, "decision.input_identity")
+                matches = supplied == expected
+            else:
+                matches = str(supplied) == str(expected)
+            if not matches:
+                raise PipelineStateConflict(
+                    f"decision.{field} conflicts with the authoritative persistence context"
+                )
+
+        payload.update(authoritative)
+        payload["strategy"] = strategy
+        payload["confidence"] = confidence
+        payload["reason_code"] = reason_code
+        payload["evidence"] = normalized_evidence
+        payload["candidate_results_sha256"] = candidates_sha256
+        payload["created_at"] = float(created_at)
+        return cls._strict_mapping(payload, "decision")
+
+    @staticmethod
+    def _source_decision_semantics(record: Mapping[str, Any]) -> dict[str, Any]:
+        semantic = dict(record)
+        semantic.pop("created_at", None)
+        return semantic
+
+    @staticmethod
+    def _source_decision_stage_payloads(
+        decision_id: str,
+        decision_sha256: str,
+        input_identity_sha256: str,
+        analyzer_version: str,
+        decision_schema_version: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        reference = {
+            "kind": "source_decision",
+            "decision_id": str(decision_id),
+            "decision_sha256": str(decision_sha256),
+            "input_identity_sha256": str(input_identity_sha256),
+            "analyzer_version": str(analyzer_version),
+            "decision_schema_version": str(decision_schema_version),
+        }
+        return (
+            reference,
+            {
+                "no_artifact_required": True,
+                "checkpoint_evidence": reference,
+            },
+        )
+
+    def _decode_source_decision_row(
+        self,
+        row: Mapping[str, Any] | None,
+    ) -> tuple[dict[str, Any] | None, str]:
+        if row is None:
+            return None, "source_decision_missing"
+        raw = dict(row)
+        try:
+            identity_raw = str(raw.get("input_identity_json") or "")
+            identity_value = json.loads(identity_raw)
+            identity = self._strict_mapping(identity_value, "stored input_identity")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None, "source_decision_input_identity_corrupt"
+        identity_canonical = self._strict_json(identity, "stored input_identity")
+        if identity_canonical != identity_raw:
+            return None, "source_decision_input_identity_noncanonical"
+        identity_sha256 = hashlib.sha256(identity_raw.encode("utf-8")).hexdigest()
+        if (
+            not self._valid_sha256(str(raw.get("input_identity_sha256") or ""))
+            or identity_sha256.casefold()
+            != str(raw.get("input_identity_sha256") or "").casefold()
+        ):
+            return None, "source_decision_input_identity_hash_mismatch"
+
+        try:
+            decision_raw = str(raw.get("decision_json") or "")
+            decision_value = json.loads(decision_raw)
+            decision = self._strict_mapping(decision_value, "stored decision")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None, "source_decision_corrupt"
+        decision_canonical = self._strict_json(decision, "stored decision")
+        if decision_canonical != decision_raw:
+            return None, "source_decision_noncanonical"
+        decision_sha256 = hashlib.sha256(decision_raw.encode("utf-8")).hexdigest()
+        if (
+            not self._valid_sha256(str(raw.get("decision_sha256") or ""))
+            or decision_sha256.casefold() != str(raw.get("decision_sha256") or "").casefold()
+        ):
+            return None, "source_decision_hash_mismatch"
+
+        try:
+            strategy, confidence, reason_code, _evidence, candidates_sha256 = (
+                self._source_decision_core(decision)
+            )
+            created_at = float(decision.get("created_at"))
+            if not math.isfinite(created_at):
+                raise ValueError("invalid created_at")
+        except (TypeError, ValueError):
+            return None, "source_decision_incomplete"
+        stored_results_sha256 = str(
+            decision.get("candidate_results_sha256") or ""
+        )
+        if (
+            not self._valid_sha256(stored_results_sha256)
+            or candidates_sha256.casefold() != stored_results_sha256.casefold()
+        ):
+            return None, "source_decision_candidate_results_hash_mismatch"
+
+        expected_context: dict[str, Any] = {
+            "job_id": str(raw.get("job_id") or ""),
+            "input_identity": identity,
+            "media_revision": str(raw.get("media_revision") or ""),
+            "source_fingerprint": str(raw.get("source_fingerprint") or ""),
+            "analyzer_version": str(raw.get("analyzer_version") or ""),
+            "decision_schema_version": str(raw.get("decision_schema_version") or ""),
+            "decision_version": str(raw.get("decision_version") or ""),
+            "config_fingerprint": str(raw.get("config_fingerprint") or ""),
+            "candidate_fingerprint": str(raw.get("candidate_fingerprint") or ""),
+        }
+        if any(
+            not str(expected_context[field] or "").strip()
+            for field in (
+                "job_id",
+                "media_revision",
+                "source_fingerprint",
+                "analyzer_version",
+                "decision_schema_version",
+                "decision_version",
+                "config_fingerprint",
+                "candidate_fingerprint",
+            )
+        ):
+            return None, "source_decision_incomplete"
+        if not all(
+            self._valid_sha256(str(expected_context[field]))
+            for field in (
+                "media_revision",
+                "source_fingerprint",
+                "config_fingerprint",
+                "candidate_fingerprint",
+            )
+        ):
+            return None, "source_decision_incomplete"
+        if any(decision.get(field) != expected for field, expected in expected_context.items()):
+            return None, "source_decision_context_mismatch"
+        try:
+            stored_confidence = float(raw.get("confidence"))
+            stored_created_at = float(raw.get("created_at"))
+        except (TypeError, ValueError):
+            return None, "source_decision_incomplete"
+        if not math.isfinite(stored_confidence) or not math.isfinite(stored_created_at):
+            return None, "source_decision_incomplete"
+        if (
+            strategy != str(raw.get("strategy") or "")
+            or confidence != stored_confidence
+            or reason_code != str(raw.get("reason_code") or "")
+            or created_at != stored_created_at
+        ):
+            return None, "source_decision_context_mismatch"
+
+        attempt = self._get_attempt(str(raw.get("stage_attempt_id") or ""))
+        if (
+            attempt is None
+            or str(attempt.get("job_id") or "") != str(raw.get("job_id") or "")
+            or str(attempt.get("stage") or "") != "SUBTITLE_DETECTION"
+            or str(attempt.get("status") or "")
+            not in {"RUNNING", "SUCCEEDED", "INTERRUPTED"}
+        ):
+            return None, "source_decision_attempt_reference_invalid"
+
+        expected_checkpoint, expected_outputs = self._source_decision_stage_payloads(
+            str(raw.get("decision_id") or ""),
+            str(raw.get("decision_sha256") or ""),
+            str(raw.get("input_identity_sha256") or ""),
+            str(raw.get("analyzer_version") or ""),
+            str(raw.get("decision_schema_version") or ""),
+        )
+        try:
+            checkpoint_raw = str(attempt.get("checkpoint_json") or "")
+            checkpoint_value = json.loads(checkpoint_raw)
+            checkpoint = self._strict_mapping(
+                checkpoint_value, "stored source decision checkpoint"
+            )
+            checkpoint_canonical = self._strict_json(
+                checkpoint, "stored source decision checkpoint"
+            )
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None, "source_decision_checkpoint_corrupt"
+        if checkpoint_canonical != checkpoint_raw:
+            return None, "source_decision_checkpoint_noncanonical"
+        checkpoint_sha256 = hashlib.sha256(checkpoint_raw.encode("utf-8")).hexdigest()
+        if (
+            not self._valid_sha256(str(attempt.get("checkpoint_sha256") or ""))
+            or checkpoint_sha256.casefold()
+            != str(attempt.get("checkpoint_sha256") or "").casefold()
+        ):
+            return None, "source_decision_checkpoint_hash_mismatch"
+        if checkpoint != expected_checkpoint or attempt.get("output") != expected_outputs:
+            return None, "source_decision_checkpoint_mismatch"
+        if not bool(attempt.get("outputs_verified")) and str(
+            attempt.get("status") or ""
+        ) != "INTERRUPTED":
+            return None, "source_decision_checkpoint_mismatch"
+
+        decoded = {
+            key: value
+            for key, value in raw.items()
+            if key not in {"input_identity_json", "decision_json"}
+        }
+        stage_checkpoint, stage_outputs = self._source_decision_stage_payloads(
+            str(raw["decision_id"]),
+            str(raw["decision_sha256"]),
+            str(raw["input_identity_sha256"]),
+            str(raw["analyzer_version"]),
+            str(raw["decision_schema_version"]),
+        )
+        decoded.update(
+            {
+                "input_identity": identity,
+                "decision": decision,
+                "stage_checkpoint": stage_checkpoint,
+                "stage_outputs": stage_outputs,
+                "integrity_valid": True,
+                "integrity_reason_code": "source_decision_valid",
+            }
+        )
+        return decoded, "source_decision_valid"
+
+    def _checkpoint_source_decision_attempt(
+        self,
+        attempt: Mapping[str, Any],
+        decision_row: Mapping[str, Any],
+    ) -> None:
+        if str(attempt.get("status") or "") != "RUNNING":
+            return
+        checkpoint, outputs = self._source_decision_stage_payloads(
+            str(decision_row["decision_id"]),
+            str(decision_row["decision_sha256"]),
+            str(decision_row["input_identity_sha256"]),
+            str(decision_row["analyzer_version"]),
+            str(decision_row["decision_schema_version"]),
+        )
+        checkpoint_json = self._strict_json(checkpoint, "source decision checkpoint")
+        checkpoint_sha256 = hashlib.sha256(checkpoint_json.encode("utf-8")).hexdigest()
+        if (
+            attempt.get("checkpoint") == checkpoint
+            and str(attempt.get("checkpoint_sha256") or "").casefold()
+            == checkpoint_sha256.casefold()
+            and attempt.get("output") == outputs
+            and bool(attempt.get("outputs_verified"))
+        ):
+            return
+        now = time.time()
+        updated = self._conn.execute(
+            """
+            UPDATE pipeline_stage_attempts
+            SET checkpoint_json=?, checkpoint_sha256=?, output_json=?,
+                outputs_verified=1, heartbeat_at=?, updated_at=?
+            WHERE stage_attempt_id=? AND status='RUNNING'
+            """,
+            (
+                checkpoint_json,
+                checkpoint_sha256,
+                self._strict_json(outputs, "source decision outputs"),
+                now,
+                now,
+                str(attempt["stage_attempt_id"]),
+            ),
+        ).rowcount
+        if updated != 1:
+            raise PipelineStateConflict("source decision stage attempt changed concurrently")
+        refreshed = self._get_attempt(str(attempt["stage_attempt_id"]))
+        if refreshed is None:
+            raise PipelineStateConflict("source decision stage attempt disappeared")
+        self._stage_event(
+            refreshed,
+            "SOURCE_DECISION_PERSISTED",
+            status="RUNNING",
+            reason_code=str(decision_row["reason_code"]),
+            evidence={
+                "decision_id": str(decision_row["decision_id"]),
+                "decision_sha256": str(decision_row["decision_sha256"]),
+                "strategy": str(decision_row["strategy"]),
+            },
+            confidence=float(decision_row["confidence"]),
+            payload={
+                "analyzer_version": str(decision_row["analyzer_version"]),
+                "decision_schema_version": str(decision_row["decision_schema_version"]),
+            },
+            now=now,
+        )
+
+    def persist_source_decision(
+        self,
+        job_id: str,
+        *,
+        stage_attempt_id: str,
+        decision: Mapping[str, Any],
+        input_identity: Mapping[str, Any],
+        media_revision: str,
+        source_fingerprint: str,
+        analyzer_version: str,
+        decision_schema_version: str | int,
+        decision_version: str,
+        config_fingerprint: str,
+        candidate_fingerprint: str,
+        idempotency_key: str | None = None,
+        created_at: float | None = None,
+    ) -> dict[str, Any]:
+        """Append one immutable, integrity-checked M2 source decision."""
+
+        job_key = self._required_text(job_id, "job_id")
+        media_key = self._required_text(media_revision, "media_revision")
+        source_key = self._required_text(source_fingerprint, "source_fingerprint")
+        analyzer_key = self._required_text(analyzer_version, "analyzer_version")
+        schema_key = self._required_text(decision_schema_version, "decision_schema_version")
+        version_key = self._required_text(decision_version, "decision_version")
+        config_key = self._required_text(config_fingerprint, "config_fingerprint")
+        candidate_key = self._required_text(candidate_fingerprint, "candidate_fingerprint")
+        for value, field in (
+            (media_key, "media_revision"),
+            (source_key, "source_fingerprint"),
+            (config_key, "config_fingerprint"),
+            (candidate_key, "candidate_fingerprint"),
+        ):
+            if not self._valid_sha256(value):
+                raise ValueError(f"{field} must be a SHA-256 hex digest")
+        identity = self._strict_mapping(input_identity, "input_identity")
+        if not identity:
+            raise ValueError("input_identity must not be empty")
+        identity_json = self._strict_json(identity, "input_identity")
+        identity_sha256 = hashlib.sha256(identity_json.encode("utf-8")).hexdigest()
+        timestamp = float(time.time() if created_at is None else created_at)
+        if not math.isfinite(timestamp) or timestamp < 0:
+            raise ValueError("created_at must be a finite non-negative timestamp")
+        idempotency = None
+        if idempotency_key is not None:
+            idempotency = self._required_text(idempotency_key, "idempotency_key")
+
+        with self._savepoint():
+            job = self.get_job(job_key)
+            if job is None:
+                raise KeyError(f"unknown pipeline job: {job_key}")
+            if str(job.get("media_revision") or "") != media_key:
+                raise PipelineStateConflict("source decision media revision is stale")
+            if str(job.get("media_fingerprint") or "") != source_key:
+                raise PipelineStateConflict("source decision fingerprint is stale")
+            attempt = self._get_attempt(stage_attempt_id)
+            if (
+                attempt is None
+                or str(attempt.get("job_id") or "") != job_key
+                or str(attempt.get("stage") or "") != "SUBTITLE_DETECTION"
+            ):
+                raise StageAttemptError(
+                    "source decisions require a SUBTITLE_DETECTION attempt for the same job"
+                )
+
+            record = self._normalized_source_decision_record(
+                decision,
+                job_id=job_key,
+                input_identity=identity,
+                media_revision=media_key,
+                source_fingerprint=source_key,
+                analyzer_version=analyzer_key,
+                decision_schema_version=schema_key,
+                decision_version=version_key,
+                config_fingerprint=config_key,
+                candidate_fingerprint=candidate_key,
+                created_at=timestamp,
+            )
+            semantic_json = self._strict_json(
+                self._source_decision_semantics(record),
+                "source decision semantics",
+            )
+
+            existing: dict[str, Any] | None = None
+            attempt_checkpoint = attempt.get("checkpoint")
+            if (
+                isinstance(attempt_checkpoint, Mapping)
+                and attempt_checkpoint.get("kind") == "source_decision"
+            ):
+                checkpoint_decision_id = self._required_text(
+                    attempt_checkpoint.get("decision_id"),
+                    "source decision checkpoint decision_id",
+                )
+                existing = self._fetchone(
+                    "SELECT * FROM pipeline_source_decisions WHERE decision_id=?",
+                    (checkpoint_decision_id,),
+                )
+                if existing is None:
+                    raise PipelineStateConflict(
+                        "source decision attempt checkpoint references a missing record"
+                    )
+
+            by_attempt = self._fetchone(
+                "SELECT * FROM pipeline_source_decisions WHERE stage_attempt_id=?",
+                (str(stage_attempt_id),),
+            )
+            if existing is not None and by_attempt is not None and (
+                str(existing.get("decision_id") or "")
+                != str(by_attempt.get("decision_id") or "")
+            ):
+                raise PipelineStateConflict(
+                    "source decision attempt has conflicting durable bindings"
+                )
+            existing = existing or by_attempt
+            if idempotency is not None:
+                by_idempotency = self._fetchone(
+                    """
+                    SELECT * FROM pipeline_source_decisions
+                    WHERE job_id=? AND idempotency_key=?
+                    """,
+                    (job_key, idempotency),
+                )
+                if existing is not None and by_idempotency is not None and (
+                    str(existing.get("decision_id") or "")
+                    != str(by_idempotency.get("decision_id") or "")
+                ):
+                    raise PipelineStateConflict(
+                        "source decision attempt and idempotency key reference different records"
+                    )
+                existing = existing or by_idempotency
+            if existing is None:
+                existing = self._fetchone(
+                    """
+                    SELECT * FROM pipeline_source_decisions
+                    WHERE job_id=? AND input_identity_sha256=? AND media_revision=?
+                      AND source_fingerprint=? AND analyzer_version=?
+                      AND decision_schema_version=? AND decision_version=?
+                      AND config_fingerprint=? AND candidate_fingerprint=?
+                    """,
+                    (
+                        job_key,
+                        identity_sha256,
+                        media_key,
+                        source_key,
+                        analyzer_key,
+                        schema_key,
+                        version_key,
+                        config_key,
+                        candidate_key,
+                    ),
+                )
+            if existing is not None:
+                decoded, integrity_reason = self._decode_source_decision_row(existing)
+                if decoded is None:
+                    raise PipelineStateConflict(
+                        "existing source decision is not trustworthy: " + integrity_reason
+                    )
+                if str(existing.get("idempotency_key") or "") != str(idempotency or ""):
+                    raise PipelineStateConflict(
+                        "source decision idempotency key does not match the immutable record"
+                    )
+                existing_semantic_json = self._strict_json(
+                    self._source_decision_semantics(decoded["decision"]),
+                    "existing source decision semantics",
+                )
+                same_context = all(
+                    str(existing.get(field) or "") == expected
+                    for field, expected in (
+                        ("input_identity_sha256", identity_sha256),
+                        ("media_revision", media_key),
+                        ("source_fingerprint", source_key),
+                        ("analyzer_version", analyzer_key),
+                        ("decision_schema_version", schema_key),
+                        ("decision_version", version_key),
+                        ("config_fingerprint", config_key),
+                        ("candidate_fingerprint", candidate_key),
+                    )
+                )
+                if not same_context or existing_semantic_json != semantic_json:
+                    raise PipelineStateConflict(
+                        "the source decision key was already used for a different payload"
+                    )
+                self._checkpoint_source_decision_attempt(attempt, decoded)
+                return decoded
+
+            if str(attempt.get("status") or "") != "RUNNING":
+                raise StageAttemptError(
+                    "a new source decision requires a running SUBTITLE_DETECTION attempt"
+                )
+            decision_id = uuid.uuid4().hex
+            decision_json = self._strict_json(record, "decision")
+            decision_sha256 = hashlib.sha256(decision_json.encode("utf-8")).hexdigest()
+            try:
+                self._conn.execute(
+                    """
+                    INSERT INTO pipeline_source_decisions(
+                        decision_id, job_id, stage_attempt_id,
+                        input_identity_json, input_identity_sha256,
+                        media_revision, source_fingerprint, analyzer_version,
+                        decision_schema_version, decision_version,
+                        config_fingerprint, candidate_fingerprint,
+                        strategy, confidence, reason_code,
+                        decision_json, decision_sha256, idempotency_key, created_at
+                    ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        decision_id,
+                        job_key,
+                        str(stage_attempt_id),
+                        identity_json,
+                        identity_sha256,
+                        media_key,
+                        source_key,
+                        analyzer_key,
+                        schema_key,
+                        version_key,
+                        config_key,
+                        candidate_key,
+                        str(record["strategy"]),
+                        float(record["confidence"]),
+                        str(record["reason_code"]),
+                        decision_json,
+                        decision_sha256,
+                        idempotency,
+                        timestamp,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise PipelineStateConflict(
+                    "source decision was concurrently persisted with a conflicting key"
+                ) from exc
+            inserted = self._fetchone(
+                "SELECT * FROM pipeline_source_decisions WHERE decision_id=?",
+                (decision_id,),
+            )
+            if inserted is None:
+                raise PipelineStateConflict("persisted source decision disappeared")
+            self._checkpoint_source_decision_attempt(attempt, inserted)
+            decoded, integrity_reason = self._decode_source_decision_row(inserted)
+            if decoded is None:
+                raise PipelineStateConflict(
+                    "persisted source decision failed integrity verification: "
+                    + integrity_reason
+                )
+            return decoded
+
+    def list_source_decisions(self, job_id: str) -> list[dict[str, Any]]:
+        rows = self._fetchall(
+            """
+            SELECT * FROM pipeline_source_decisions
+            WHERE job_id=? ORDER BY created_at, decision_id
+            """,
+            (str(job_id),),
+        )
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            decoded, reason = self._decode_source_decision_row(row)
+            if decoded is not None:
+                results.append(decoded)
+                continue
+            results.append(
+                {
+                    key: value
+                    for key, value in row.items()
+                    if key not in {"input_identity_json", "decision_json"}
+                }
+                | {
+                    "input_identity": None,
+                    "decision": None,
+                    "integrity_valid": False,
+                    "integrity_reason_code": reason,
+                }
+            )
+        return results
+
+    def reusable_source_decision(
+        self,
+        job_id: str,
+        *,
+        expected_identity: Mapping[str, Any],
+        expected_media_revision: str,
+        expected_source_fingerprint: str,
+        expected_analyzer_version: str,
+        expected_decision_schema_version: str | int,
+        expected_decision_version: str,
+        expected_config_fingerprint: str,
+        expected_candidate_fingerprint: str,
+        with_reason: bool = False,
+    ) -> Any:
+        """Return only an exact, strictly verified decision checkpoint."""
+
+        identity = self._strict_mapping(expected_identity, "expected_identity")
+        if not identity:
+            raise ValueError("expected_identity must not be empty")
+        identity_json = self._strict_json(identity, "expected_identity")
+        identity_sha256 = hashlib.sha256(identity_json.encode("utf-8")).hexdigest()
+        expected: dict[str, str] = {
+            "media_revision": self._required_text(
+                expected_media_revision, "expected_media_revision"
+            ),
+            "source_fingerprint": self._required_text(
+                expected_source_fingerprint, "expected_source_fingerprint"
+            ),
+            "analyzer_version": self._required_text(
+                expected_analyzer_version, "expected_analyzer_version"
+            ),
+            "decision_schema_version": self._required_text(
+                expected_decision_schema_version,
+                "expected_decision_schema_version",
+            ),
+            "decision_version": self._required_text(
+                expected_decision_version, "expected_decision_version"
+            ),
+            "config_fingerprint": self._required_text(
+                expected_config_fingerprint, "expected_config_fingerprint"
+            ),
+            "candidate_fingerprint": self._required_text(
+                expected_candidate_fingerprint, "expected_candidate_fingerprint"
+            ),
+        }
+        for field in (
+            "media_revision",
+            "source_fingerprint",
+            "config_fingerprint",
+            "candidate_fingerprint",
+        ):
+            if not self._valid_sha256(expected[field]):
+                raise ValueError(f"expected_{field} must be a SHA-256 hex digest")
+
+        decision: dict[str, Any] | None = None
+        reason = "source_decision_missing"
+        job = self.get_job(str(job_id))
+        if job is None:
+            reason = "source_decision_job_missing"
+        elif str(job.get("media_revision") or "") != expected["media_revision"]:
+            reason = "source_decision_media_revision_changed"
+        elif str(job.get("media_fingerprint") or "") != expected["source_fingerprint"]:
+            reason = "source_decision_source_fingerprint_changed"
+        else:
+            exact = self._fetchone(
+                """
+                SELECT * FROM pipeline_source_decisions
+                WHERE job_id=? AND input_identity_sha256=? AND media_revision=?
+                  AND source_fingerprint=? AND analyzer_version=?
+                  AND decision_schema_version=? AND decision_version=?
+                  AND config_fingerprint=? AND candidate_fingerprint=?
+                ORDER BY created_at DESC, decision_id DESC LIMIT 1
+                """,
+                (
+                    str(job_id),
+                    identity_sha256,
+                    expected["media_revision"],
+                    expected["source_fingerprint"],
+                    expected["analyzer_version"],
+                    expected["decision_schema_version"],
+                    expected["decision_version"],
+                    expected["config_fingerprint"],
+                    expected["candidate_fingerprint"],
+                ),
+            )
+            if exact is not None:
+                decoded, integrity_reason = self._decode_source_decision_row(exact)
+                if decoded is None:
+                    reason = integrity_reason
+                elif decoded.get("input_identity") != identity:
+                    reason = "source_decision_input_identity_changed"
+                else:
+                    decision = decoded
+                    reason = "source_decision_reusable"
+            else:
+                latest = self._fetchone(
+                    """
+                    SELECT * FROM pipeline_source_decisions
+                    WHERE job_id=? ORDER BY created_at DESC, decision_id DESC LIMIT 1
+                    """,
+                    (str(job_id),),
+                )
+                if latest is not None:
+                    _decoded_latest, latest_integrity_reason = (
+                        self._decode_source_decision_row(latest)
+                    )
+                    if _decoded_latest is None:
+                        reason = latest_integrity_reason
+                    else:
+                        comparisons = (
+                            ("media_revision", "source_decision_media_revision_changed"),
+                            (
+                                "source_fingerprint",
+                                "source_decision_source_fingerprint_changed",
+                            ),
+                            (
+                                "analyzer_version",
+                                "source_decision_analyzer_version_changed",
+                            ),
+                            (
+                                "decision_schema_version",
+                                "source_decision_schema_version_changed",
+                            ),
+                            ("decision_version", "source_decision_version_changed"),
+                            ("config_fingerprint", "source_decision_config_changed"),
+                            (
+                                "candidate_fingerprint",
+                                "source_decision_candidate_fingerprint_changed",
+                            ),
+                        )
+                        reason = "source_decision_input_identity_changed"
+                        if str(latest.get("input_identity_sha256") or "") == identity_sha256:
+                            for field, mismatch_reason in comparisons:
+                                if str(latest.get(field) or "") != expected[field]:
+                                    reason = mismatch_reason
+                                    break
+
+        if with_reason:
+            return decision, reason
+        return decision
 
     def _record_transition(
         self,
@@ -1616,6 +3132,26 @@ class PipelineJobStore:
                 raise StageAttemptError(
                     f"attempt already finished as {attempt['status']}, not {final_status}"
                 )
+            if (
+                final_status == "SUCCEEDED"
+                and str(attempt.get("stage") or "") == "SUBTITLE_DETECTION"
+                and isinstance(attempt.get("checkpoint"), Mapping)
+                and attempt.get("checkpoint", {}).get("kind") == "source_decision"
+            ):
+                durable_output = self._structured(
+                    attempt.get("output", {}),
+                    "persisted source decision outputs",
+                )
+                if output_payload and output_payload != durable_output:
+                    raise StageAttemptError(
+                        "source decision completion cannot replace its durable checkpoint output"
+                    )
+                if not bool(attempt.get("outputs_verified")):
+                    raise StageAttemptError(
+                        "source decision completion requires its verified checkpoint"
+                    )
+                output_payload = durable_output
+                outputs_verified = True
             self._conn.execute(
                 """
                 UPDATE pipeline_stage_attempts
@@ -2342,6 +3878,8 @@ LEGACY_STAGE_STATE_MAP: dict[str, str] = {
     "audio_selection": "ASR",
     "subtitle_source": "SUBTITLE_DETECTION",
     "subtitle_detection": "SUBTITLE_DETECTION",
+    "source_selection_review": "SUBTITLE_DETECTION",
+    "source_selection_unsupported": "SUBTITLE_DETECTION",
     "audio": "ASR",
     "source_transcription": "ASR",
     "resource_runtime": "ASR",
@@ -2352,6 +3890,7 @@ LEGACY_STAGE_STATE_MAP: dict[str, str] = {
     "source_translation": "TRANSLATING",
     "line_retranslation": "TRANSLATING",
     "opencc": "POST_PROCESSING",
+    "opencc_source": "POST_PROCESSING",
     "postprocess": "ASR",
     "post_processing": "POST_PROCESSING",
     "ass_export": "POST_PROCESSING",
@@ -2359,6 +3898,7 @@ LEGACY_STAGE_STATE_MAP: dict[str, str] = {
     "cleanup": "POST_PROCESSING",
     "quality_check": "QC",
     "quality_review": "QC",
+    "subtitle_source_qc": "QC",
     "delivery_verification": "QC",
     "qc": "QC",
     "mux": "MUXING",

@@ -1,0 +1,23 @@
+# M2 deterministic source-analyzer settings.
+# Merge this safe fragment into an existing complete config.yaml.  It contains
+# no server paths, ports, credentials, or deployment-specific values.
+
+# Keep disabled until the durable Job Store migration and integration have
+# been deployed together.  Enabling requires pipeline_job_store_required=true.
+source_analyzer_enabled: false
+
+# 0 <= low < high <= 1.  Middle-confidence results run deterministic
+# additional checks; unresolved results become NEEDS_REVIEW.
+source_analyzer_high_confidence: 0.90
+source_analyzer_low_confidence: 0.60
+
+# Structural subtitle gates, calibrated later with the M2 evaluation corpus.
+source_analyzer_min_dialogue_completeness_score: 0.68
+source_analyzer_min_subtitle_coverage_ratio: 0.60
+source_analyzer_tie_margin: 0.025
+
+# Checkpoint invalidation identity.  These values must describe the deployed
+# analyzer implementation and persisted decision schema.
+source_analyzer_version: "m2-source-analyzer-v1"
+source_decision_schema_version: 1
+source_decision_version: "m2-source-decision-v1"

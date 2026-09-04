@@ -25,3 +25,25 @@
 M0/M1 implementation and acceptance are complete locally. These checkboxes do not claim an UNRAID deployment, the 100-input release gate, the rolling-500 Production SLO, or a measured 99%/99.9% autonomy rate.
 
 M2 translation quality, Translation Memory, full QC redesign and WebUI work are explicitly out of scope until every M0/M1 checkbox is complete.
+
+## M2 — Deterministic source analysis and durable decisions
+
+- [x] Inventory supported subtitle sidecars, embedded subtitle streams and audio streams without modifying source media.
+- [x] Normalize language metadata and combine it with subtitle content, script and quality evidence.
+- [x] Score completeness, timing, empty-content, forced, signs-only, songs-only and commentary risks.
+- [x] Apply deterministic candidate ordering and all seven formal M2 strategies.
+- [x] Persist immutable Decision Records with candidates, scores, reason codes, evidence, versions and source context.
+- [x] Bind Decisions to verified Stage checkpoints with idempotent restart reuse and exact-context invalidation.
+- [x] Revalidate selected subtitle/audio sources before routing them into the existing worker.
+- [x] Materialize embedded subtitles through validated temporary files and atomic cache publication.
+- [x] Keep Whisper and other speech models outside the M2 decision stage.
+- [x] Pass the dedicated 22-case M2 acceptance suite locally, including the nested M1 twelve-case gate and 106-case M2 integration gate.
+- [x] Cover all ten required representative source-selection fixture classes.
+- [x] Record focused local results and evidence boundaries in `docs/TEST_RESULTS_M2.md`.
+- [x] Run the complete existing repository regression suite against the combined M2 diff: 1,587 tests passed with one existing conditional skip.
+- [x] Complete the M2 design, source-selection, Decision-schema and confidence-policy documents.
+- [x] Run final changed-file compile, diff checks and release review with no private deployment details in tracked files.
+
+M2 implementation, acceptance, the complete local repository regression and final post-edit static/diff verification are green, but external release gates remain. The current results do not prove the 100-input release gate, the rolling-500 Production SLO, an UNRAID deployment, or a measured 99%/99.9% autonomy rate.
+
+Translation-quality improvements, Translation Memory, full QC redesign, WebUI redesign and M3 model-fallback work remain out of scope for this milestone.

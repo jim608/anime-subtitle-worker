@@ -86,6 +86,26 @@ from safe_files import (
     verified_copy_replace,
     verified_move,
 )
+from source_analysis_service import (
+    SOURCE_ANALYSIS_SERVICE_VERSION,
+    SourceAnalysisContext,
+    SourceAnalysisResult,
+    run_source_analysis,
+)
+from source_analyzer import (
+    ANALYZER_VERSION as SOURCE_ANALYZER_VERSION,
+    ASR_JA_AUDIO,
+    CONVERT_ZH_CN as M2_CONVERT_ZH_CN,
+    DECISION_SCHEMA_VERSION as SOURCE_DECISION_SCHEMA_VERSION,
+    DECISION_VERSION as SOURCE_DECISION_VERSION,
+    NEEDS_REVIEW as SOURCE_NEEDS_REVIEW,
+    NORMALIZE_ZH_HANT,
+    TRANSLATE_JA_SUBTITLE,
+    UNSUPPORTED as SOURCE_UNSUPPORTED,
+    USE_EXISTING_ZH_TW,
+    canonical_json_sha256,
+)
+from source_decision_adapter import ResolvedSourceDecision, resolve_source_decision
 from srt_utils import (
     SrtBlock,
     read_srt,
@@ -100,6 +120,12 @@ from source_decision import (
     USE_ZH_TW,
     SubtitleSourceDecision,
     discover_normalized_subtitle_source,
+)
+from source_inventory import (
+    SOURCE_INPUT_IDENTITY_VERSION,
+    SOURCE_INVENTORY_VERSION,
+    build_source_input_identity,
+    inventory_sources,
 )
 from series_metadata import (
     canonical_local_path,
@@ -227,6 +253,14 @@ class AsrRouteOutcome:
     fallback_used: bool = False
     failed_model: str | None = None
     failed_reason: str | None = None
+
+
+class SourceSelectionReviewError(RuntimeError):
+    pass
+
+
+class UnsupportedSourceError(RuntimeError):
+    pass
 
 
 class VideoWorker:
@@ -687,21 +721,57 @@ class VideoWorker:
         # preference.  Even an explicit force-AI queue item must consume a
         # usable subtitle before touching audio; force only controls whether an
         # older generated delivery may be reused.
-        source_decision = discover_normalized_subtitle_source(video, self.config)
-        if source_decision is not None:
-            self._record_subtitle_source_decision(source_decision)
-            if source_decision.strategy == USE_ZH_TW:
-                return self._adopt_traditional_chinese_source(video, source_decision)
-            if source_decision.strategy == CONVERT_ZH_CN:
-                return self._convert_simplified_chinese_source(video, source_decision)
-        else:
-            english_source = self._discover_english_subtitle_source(video)
-            if english_source is not None:
-                return self._translate_english_subtitle_source(
-                    video,
-                    paths,
-                    english_source,
+        source_decision: SubtitleSourceDecision | None = None
+        if bool(getattr(self.config, "source_analyzer_enabled", False)):
+            source_analysis, resolved_source = self._analyze_and_resolve_source(video)
+            if resolved_source.strategy == SOURCE_NEEDS_REVIEW:
+                self._create_source_selection_review(video, source_analysis)
+                raise SourceSelectionReviewError(
+                    "[source_selection_needs_review] "
+                    f"reason={source_analysis.decision.get('reason_code') or 'ambiguous_source'} "
+                    f"decision_id={source_analysis.decision_id}"
                 )
+            if resolved_source.strategy == SOURCE_UNSUPPORTED:
+                raise UnsupportedSourceError(
+                    "[source_unsupported] "
+                    f"reason={source_analysis.decision.get('reason_code') or 'no_supported_source'} "
+                    f"decision_id={source_analysis.decision_id}"
+                )
+            if resolved_source.strategy == ASR_JA_AUDIO:
+                if resolved_source.audio is None:
+                    raise RuntimeError("ASR_JA_AUDIO decision has no resolved audio track")
+                self._selected_audio_stream = resolved_source.audio
+            else:
+                source_decision = resolved_source.subtitle
+                if source_decision is None:
+                    raise RuntimeError("subtitle source strategy has no resolved subtitle")
+                self._record_subtitle_source_decision(source_decision)
+                if resolved_source.strategy == USE_EXISTING_ZH_TW:
+                    return self._adopt_traditional_chinese_source(video, source_decision)
+                if resolved_source.strategy == NORMALIZE_ZH_HANT:
+                    return self._normalize_traditional_chinese_source(video, source_decision)
+                if resolved_source.strategy == M2_CONVERT_ZH_CN:
+                    return self._convert_simplified_chinese_source(video, source_decision)
+                if resolved_source.strategy != TRANSLATE_JA_SUBTITLE:
+                    raise RuntimeError(
+                        f"Unhandled M2 subtitle strategy: {resolved_source.strategy}"
+                    )
+        else:
+            source_decision = discover_normalized_subtitle_source(video, self.config)
+            if source_decision is not None:
+                self._record_subtitle_source_decision(source_decision)
+                if source_decision.strategy == USE_ZH_TW:
+                    return self._adopt_traditional_chinese_source(video, source_decision)
+                if source_decision.strategy == CONVERT_ZH_CN:
+                    return self._convert_simplified_chinese_source(video, source_decision)
+            else:
+                english_source = self._discover_english_subtitle_source(video)
+                if english_source is not None:
+                    return self._translate_english_subtitle_source(
+                        video,
+                        paths,
+                        english_source,
+                    )
 
         # Preserve compatibility for old verified AI outputs that predate the
         # strict manifest, but never let a bare zh-CN or source-language artifact
@@ -734,7 +804,7 @@ class VideoWorker:
             preferred_audio = None
             audio_ready = False
         else:
-            preferred_audio = preferred_audio_stream_info(video)
+            preferred_audio = self._selected_audio_stream or preferred_audio_stream_info(video)
             audio_ready = validate_cached_audio(
                 audio_path,
                 video,
@@ -1359,6 +1429,224 @@ class VideoWorker:
         )
         if self._provenance is not None:
             self._provenance.update("subtitle_source", payload)
+
+    def _analyze_and_resolve_source(
+        self,
+        video: Path,
+    ) -> tuple[SourceAnalysisResult, ResolvedSourceDecision]:
+        """Reuse or persist one deterministic M2 decision before any model work."""
+
+        from scan_state import ScanStateStore
+
+        if not isinstance(self._stage_state, ScanStateStore):
+            raise RuntimeError("M2 source analysis requires the durable ScanStateStore")
+        pipeline = self._stage_state.pipeline_jobs()
+        stat = video.stat()
+        job = pipeline.job_for_path(
+            video,
+            size=int(stat.st_size),
+            mtime_ns=int(stat.st_mtime_ns),
+            create=False,
+        )
+        if not isinstance(job, dict) or not job.get("job_id"):
+            raise RuntimeError("M2 source analysis could not resolve its durable job")
+        stage_attempt_id = str(job.get("active_stage_attempt_id") or "")
+        if not stage_attempt_id:
+            raise RuntimeError("M2 source analysis requires an active SUBTITLE_DETECTION attempt")
+
+        identity = build_source_input_identity(video, job, config=self.config)
+        thresholds = self.config.source_analyzer_thresholds()
+        config_fingerprint = canonical_json_sha256(
+            {
+                "service_version": SOURCE_ANALYSIS_SERVICE_VERSION,
+                "input_identity_version": SOURCE_INPUT_IDENTITY_VERSION,
+                "inventory_version": SOURCE_INVENTORY_VERSION,
+                "analyzer_version": SOURCE_ANALYZER_VERSION,
+                "decision_schema_version": SOURCE_DECISION_SCHEMA_VERSION,
+                "decision_version": SOURCE_DECISION_VERSION,
+                "configured_analyzer_revision": str(
+                    getattr(self.config, "source_analyzer_version", "")
+                ),
+                "configured_decision_schema_revision": int(
+                    getattr(
+                        self.config,
+                        "source_decision_schema_version",
+                        SOURCE_DECISION_SCHEMA_VERSION,
+                    )
+                ),
+                "configured_decision_revision": str(
+                    getattr(self.config, "source_decision_version", "")
+                ),
+                "thresholds": thresholds.to_dict(),
+            }
+        )
+        context = SourceAnalysisContext(
+            job_id=str(job["job_id"]),
+            stage_attempt_id=stage_attempt_id,
+            input_identity=identity.to_dict(),
+            media_revision=str(job.get("media_revision") or ""),
+            source_fingerprint=str(job.get("media_fingerprint") or ""),
+            config_fingerprint=config_fingerprint,
+            cheap_candidate_fingerprint=identity.candidate_fingerprint,
+            analyzer_version=SOURCE_ANALYZER_VERSION,
+            decision_schema_version=SOURCE_DECISION_SCHEMA_VERSION,
+            decision_version=SOURCE_DECISION_VERSION,
+        )
+
+        def load_candidates():
+            return inventory_sources(
+                video,
+                job,
+                config=self.config,
+                temp_root=Path(self.config.work_path) / "source_inventory_tmp",
+                extract_timeout_seconds=max(
+                    1.0,
+                    float(
+                        getattr(self.config, "subtitle_extract_timeout_seconds", 300)
+                        or 300
+                    ),
+                ),
+            )
+
+        result = run_source_analysis(
+            pipeline,
+            context,
+            load_candidates,
+            thresholds=thresholds,
+        )
+        # The decision checkpoint is authoritative before materialization or
+        # any downstream audio/model work begins.
+        self._stage_state.commit()
+        resolved = resolve_source_decision(video, result.to_dict(), job, self.config)
+        evidence = {
+            "contract": SOURCE_ANALYSIS_SERVICE_VERSION,
+            "decision_id": result.decision_id,
+            "decision_sha256": result.decision_sha256,
+            "strategy": result.strategy,
+            "confidence": result.confidence,
+            "reason_code": str(result.decision.get("reason_code") or ""),
+            "reused": result.reused,
+            "reuse_reason": result.reuse_reason,
+            "analyzer_version": SOURCE_ANALYZER_VERSION,
+            "decision_schema_version": SOURCE_DECISION_SCHEMA_VERSION,
+        }
+        if self._provenance is not None:
+            self._provenance.update("source_analysis", evidence)
+        self.logger.info(
+            "M2 source decision committed: strategy=%s confidence=%.3f reason=%s reused=%s",
+            result.strategy,
+            result.confidence,
+            evidence["reason_code"],
+            result.reused,
+        )
+        return result, resolved
+
+    def _create_source_selection_review(
+        self,
+        video: Path,
+        result: SourceAnalysisResult,
+    ) -> None:
+        serialized = result.to_dict()
+        decision = dict(serialized["decision"])
+        self._create_review_item(
+            video,
+            kind="source_selection",
+            summary="Subtitle/audio source selection requires evidence review",
+            diagnosis={
+                "stage": "source_selection_review",
+                "decision_id": result.decision_id,
+                "decision_sha256": result.decision_sha256,
+                "reason_code": str(decision.get("reason_code") or ""),
+                "confidence": result.confidence,
+                "evidence": dict(decision.get("evidence") or {}),
+                "checkpoint": dict(serialized["checkpoint"]),
+            },
+            candidates=[
+                {
+                    "action": "ai.retry",
+                    "label": "Retry deterministic source analysis after correcting metadata",
+                }
+            ],
+            replace_candidates=True,
+        )
+
+    def _normalize_traditional_chinese_source(
+        self,
+        video: Path,
+        decision: SubtitleSourceDecision,
+    ) -> ProcessOutcome:
+        """Normalize generic Hant into a verified Taiwan-Traditional output."""
+
+        destination = video.with_name(f"{video.stem}.zh-TW.ass")
+        self._set_stage(
+            video,
+            "opencc_source",
+            "running",
+            "Normalizing existing zh-Hant subtitle to Taiwan Traditional Chinese",
+        )
+        begin_output_publication(video, self.config)
+        convert_ass_to_zh_tw(
+            decision.source_path,
+            destination,
+            self.config.opencc_config,
+        )
+        classification = classify_subtitle_content_file(destination)
+        if classification.language != "zh-tw":
+            raise SubtitleQualityError(
+                "Normalized zh-Hant output did not classify as Traditional Chinese"
+            )
+        report = analyze_subtitle_file(destination, self.config, role="unknown")
+        if report.has_failures or report.dialogues <= 0:
+            raise SubtitleQualityError(
+                "Normalized zh-Hant output failed prepublication QC: "
+                f"{summarize_quality_report(report)}"
+            )
+        stat = destination.stat()
+        normalized_decision = SubtitleSourceDecision(
+            strategy=USE_ZH_TW,
+            source_path=destination,
+            source_language="zh-tw",
+            source_kind=decision.source_kind,
+            stream_index=decision.stream_index,
+            classification=classification.as_dict(),
+            quality=report.to_dict(),
+            source_sha256=sha256_file(destination),
+            source_size=int(stat.st_size),
+            source_mtime_ns=int(stat.st_mtime_ns),
+        )
+        self._record_subtitle_source_decision(normalized_decision)
+        manifest = write_output_manifest(
+            video,
+            self.config,
+            [destination],
+            provenance=self._source_publication_provenance(
+                normalized_decision,
+                output_quality=report.to_dict(),
+            ),
+            publication_kind=ADOPTED_ZH_TW_PUBLICATION_KIND,
+            output_languages=("zh-TW",),
+        )
+        self._commit_output_publication(video)
+        self._set_stage(
+            video,
+            "opencc_source",
+            "ok",
+            "Existing zh-Hant subtitle normalized to validated Taiwan Traditional Chinese",
+        )
+        self.logger.info(
+            "Normalized validated zh-Hant subtitle without audio, ASR, or LLM: "
+            "video=%s source=%s output=%s manifest=%s",
+            video,
+            decision.source_path,
+            destination,
+            manifest,
+        )
+        self._close_stage_state()
+        return ProcessOutcome(
+            "complete",
+            "ok",
+            "Existing zh-Hant subtitle normalized to Taiwan Traditional Chinese",
+        )
 
     def _adopt_traditional_chinese_source(
         self,
@@ -5707,7 +5995,11 @@ class VideoWorker:
         *,
         stream: AudioStreamInfo | None = None,
     ) -> Path:
-        selected = stream if stream is not None else preferred_audio_stream_info(video)
+        selected = (
+            stream
+            if stream is not None
+            else (self._selected_audio_stream or preferred_audio_stream_info(video))
+        )
         self._selected_audio_stream = selected
         if selected is None:
             message = "Audio stream metadata unavailable; using ffmpeg default"
@@ -7703,19 +7995,32 @@ class VideoWorker:
                     confidence=1.0,
                 )
 
+        normalized_legacy_stage = str(stage or "").strip().casefold()
         review_required = (
             normalized_status not in _PIPELINE_SUCCESS_STATUSES
             and (
-                str(stage or "").strip().casefold() == "transcription_review"
-                or "quality" in str(stage or "").casefold()
+                normalized_legacy_stage
+                in {"transcription_review", "source_selection_review"}
+                or "quality" in normalized_legacy_stage
             )
         )
-        error_class = "quality" if review_required else "transient"
-        error_code = (
-            "legacy_stage_review_required"
-            if review_required
-            else "legacy_stage_retryable_failure"
+        permanent_failure = (
+            normalized_status not in _PIPELINE_SUCCESS_STATUSES
+            and normalized_legacy_stage == "source_selection_unsupported"
         )
+        error_class = (
+            "quality" if review_required else ("permanent" if permanent_failure else "transient")
+        )
+        if review_required:
+            error_code = (
+                "source_selection_needs_review"
+                if normalized_legacy_stage == "source_selection_review"
+                else "legacy_stage_review_required"
+            )
+        elif permanent_failure:
+            error_code = "source_unsupported"
+        else:
+            error_code = "legacy_stage_retryable_failure"
         attempt = pipeline.transition_legacy_stage(
             job_id,
             stage,
@@ -8343,6 +8648,10 @@ class VideoWorker:
 
     @staticmethod
     def _stage_for_exception(exc: Exception) -> str:
+        if isinstance(exc, SourceSelectionReviewError):
+            return "source_selection_review"
+        if isinstance(exc, UnsupportedSourceError):
+            return "source_selection_unsupported"
         if VideoWorker._requires_asr_review(exc):
             return "transcription_review"
         module = exc.__class__.__module__
