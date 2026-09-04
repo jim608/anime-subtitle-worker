@@ -68,14 +68,42 @@ already-running job. The persisted policy is:
 | `duplicate_publish` | A destination collision or second publication cannot be matched to the same verified delivery evidence. | Immediate |
 | `output_parse_failure` | A prospective final output cannot be parsed or fails final publication revalidation. | Immediate |
 | `incorrect_completion` | Work reports success without the evidence required for a valid completed delivery. | Immediate |
-| `repeated_oom` | Consecutive failed observations are classified as GPU/process out-of-memory failures. | 3 consecutive failures |
-| `repeated_identical_stage_failure` | The same stage and normalized failure signature recur consecutively. | 3 consecutive failures |
+| `repeated_oom` | Distinct jobs consecutively report an eligible GPU/process out-of-memory failure. | 3 distinct jobs |
+| `repeated_identical_stage_failure` | Distinct jobs consecutively report the same eligible stage and normalized failure signature. | 3 distinct jobs |
 | `insufficient_disk_space` | Any required runtime volume is below the configured free-space floor or its capacity cannot be read. | Immediate at admission |
 
-A successful outcome resets both repeated-failure streaks. A non-OOM failure
-resets the OOM streak, and a different stage/failure signature starts a new
-identical-failure streak. The two repeated-failure thresholds are configured
-as `3` for this milestone.
+A successful or non-system outcome resets both repeated-failure streaks. A
+non-OOM system failure resets the OOM streak, and a different eligible
+stage/failure signature starts a new identical-failure streak. Each streak
+retains bounded stable-job identities. Retry replay, process-restart replay,
+terminal-observation replay, duplicate delivery-attempt evidence, and a new
+attempt for the same delivery obligation cannot increment it. The two
+distinct-job thresholds are configured as `3` for this milestone.
+
+## Failure classification and historical reconciliation
+
+| Category | Automatic disposition |
+| --- | --- |
+| `TRANSIENT` | Bounded retry/backoff from a compatible checkpoint or the failed stage. |
+| `RESOURCE` | Existing lower-memory/resource fallback, then bounded checkpoint/stage retry. |
+| `CODE_VERSION_FIXED` | Re-evaluate on the attested new runtime and resume the nearest compatible safe stage. |
+| `BAD_INPUT` | `UNSUPPORTED`, `QUARANTINED`, or `NEEDS_REVIEW`; never an unbounded retry. |
+| `QUALITY_BLOCKED` | `NEEDS_REVIEW` with preserved evidence; never false `COMPLETED`. |
+| `PERMANENT_SYSTEM_ERROR` | `FAILED` with evidence after recovery is not proven safe. |
+
+The durable recovery decisions are `RECOVER_FROM_CHECKPOINT`, `RETRY_STAGE`,
+`REPROCESS_FROM_SAFE_STAGE`, `REQUEUE_WITH_NEW_RUNTIME`,
+`KEEP_NEEDS_REVIEW`, `KEEP_QUARANTINED`, `MARK_UNSUPPORTED`, and
+`KEEP_FAILED`. Checkpoint JSON must be canonical and match its stored SHA-256.
+Stage-specific schema compatibility is checked before claiming checkpoint
+resume; an incompatible checkpoint is preserved as evidence while only its
+minimum safe stage is rerun.
+
+The recovery lane is a separate indexed SQLite ledger. It dispatches one exact
+item into the normal queue, marks the first item as the mandatory canary, and
+never enumerates the media tree. A repeated same-stage/signature failure on the
+same runtime with no new checkpoint is no progress. The job is not requeued
+after its bounded budget and the rest of the normal queue remains eligible.
 
 ## Persistence and evidence
 
@@ -160,8 +188,18 @@ synthetic terminal observations rather than by crashing production models.
 
 The breaker is latched and must not auto-reset. Recovery requires the cause to
 be understood and remediated first. Evidence must be archived, not discarded;
-running work must reach a safe boundary; checkpoints and queue state must be
-preserved; and the runtime must be probed again before admission resumes.
+fresh running work must reach a safe boundary; cutoff-proven stale work is
+terminalized as interrupted without deleting its checkpoint; and the runtime
+must be probed again before admission resumes.
+
+Production recovery uses `m2_guardrail_runtime.py recover`. It refuses an
+untripped or unsupported cause, unchanged Worker runtime, missing fresh 7/7
+evidence, mismatched runtime/config/Decision identity, active recent work,
+changed source identity, changed queue identity, changed checkpoint content,
+or changed formal-output evidence. It appends a recovery event and timestamped
+full log, invalidates the old Gate, and writes `DISARMED` before closing the
+latch. A second attested arm creates a new immutable `0/20` Gate; no deletion of
+the breaker file or observation rows is part of recovery.
 
 The isolated harness proves this sequence by requiring persisted reason
 evidence, moving only the sandbox latch to a recovery archive, writing a

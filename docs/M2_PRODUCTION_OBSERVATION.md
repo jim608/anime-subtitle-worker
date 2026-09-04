@@ -111,7 +111,7 @@ one ordinal and one stable job per Gate, and the next ordinal can never exceed
 20. Duplicate claims reuse the original slot. Jobs started before the new Gate,
 claims after slot 20, and claims after settlement are supplemental only.
 
-Observation schema version 3 is installed or migrated atomically. It binds a
+Observation schema version 4 is installed or migrated atomically. It binds a
 new Gate to the host-attested full Worker container ID plus an in-container
 identity/runtime-instance fingerprint. A restart of the same container keeps
 the binding; recreation is runtime drift and requires revalidation. Historical
@@ -192,6 +192,52 @@ invalidating it.
 The summary may contain counters, stage/error/reason codes, breaker state, and the observation window. It must not contain media titles, source paths, server addresses, ports, credentials, prompts, transcripts, subtitles, or raw exception/log text.
 
 Full operational logs remain on the server under the configured log retention policy. Successful work must emit only the bounded gate summary to the observation channel; full logs must not be copied into a conversation.
+
+## 2026-09-05 production breaker incident and recovery contract
+
+The active pre-recovery runtime reported Worker commit
+`45b61eb7da3c7e88fce70e1bea9573ad930e2a21`, Gate
+`m2-gate-20260904T163053158998Z-f3076238c7`, baseline
+`m2-guardrail-v1:82e3cddd091fdb8bdd6a1714`, and a durably latched
+`repeated_identical_stage_failure`. The three observations ran from
+`2026-09-04T16:34:31.252117Z` through `2026-09-04T16:37:15.476726Z`. They had
+three distinct delivery obligations, the same `source_selection_review` stage,
+the same `source_selection_needs_review` error code, and attempt number 2.
+
+The durable pipeline records had already classified all three as
+`NEEDS_REVIEW`; the compatibility queue/result adapter instead wrote
+`failed_retry` / `retryable_failure`. The observation layer then treated those
+expected review outcomes as system failures. This was not a single-job replay,
+a permanently corrupt input, or evidence that the source media changed. It was
+a state-classification defect at the legacy queue boundary, combined with a
+breaker streak that did not retain distinct stable-job identities.
+
+The recovery implementation makes `manual_review` a terminal
+`NEEDS_REVIEW`/`review_required` result and excludes `QUALITY_BLOCKED` and
+`BAD_INPUT` outcomes from the repeated-system-failure streak. Repeated OOM and
+identical-stage counters now retain a bounded set of stable delivery-obligation
+identities. Replays and later attempts for the same obligation cannot increase
+the global streak; three distinct jobs with the same eligible runtime failure
+still trip the breaker.
+
+Historical reconciliation is stored in the scanner WAL database. It reads only
+indexed queue, delivery, pipeline, attempt, and checkpoint records and never
+walks the media library. Each candidate retains its prior state, normalized
+failure category/signature, original/current versions, checkpoint evidence and
+compatibility, recovery decision/reason, minimum resume stage, budget, attempt
+count, no-progress history, and lane status. The first recoverable item is a
+single canary; later dispatch remains one-at-a-time and uses the existing
+resource-admission and single-Worker boundary.
+
+The controlled `m2_guardrail_runtime.py recover` path is fail-closed. It
+requires a new attested runtime and fresh 7/7 isolated breaker result, validates
+the existing trip and distinct-job incident evidence, rejects fresh running
+work, preserves stale-work checkpoints, compares queue identity/checkpoint and
+formal-output ledger digests before and after reconciliation, verifies the
+exact affected source identities, invalidates the old Gate as
+`INVALIDATED_BY_RUNTIME_CHANGE`, journals an immutable recovery record, and
+only then clears the latch into `DISARMED` pending a new Gate. Re-arming creates
+the new baseline at `0/20`; recovery never mixes versions into the old Gate.
 
 ## Automatic circuit breaker
 

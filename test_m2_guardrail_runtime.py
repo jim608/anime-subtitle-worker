@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -778,6 +779,208 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
                 self.config,
                 Path(self.temp.name) / "outside.json",
             )
+
+
+class M2ControlledRecoveryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.work = self.root / "work"
+        self.logs = self.root / "logs"
+        self.output = self.root / "formal-output"
+        self.runtime_app = self.root / "runtime-app"
+        for path in (self.work, self.logs, self.output, self.runtime_app):
+            path.mkdir(parents=True, exist_ok=True)
+        (self.runtime_app / "requirements.txt").write_text("example==1\n", encoding="utf-8")
+        (self.runtime_app / "worker.py").write_text("VALUE = 2\n", encoding="utf-8")
+        self.revision = self.work / ".source-revision"
+        self.revision.write_text("a" * 64 + "\n", encoding="utf-8")
+        self.identity = self.work / "container-identity"
+        self.identity.write_text("unit-test-recovery-worker\n", encoding="utf-8")
+        (self.work / "ai_control.json").write_text(
+            json.dumps({"paused": True, "updated_at": time.time(), "requested_by": "test"}),
+            encoding="utf-8",
+        )
+        self.config = SimpleNamespace(
+            work_path=self.work,
+            log_path=self.logs,
+            input_path=self.root,
+            completed_delivery_path=self.output,
+            scanner_state_path=self.work / "scanner.sqlite3",
+            m2_guardrail_runtime_state_path=self.work / "runtime.json",
+            m2_guardrail_source_revision_file=self.revision,
+            m2_guardrail_container_identity_file=self.identity,
+            m2_guardrail_runtime_app_root=self.runtime_app,
+            m2_server_canary_observer_enabled=True,
+            m2_server_canary_observation_gate_size=20,
+            m2_server_canary_observation_state_path=self.work / "observation.json",
+            m2_server_canary_observation_output_dir=self.work / "observations",
+            m2_server_canary_circuit_breaker_enabled=True,
+            m2_server_canary_circuit_breaker_state_path=self.work / "breaker.json",
+            m2_server_canary_repeated_oom_threshold=3,
+            m2_server_canary_identical_failure_threshold=3,
+            m2_recovery_enabled=True,
+            m2_recovery_retry_budget=2,
+            m2_recovery_stale_running_seconds=900,
+            source_integrity_sha256_enabled=True,
+            source_analyzer_version="m2-source-analyzer-v1",
+            source_decision_schema_version=DECISION_SCHEMA_VERSION,
+            source_decision_version=DECISION_VERSION,
+            max_concurrent_videos=1,
+        )
+        import m2_production_observation as observation
+
+        observation._PROCESS_LOCAL_CIRCUIT_OPEN = False
+        observation._PROCESS_LOCAL_CIRCUIT_OPEN_AT = 0.0
+
+    def _fault_results(self, finished_at: float) -> dict[str, object]:
+        return {
+            "contract": runtime.FAULT_RESULT_CONTRACT,
+            "passed_count": len(runtime.REQUIRED_BREAKERS),
+            "required_count": len(runtime.REQUIRED_BREAKERS),
+            "worker_source_revision": "a" * 64,
+            "container_started_at_epoch": finished_at - 3,
+            "started_at_epoch": finished_at - 2,
+            "finished_at_epoch": finished_at - 1,
+            "summary_sha256": "sha256:" + "5" * 64,
+            "full_log_sha256": "sha256:" + "6" * 64,
+            "production_resources_affected": False,
+        }
+
+    def _evidence(self, worker_commit: str, finished_at: float) -> dict[str, object]:
+        return {
+            "worker_commit_sha": worker_commit,
+            "webui_commit_sha": "7" * 40,
+            "worker_source_revision": "a" * 64,
+            "worker_runtime_code_revision": runtime.worker_runtime_code_revision(
+                self.config
+            ),
+            "webui_source_revision": "8" * 64,
+            "worker_image_id": "sha256:" + "9" * 64,
+            "webui_image_id": "sha256:" + "c" * 64,
+            "worker_container_id": "d" * 64,
+            "worker_container_identity": "unit-test-recovery-worker",
+            "worker_runtime_instance_fingerprint": runtime.worker_runtime_instance_fingerprint(
+                self.config
+            )["runtime_instance_fingerprint"],
+            "configuration_fingerprint": runtime.configuration_fingerprint(self.config),
+            "decision": runtime._decision_descriptor(self.config),
+            "fault_results": self._fault_results(finished_at),
+            "runtime_checks": {
+                "worker_container_running": True,
+                "webui_container_running": True,
+                "worker_config_mount_readonly": True,
+                "worker_command_uses_config": True,
+                "worker_config_unchanged_since_start": True,
+            },
+        }
+
+    def test_controlled_recovery_invalidates_gate_and_preserves_resources(self) -> None:
+        from m2_observation_store import latest_gate
+        import m2_production_observation as observation
+        from scan_state import ScanStateStore
+
+        state = ScanStateStore(Path(self.config.scanner_state_path))
+        source_digests: dict[str, str] = {}
+        for index in range(3):
+            media = self.root / f"incident-{index}.mkv"
+            media.write_bytes(f"immutable-source-{index}".encode("utf-8"))
+            source_digests[str(media.resolve())] = hashlib.sha256(media.read_bytes()).hexdigest()
+            stat = media.stat()
+            state.upsert_ai_queue_candidate(media, stat.st_mtime_ns)
+            state.mark_ai_queue_running(media)
+            state.mark_ai_queue_failed(
+                media,
+                "source selection needs review",
+                max_attempts=3,
+                error_code="source_selection_needs_review",
+                retry_strategy="manual_review",
+            )
+            state._conn.execute(
+                "UPDATE ai_job_state SET stage='source_selection_review',status='failed',"
+                "message='source selection needs review' WHERE path=?",
+                (str(media.resolve()),),
+            )
+            obligation = state.ensure_ai_delivery_obligation(
+                media,
+                media_size=stat.st_size,
+                media_mtime_ns=stat.st_mtime_ns,
+                policy_revision="recovery-test",
+            )
+            attempt = state.begin_ai_delivery_attempt(str(obligation["obligation_id"]))
+            state.finish_ai_delivery_attempt(
+                str(attempt["attempt_id"]),
+                status="retryable_failure",
+                stage="source_selection_review",
+                error_code="source_selection_needs_review",
+                detail="source selection needs review",
+            )
+        state.commit()
+        formal = self.output / "sentinel.ass"
+        formal.write_text("immutable-formal-output", encoding="utf-8")
+        formal_digest = hashlib.sha256(formal.read_bytes()).hexdigest()
+        gate_time = time.time() - 1
+        old_runtime = runtime.initialize_gate(
+            self.config,
+            self._evidence("1" * 40, gate_time),
+            source_revision_file=self.revision,
+            now=gate_time,
+        )
+        old_gate = str(old_runtime["gate"]["gate_id"])
+        observation.trip_circuit_breaker(
+            self.config,
+            "repeated_identical_stage_failure",
+            evidence={
+                "stage": "source_selection_review",
+                "error_code": "source_selection_needs_review",
+                "identical_failure_streak": 3,
+            },
+        )
+        state.close()
+        evidence = self._evidence("2" * 40, time.time())
+        evidence["root_cause"] = {
+            "breaker_reason": "repeated_identical_stage_failure",
+            "affected_stage": "source_selection_review",
+            "failure_code": "source_selection_needs_review",
+            "expected_old_gate_id": old_gate,
+        }
+
+        result = runtime.recover_runtime_local(
+            self.config,
+            evidence,
+            source_revision_file=self.revision,
+        )
+
+        self.assertEqual(result["status"], "DISARMED")
+        self.assertEqual(result["breaker_before"], "TRIPPED")
+        self.assertFalse(observation.circuit_breaker_active(self.config))
+        persisted = runtime.load_runtime_state(self.config)
+        self.assertEqual(persisted["status"], "DISARMED")
+        reopened = ScanStateStore(Path(self.config.scanner_state_path))
+        try:
+            gate = latest_gate(reopened.observation_connection)
+            self.assertEqual(gate["gate_id"], old_gate)
+            self.assertEqual(gate["status"], "INVALIDATED_BY_RUNTIME_CHANGE")
+            counts = dict(
+                reopened.observation_connection.execute(
+                    "SELECT status,COUNT(1) FROM m2_recovery_jobs GROUP BY status"
+                ).fetchall()
+            )
+            self.assertEqual(counts.get("EXCLUDED"), 3)
+            queue_counts = dict(
+                reopened.observation_connection.execute(
+                    "SELECT status,COUNT(1) FROM ai_candidate_queue GROUP BY status"
+                ).fetchall()
+            )
+            self.assertEqual(queue_counts.get("paused"), 3)
+        finally:
+            reopened.close()
+        for path, digest in source_digests.items():
+            self.assertEqual(hashlib.sha256(Path(path).read_bytes()).hexdigest(), digest)
+        self.assertEqual(hashlib.sha256(formal.read_bytes()).hexdigest(), formal_digest)
+        self.assertTrue(Path(result["log_path"]).is_file())
+        self.assertFalse(result["production_resources_affected"])
 
 
 if __name__ == "__main__":

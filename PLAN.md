@@ -50,6 +50,11 @@ M2 translation quality, Translation Memory, full QC redesign and WebUI work are 
 - [x] Durably invalidate an active gate as `INVALIDATED_BY_RUNTIME_CHANGE`, with expected/actual evidence and no mixed-baseline admission.
 - [x] Add the atomic observation schema-v2 migration, including container-instance identity and canonical result-event payload/digest verification, while preserving version-1 Gate history.
 - [x] Pass the focused repository candidate suites: 24 frozen-cohort/schema/event-journal cases, 11 recovery/replay cases, and the isolated 7-breaker harness.
+- [x] Isolate the live `repeated_identical_stage_failure` cause to three distinct `source_selection_needs_review` outcomes that the pipeline correctly held in `NEEDS_REVIEW` but the legacy queue adapter mislabeled as retryable failures.
+- [x] Add the six-way failure taxonomy, version-aware historical reconciliation, compatible-checkpoint/minimum-safe-stage decisions, bounded no-progress budget, and a restart-persistent single-canary recovery lane using indexed Job Store state only.
+- [x] Make repeated OOM/identical-stage streaks distinct-job aware and replay-idempotent, while keeping three distinct systemic failures fail-closed.
+- [x] Add the evidence-bound `m2_guardrail_runtime.py recover` flow: preserve trip evidence, verify runtime/queue/checkpoint/source/output identities, invalidate the old Gate, journal recovery, and require a new attested `0/20` Gate before claims resume.
+- [x] Pass the 2026-09-05 recovery candidate regression: 1,720 tests run, OK with one conditional skip.
 - [ ] While claims are paused, deploy this repository candidate, apply the exact former-Gate invalidation, rerun the focused regression and seven-breaker suite in the new server image, and verify the live runtime remains `ARMED`.
 - [ ] Create a new deployment-bound Gate ID/baseline/start timestamp at `0/20`, then resume claims without waiting for the cohort to finish.
 

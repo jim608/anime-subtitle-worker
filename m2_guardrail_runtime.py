@@ -13,12 +13,14 @@ import subprocess
 import sys
 import time
 from typing import Any, Callable, Mapping, Sequence
+import uuid
 
 from safe_files import atomic_write_text, sha256_file
 
 
 RUNTIME_SCHEMA_VERSION = 1
 RUNTIME_CONTRACT = "m2-guardrail-runtime-v1"
+BREAKER_RECOVERY_CONTRACT = "m2-controlled-breaker-recovery-v1"
 FAULT_RESULT_CONTRACT = "m2-isolated-circuit-breaker-test-v1"
 RUNTIME_STATUSES = frozenset({"ARMED", "DISARMED", "TRIPPED", "DEGRADED"})
 REQUIRED_BREAKERS = (
@@ -892,6 +894,689 @@ def gate_claim_eligible(
     return True, "eligible"
 
 
+def _durable_recovery_snapshot(connection: sqlite3.Connection) -> dict[str, Any]:
+    """Hash durable identities that recovery is forbidden to change."""
+
+    def digest_rows(query: str) -> tuple[int, str]:
+        digest = hashlib.sha256()
+        count = 0
+        for row in connection.execute(query):
+            digest.update(
+                json.dumps(
+                    list(row),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
+            digest.update(b"\n")
+            count += 1
+        return count, "sha256:" + digest.hexdigest()
+
+    queue_count, queue_identity = digest_rows(
+        "SELECT path,mtime_ns FROM ai_candidate_queue ORDER BY path COLLATE NOCASE"
+    )
+    checkpoint_count, checkpoint_identity = digest_rows(
+        """
+        SELECT stage_attempt_id,job_id,stage,checkpoint_json,checkpoint_sha256
+        FROM pipeline_stage_attempts
+        WHERE checkpoint_sha256<>'' OR checkpoint_json<>'{}'
+        ORDER BY stage_attempt_id
+        """
+    )
+    output_count, output_identity = digest_rows(
+        """
+        SELECT obligation_id,state,manifest_path,manifest_sha256,verification_json
+        FROM ai_delivery_obligations
+        WHERE manifest_path<>'' OR manifest_sha256<>'' OR state='verified'
+        ORDER BY obligation_id
+        """
+    )
+    queue_states = {
+        str(row[0]): int(row[1])
+        for row in connection.execute(
+            "SELECT status,COUNT(1) FROM ai_candidate_queue GROUP BY status"
+        ).fetchall()
+    }
+    return {
+        "queue_count": queue_count,
+        "queue_identity_sha256": queue_identity,
+        "queue_status_counts": queue_states,
+        "checkpoint_count": checkpoint_count,
+        "checkpoint_identity_sha256": checkpoint_identity,
+        "formal_output_record_count": output_count,
+        "formal_output_identity_sha256": output_identity,
+    }
+
+
+def _breaker_incident_sources(
+    connection: sqlite3.Connection,
+    *,
+    stage: str,
+    error_code: str,
+    tripped_at: float,
+    threshold: int,
+) -> dict[str, Any]:
+    """Verify the distinct jobs behind a repeated-failure trip without a media walk."""
+
+    rows = connection.execute(
+        """
+        SELECT a.attempt_id,a.obligation_id,a.attempt_number,a.finished_at,
+               o.canonical_path,o.media_fingerprint,o.media_size,o.media_mtime_ns
+        FROM ai_delivery_attempts a
+        JOIN ai_delivery_obligations o ON o.obligation_id=a.obligation_id
+        WHERE a.stage=? AND a.error_code=?
+          AND a.status IN ('failed','retryable_failure','review_required')
+          AND a.finished_at>0 AND a.finished_at<=?
+          AND a.finished_at>=?
+        ORDER BY a.finished_at DESC,a.attempt_id DESC
+        LIMIT 200
+        """,
+        (str(stage), str(error_code), float(tripped_at) + 5.0, float(tripped_at) - 3600.0),
+    ).fetchall()
+    selected: list[tuple[Any, ...]] = []
+    obligations: set[str] = set()
+    for row in rows:
+        obligation_id = str(row[1] or "")
+        if obligation_id in obligations:
+            continue
+        selected.append(row)
+        obligations.add(obligation_id)
+        if len(selected) >= max(1, int(threshold)):
+            break
+    if len(selected) < max(1, int(threshold)):
+        raise RuntimeContractError("breaker_distinct_job_evidence_incomplete")
+    source_records: list[dict[str, Any]] = []
+    for row in reversed(selected):
+        path = Path(str(row[4]))
+        try:
+            stat = path.stat()
+        except OSError as exc:
+            raise RuntimeContractError("breaker_source_identity_unavailable") from exc
+        if int(stat.st_size) != int(row[6] or 0) or int(stat.st_mtime_ns) != int(row[7] or 0):
+            raise RuntimeContractError("breaker_source_identity_changed")
+        source_records.append(
+            {
+                "attempt_key": _job_key(row[0]),
+                "obligation_key": _job_key(row[1]),
+                "attempt_number": int(row[2] or 0),
+                "finished_at_epoch": float(row[3] or 0),
+                "path_key": _job_key(str(path)),
+                "media_fingerprint": str(row[5] or ""),
+                "media_size": int(row[6] or 0),
+                "media_mtime_ns": int(row[7] or 0),
+            }
+        )
+    encoded = json.dumps(source_records, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    return {
+        "affected_stage": str(stage),
+        "error_code": str(error_code),
+        "distinct_job_count": len(source_records),
+        "same_job_replay_count": max(0, len(rows) - len(obligations)),
+        "first_failure_at_epoch": min(item["finished_at_epoch"] for item in source_records),
+        "last_failure_at_epoch": max(item["finished_at_epoch"] for item in source_records),
+        "source_identity_sha256": "sha256:" + hashlib.sha256(encoded).hexdigest(),
+        "sources": source_records,
+    }
+
+
+def recover_runtime_local(
+    config: Any,
+    evidence: Mapping[str, Any],
+    *,
+    source_revision_file: str | Path = "/app/.source-revision",
+    state_path_override: str | Path | None = None,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """Perform one fail-closed, evidence-bound breaker recovery inside Worker."""
+
+    timestamp = time.time() if now is None else float(now)
+    if not math.isfinite(timestamp) or timestamp <= 0:
+        raise RuntimeContractError("recovery_timestamp_invalid")
+    if not bool(getattr(config, "m2_recovery_enabled", False)):
+        raise RuntimeContractError("m2_recovery_policy_not_loaded")
+    decision = _decision_descriptor(config)
+    local_status, reason_code = _local_guardrail_status(config, decision)
+    if local_status != "TRIPPED":
+        raise RuntimeContractError("breaker_not_tripped", status=local_status)
+    if reason_code != "circuit_breaker_tripped":
+        raise RuntimeContractError("breaker_status_unexpected", status=local_status)
+
+    worker_commit = _require_sha(evidence.get("worker_commit_sha"), "worker_commit")
+    _require_sha(evidence.get("webui_commit_sha"), "webui_commit")
+    _require_image_id(evidence.get("worker_image_id"), "worker")
+    _require_image_id(evidence.get("webui_image_id"), "webui")
+    _require_container_id(evidence.get("worker_container_id"), "worker")
+    _require_source_revision(evidence.get("webui_source_revision"), "webui")
+    expected_source = _require_source_revision(
+        evidence.get("worker_source_revision"), "worker"
+    )
+    if _read_source_revision(source_revision_file) != expected_source:
+        raise RuntimeContractError("worker_source_revision_mismatch")
+    if worker_runtime_code_revision(config) != _require_source_revision(
+        evidence.get("worker_runtime_code_revision"), "worker_runtime_code"
+    ):
+        raise RuntimeContractError("worker_runtime_code_revision_mismatch")
+    if configuration_fingerprint(config) != str(
+        evidence.get("configuration_fingerprint") or ""
+    ):
+        raise RuntimeContractError("configuration_fingerprint_mismatch")
+    if evidence.get("decision") != decision:
+        raise RuntimeContractError("decision_schema_mismatch")
+    runtime_checks = evidence.get("runtime_checks")
+    if not isinstance(runtime_checks, Mapping) or any(
+        runtime_checks.get(key) is not True
+        for key in (
+            "worker_container_running",
+            "webui_container_running",
+            "worker_config_mount_readonly",
+            "worker_command_uses_config",
+            "worker_config_unchanged_since_start",
+        )
+    ):
+        raise RuntimeContractError("runtime_container_contract_unproven")
+    live_instance = worker_runtime_instance_fingerprint(config)
+    if live_instance["container_identity"] != _require_container_identity(
+        evidence.get("worker_container_identity"), "worker"
+    ):
+        raise RuntimeContractError("worker_container_identity_mismatch")
+    if live_instance["runtime_instance_fingerprint"] != str(
+        evidence.get("worker_runtime_instance_fingerprint") or ""
+    ):
+        raise RuntimeContractError("worker_runtime_instance_mismatch")
+    fault_results = evidence.get("fault_results")
+    if (
+        not isinstance(fault_results, Mapping)
+        or fault_results.get("contract") != FAULT_RESULT_CONTRACT
+        or int(fault_results.get("passed_count") or 0) != len(REQUIRED_BREAKERS)
+        or int(fault_results.get("required_count") or 0) != len(REQUIRED_BREAKERS)
+        or fault_results.get("worker_source_revision") != expected_source
+        or fault_results.get("production_resources_affected") is not False
+    ):
+        raise RuntimeContractError("recovery_fault_evidence_invalid")
+
+    root_cause = evidence.get("root_cause")
+    if not isinstance(root_cause, Mapping):
+        raise RuntimeContractError("recovery_root_cause_missing")
+    expected_reason = _safe_code(
+        root_cause.get("breaker_reason"), "recovery_reason_missing"
+    )
+    affected_stage = _safe_code(root_cause.get("affected_stage"), "stage_missing")
+    failure_code = _safe_code(root_cause.get("failure_code"), "failure_code_missing")
+    if expected_reason != "repeated_identical_stage_failure":
+        raise RuntimeContractError("unsupported_breaker_recovery_reason")
+    from m2_production_recovery import (
+        breaker_streak_eligible,
+        classify_failure,
+        normalize_failure_signature,
+        reconcile_historical_jobs,
+        record_breaker_recovery,
+    )
+
+    category = classify_failure(affected_stage, failure_code)
+    if category != "QUALITY_BLOCKED" or breaker_streak_eligible(
+        {
+            "terminal_status": "RETRYING",
+            "stage": affected_stage,
+            "error_code": failure_code,
+        }
+    ):
+        raise RuntimeContractError("breaker_root_cause_fix_not_loaded")
+
+    state_path = runtime_state_path(config, state_path_override)
+    prior_runtime = load_runtime_state(config, state_path_override)
+    if not isinstance(prior_runtime, dict):
+        raise RuntimeContractError("prior_runtime_state_missing")
+    prior_baseline = prior_runtime.get("baseline")
+    prior_gate = prior_runtime.get("gate")
+    if not isinstance(prior_baseline, Mapping) or not isinstance(prior_gate, Mapping):
+        raise RuntimeContractError("prior_runtime_state_invalid")
+    old_worker_commit = _require_sha(
+        prior_baseline.get("worker_commit_sha"), "prior_worker_commit"
+    )
+    if old_worker_commit == worker_commit:
+        raise RuntimeContractError("recovery_requires_new_worker_runtime")
+    expected_old_gate = str(root_cause.get("expected_old_gate_id") or "")
+    if expected_old_gate and str(prior_gate.get("gate_id") or "") != expected_old_gate:
+        raise RuntimeContractError("prior_gate_identity_mismatch")
+
+    breaker_path = Path(
+        str(getattr(config, "m2_server_canary_circuit_breaker_state_path", ""))
+    )
+    if not breaker_path.is_absolute():
+        breaker_path = Path(config.work_path) / breaker_path
+    breaker = _read_json(breaker_path)
+    if not isinstance(breaker, dict) or breaker.get("tripped") is not True:
+        raise RuntimeContractError("breaker_evidence_missing")
+    reasons = breaker.get("reasons")
+    if not isinstance(reasons, list) or not any(
+        isinstance(item, Mapping) and item.get("reason_code") == expected_reason
+        for item in reasons
+    ):
+        raise RuntimeContractError("breaker_reason_mismatch")
+    try:
+        tripped_at = float(breaker.get("tripped_at"))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeContractError("breaker_timestamp_invalid") from exc
+
+    from m2_observation_store import (
+        INVALIDATED_RUNTIME,
+        active_gate,
+        invalidate_active_gate,
+        latest_gate,
+        reset_failure_streaks,
+    )
+    from pipeline_state import PIPELINE_SCHEMA_VERSION
+    from scan_state import ScanStateStore
+
+    store = ScanStateStore.from_config(config)
+    recovery_record_id = "m2breakerrec_" + uuid.uuid4().hex
+    try:
+        connection = store.observation_connection
+        connection.execute("BEGIN IMMEDIATE")
+        stale_seconds = int(
+            getattr(config, "m2_recovery_stale_running_seconds", 21600) or 21600
+        )
+        stale_before = timestamp - max(60, stale_seconds)
+        fresh_delivery = int(
+            connection.execute(
+                "SELECT COUNT(1) FROM ai_delivery_attempts "
+                "WHERE status='running' AND updated_at>?",
+                (stale_before,),
+            ).fetchone()[0]
+        )
+        fresh_pipeline = int(
+            connection.execute(
+                "SELECT COUNT(1) FROM pipeline_stage_attempts "
+                "WHERE status='RUNNING' AND heartbeat_at>?",
+                (stale_before,),
+            ).fetchone()[0]
+        )
+        if fresh_delivery or fresh_pipeline:
+            raise RuntimeContractError("running_work_has_not_reached_safe_boundary")
+        before = _durable_recovery_snapshot(connection)
+        incident = _breaker_incident_sources(
+            connection,
+            stage=affected_stage,
+            error_code=failure_code,
+            tripped_at=tripped_at,
+            threshold=int(
+                getattr(config, "m2_server_canary_identical_failure_threshold", 3)
+                or 3
+            ),
+        )
+        active = active_gate(connection)
+        if active is not None:
+            if expected_old_gate and str(active.get("gate_id") or "") != expected_old_gate:
+                raise RuntimeContractError("active_gate_identity_mismatch")
+            invalidated = invalidate_active_gate(
+                connection,
+                INVALIDATED_RUNTIME,
+                evidence={
+                    "recovery_record_id": recovery_record_id,
+                    "old_worker_sha": old_worker_commit,
+                    "new_worker_sha": worker_commit,
+                    "breaker_reason": expected_reason,
+                },
+                now=timestamp,
+            )
+        else:
+            invalidated = latest_gate(connection)
+            if (
+                not isinstance(invalidated, Mapping)
+                or invalidated.get("status") != INVALIDATED_RUNTIME
+                or (expected_old_gate and invalidated.get("gate_id") != expected_old_gate)
+            ):
+                raise RuntimeContractError("active_gate_missing_for_recovery")
+        recovery = reconcile_historical_jobs(
+            connection,
+            current_worker_version=worker_commit,
+            current_analyzer_version=str(
+                getattr(config, "source_analyzer_version", "unknown") or "unknown"
+            ),
+            current_decision_schema_version=int(
+                getattr(config, "source_decision_schema_version", 0) or 0
+            ),
+            current_checkpoint_schema_version=PIPELINE_SCHEMA_VERSION,
+            retry_budget=int(getattr(config, "m2_recovery_retry_budget", 2) or 2),
+            stale_after_seconds=int(
+                stale_seconds
+            ),
+            now=timestamp,
+            evidence={
+                "recovery_record_id": recovery_record_id,
+                "breaker_reason": expected_reason,
+                "normalized_failure_signature": normalize_failure_signature(
+                    affected_stage, failure_code
+                ),
+            },
+        )
+        reset_failure_streaks(connection)
+        after = _durable_recovery_snapshot(connection)
+        for key in (
+            "queue_count",
+            "queue_identity_sha256",
+            "checkpoint_count",
+            "checkpoint_identity_sha256",
+            "formal_output_record_count",
+            "formal_output_identity_sha256",
+        ):
+            if before[key] != after[key]:
+                raise RuntimeContractError(f"recovery_{key}_changed")
+        source_after = _breaker_incident_sources(
+            connection,
+            stage=affected_stage,
+            error_code=failure_code,
+            tripped_at=tripped_at,
+            threshold=int(
+                getattr(config, "m2_server_canary_identical_failure_threshold", 3)
+                or 3
+            ),
+        )
+        if source_after["source_identity_sha256"] != incident["source_identity_sha256"]:
+            raise RuntimeContractError("recovery_source_identity_changed")
+        recovery_evidence = {
+            "contract": BREAKER_RECOVERY_CONTRACT,
+            "recovery_record_id": recovery_record_id,
+            "recovered_at_epoch": timestamp,
+            "breaker_reason": expected_reason,
+            "affected_stage": affected_stage,
+            "failure_code": failure_code,
+            "failure_category": category,
+            "normalized_failure_signature": normalize_failure_signature(
+                affected_stage, failure_code
+            ),
+            "old_worker_sha": old_worker_commit,
+            "new_worker_sha": worker_commit,
+            "old_gate_id": str(invalidated.get("gate_id") or ""),
+            "old_gate_status": str(invalidated.get("status") or ""),
+            "queue_identity_preserved": True,
+            "checkpoint_identity_preserved": True,
+            "source_identity_preserved": True,
+            "formal_output_identity_preserved": True,
+            "production_resources_affected": False,
+            "before": before,
+            "after": after,
+            "incident": incident,
+            "reconciliation": recovery,
+        }
+        record_breaker_recovery(
+            connection,
+            recovery_record_id=recovery_record_id,
+            evidence=recovery_evidence,
+            now=timestamp,
+        )
+        connection.commit()
+    except BaseException:
+        store.rollback()
+        raise
+    finally:
+        store.close()
+
+    stamp = datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    log_root = Path(str(getattr(config, "log_path", config.work_path)))
+    log_path = log_root / f"m2-production-recovery-{stamp}-{recovery_record_id[-8:]}.json"
+    atomic_write_text(
+        log_path,
+        json.dumps(recovery_evidence, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+    )
+    disarmed_state = dict(prior_runtime)
+    disarmed_state.update(
+        {
+            "status": "DISARMED",
+            "disarmed_at": _utc_timestamp(timestamp),
+            "disarm_reason": "controlled_breaker_recovery_pending_new_gate",
+            "recovery_record": {
+                "contract": BREAKER_RECOVERY_CONTRACT,
+                "recovery_record_id": recovery_record_id,
+                "recovered_at_epoch": timestamp,
+                "log_sha256": "sha256:" + sha256_file(log_path),
+            },
+        }
+    )
+    atomic_write_text(
+        state_path,
+        json.dumps(disarmed_state, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+    )
+    archive_path = breaker_path.with_name(
+        f"{breaker_path.stem}.tripped-{stamp}-{recovery_record_id[-8:]}.json"
+    )
+    atomic_write_text(
+        archive_path,
+        json.dumps(breaker, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+    )
+    breaker_recovery_record = {
+        "contract": BREAKER_RECOVERY_CONTRACT,
+        "recovery_record_id": recovery_record_id,
+        "recovered_at": _utc_timestamp(timestamp),
+        "recovered_at_epoch": timestamp,
+        "old_worker_sha": old_worker_commit,
+        "new_worker_sha": worker_commit,
+        "old_gate_id": str(recovery_evidence["old_gate_id"]),
+        "log_sha256": "sha256:" + sha256_file(log_path),
+    }
+    cleared_breaker = dict(breaker)
+    cleared_breaker.update(
+        {
+            "status": "ARMED",
+            "tripped": False,
+            "updated_at": timestamp,
+            "action": "allow_new_claims_after_new_gate_is_armed",
+            "recovery_record": breaker_recovery_record,
+        }
+    )
+    atomic_write_text(
+        breaker_path,
+        json.dumps(cleared_breaker, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+    )
+    return {
+        "status": "DISARMED",
+        "recovery_record_id": recovery_record_id,
+        "old_worker_sha": old_worker_commit,
+        "new_worker_sha": worker_commit,
+        "old_gate_id": str(recovery_evidence["old_gate_id"]),
+        "old_gate_status": str(recovery_evidence["old_gate_status"]),
+        "breaker_before": "TRIPPED",
+        "breaker_after": "ARMED_PENDING_NEW_GATE",
+        "log_path": str(log_path),
+        "log_sha256": "sha256:" + sha256_file(log_path),
+        "reconciliation": recovery,
+        "production_resources_affected": False,
+    }
+
+
+def recover_runtime_on_host(
+    *,
+    docker_binary: str,
+    worker_container: str,
+    webui_container: str,
+    expected_worker_commit_sha: str,
+    expected_webui_commit_sha: str,
+    expected_old_gate_id: str,
+    expected_breaker_reason: str,
+    affected_stage: str,
+    failure_code: str,
+    fault_summary_path: str,
+    worker_repo: str | Path = ".",
+    webui_repo: str | Path = "../anime-subtitle-worker-webui",
+    worker_config_path: str = "/app/config.yaml",
+    worker_source_revision_file: str = "/app/.source-revision",
+    webui_source_revision_file: str = "/app/.source-revision",
+    runtime_state_path_override: str = "",
+    runner: CommandRunner | None = None,
+) -> dict[str, Any]:
+    """Attest, recover, re-arm, and seed one recovery canary without waiting."""
+
+    worker_name = _require_container_name(worker_container)
+    webui_name = _require_container_name(webui_container)
+    wanted_worker_commit = _require_sha(expected_worker_commit_sha, "worker_commit")
+    wanted_webui_commit = _require_sha(expected_webui_commit_sha, "webui_commit")
+    run = runner or _default_runner
+    worker_commit = _clean_git_commit(worker_repo, run, "worker")
+    webui_commit = _clean_git_commit(webui_repo, run, "webui")
+    if worker_commit != wanted_worker_commit:
+        raise RuntimeContractError("worker_commit_sha_mismatch")
+    if webui_commit != wanted_webui_commit:
+        raise RuntimeContractError("webui_commit_sha_mismatch")
+    worker_source_revision = compute_worker_source_revision(worker_repo)
+    worker_runtime_code_revision_expected = compute_worker_runtime_code_revision(
+        worker_repo
+    )
+    webui_source_revision = compute_webui_source_revision(webui_repo)
+    worker_inspect = _inspect_container(docker_binary, worker_name, run)
+    webui_inspect = _inspect_container(docker_binary, webui_name, run)
+    if not _container_running(worker_inspect):
+        raise RuntimeContractError("worker_container_not_running")
+    if not _container_running(webui_inspect):
+        raise RuntimeContractError("webui_container_not_running")
+    worker_started_epoch = _container_started_epoch(worker_inspect, "worker")
+    if not _readonly_mount(worker_inspect, worker_config_path):
+        raise RuntimeContractError("worker_config_mount_not_readonly")
+    if not _worker_command_uses_config(worker_inspect, worker_config_path):
+        raise RuntimeContractError("worker_command_config_mismatch")
+    if not _worker_config_unchanged_since_start(worker_inspect, worker_config_path):
+        raise RuntimeContractError("worker_config_changed_after_start")
+    worker_container_config = worker_inspect.get("Config")
+    worker_container_identity = _require_container_identity(
+        worker_container_config.get("Hostname")
+        if isinstance(worker_container_config, Mapping)
+        else "",
+        "worker",
+    )
+    probe_result = _run_json(
+        [
+            docker_binary,
+            "exec",
+            worker_name,
+            "python",
+            "/app/m2_guardrail_runtime.py",
+            "probe",
+            "--config",
+            worker_config_path,
+            "--source-revision-file",
+            worker_source_revision_file,
+            "--fault-summary",
+            fault_summary_path,
+            "--fault-not-before-epoch",
+            repr(worker_started_epoch),
+        ],
+        run,
+        "worker_recovery_probe_failed",
+    )
+    if probe_result.get("status") != "TRIPPED":
+        raise RuntimeContractError("worker_breaker_not_tripped")
+    if probe_result.get("worker_source_revision") != worker_source_revision:
+        raise RuntimeContractError("worker_source_revision_mismatch")
+    if (
+        probe_result.get("worker_runtime_code_revision")
+        != worker_runtime_code_revision_expected
+    ):
+        raise RuntimeContractError("worker_runtime_code_revision_mismatch")
+    if probe_result.get("worker_container_identity") != worker_container_identity:
+        raise RuntimeContractError("worker_container_identity_mismatch")
+    live_webui = _run_command(
+        [docker_binary, "exec", webui_name, "cat", webui_source_revision_file],
+        run,
+        reason_code="webui_runtime_probe_failed",
+    )
+    if _require_source_revision(live_webui.stdout.strip(), "webui") != webui_source_revision:
+        raise RuntimeContractError("webui_source_revision_mismatch")
+    evidence = {
+        "worker_commit_sha": worker_commit,
+        "webui_commit_sha": webui_commit,
+        "worker_source_revision": worker_source_revision,
+        "worker_runtime_code_revision": worker_runtime_code_revision_expected,
+        "webui_source_revision": webui_source_revision,
+        "worker_image_id": _require_image_id(worker_inspect.get("Image"), "worker"),
+        "webui_image_id": _require_image_id(webui_inspect.get("Image"), "webui"),
+        "worker_container_id": _require_container_id(worker_inspect.get("Id"), "worker"),
+        "worker_container_identity": worker_container_identity,
+        "worker_runtime_instance_fingerprint": probe_result.get(
+            "worker_runtime_instance_fingerprint"
+        ),
+        "configuration_fingerprint": probe_result.get("configuration_fingerprint"),
+        "decision": probe_result.get("decision"),
+        "fault_results": probe_result.get("fault_results"),
+        "runtime_checks": {
+            "worker_container_running": True,
+            "webui_container_running": True,
+            "worker_config_mount_readonly": True,
+            "worker_command_uses_config": True,
+            "worker_config_unchanged_since_start": True,
+        },
+        "root_cause": {
+            "breaker_reason": expected_breaker_reason,
+            "affected_stage": affected_stage,
+            "failure_code": failure_code,
+            "expected_old_gate_id": expected_old_gate_id,
+        },
+    }
+    recover_command = [
+        docker_binary,
+        "exec",
+        "-i",
+        worker_name,
+        "python",
+        "/app/m2_guardrail_runtime.py",
+        "recover-local",
+        "--config",
+        worker_config_path,
+        "--source-revision-file",
+        worker_source_revision_file,
+    ]
+    if runtime_state_path_override:
+        recover_command.extend(["--state-path", runtime_state_path_override])
+    recovered = _run_json(
+        recover_command,
+        run,
+        "controlled_breaker_recovery_failed",
+        stdin=json.dumps(evidence, ensure_ascii=False, sort_keys=True),
+    )
+    if recovered.get("status") != "DISARMED":
+        raise RuntimeContractError("controlled_breaker_recovery_incomplete")
+    armed = arm_runtime_on_host(
+        docker_binary=docker_binary,
+        worker_container=worker_name,
+        webui_container=webui_name,
+        expected_worker_commit_sha=worker_commit,
+        expected_webui_commit_sha=webui_commit,
+        fault_summary_path=fault_summary_path,
+        worker_repo=worker_repo,
+        webui_repo=webui_repo,
+        worker_config_path=worker_config_path,
+        worker_source_revision_file=worker_source_revision_file,
+        webui_source_revision_file=webui_source_revision_file,
+        runtime_state_path_override=runtime_state_path_override,
+        runner=run,
+    )
+    dispatch = _run_json(
+        [
+            docker_binary,
+            "exec",
+            worker_name,
+            "python",
+            "/app/m2_production_recovery.py",
+            "dispatch",
+            "--config",
+            worker_config_path,
+        ],
+        run,
+        "recovery_canary_dispatch_failed",
+    )
+    return {
+        **armed,
+        "breaker_before": "TRIPPED",
+        "breaker_after": "ARMED",
+        "recovery_record_id": str(recovered.get("recovery_record_id") or ""),
+        "recovery_log_path": str(recovered.get("log_path") or ""),
+        "recovery_log_sha256": str(recovered.get("log_sha256") or ""),
+        "reconciliation": recovered.get("reconciliation"),
+        "recovery_dispatch": dispatch,
+    }
+
+
 def arm_runtime_on_host(
     *,
     docker_binary: str,
@@ -1509,6 +2194,27 @@ def _parser() -> argparse.ArgumentParser:
     arm.add_argument("--webui-source-revision-file", default="/app/.source-revision")
     arm.add_argument("--state-path", default="")
 
+    recover = subparsers.add_parser(
+        "recover",
+        help="Verify and recover a tripped runtime, then initialize a new 0/20 gate",
+    )
+    recover.add_argument("--docker", default="docker")
+    recover.add_argument("--worker-container", default="anime-subtitle-worker")
+    recover.add_argument("--webui-container", default="anime-subtitle-worker-webui")
+    recover.add_argument("--expected-worker-commit-sha", required=True)
+    recover.add_argument("--expected-webui-commit-sha", required=True)
+    recover.add_argument("--expected-old-gate-id", required=True)
+    recover.add_argument("--expected-breaker-reason", required=True)
+    recover.add_argument("--affected-stage", required=True)
+    recover.add_argument("--failure-code", required=True)
+    recover.add_argument("--worker-repo", default=".")
+    recover.add_argument("--webui-repo", default="../anime-subtitle-worker-webui")
+    recover.add_argument("--fault-summary", required=True)
+    recover.add_argument("--worker-config", default="/app/config.yaml")
+    recover.add_argument("--worker-source-revision-file", default="/app/.source-revision")
+    recover.add_argument("--webui-source-revision-file", default="/app/.source-revision")
+    recover.add_argument("--state-path", default="")
+
     probe = subparsers.add_parser("probe", help=argparse.SUPPRESS)
     probe.add_argument("--config", required=True)
     probe.add_argument("--source-revision-file", required=True)
@@ -1519,6 +2225,11 @@ def _parser() -> argparse.ArgumentParser:
     initialize.add_argument("--config", required=True)
     initialize.add_argument("--source-revision-file", required=True)
     initialize.add_argument("--state-path", default="")
+
+    recover_local = subparsers.add_parser("recover-local", help=argparse.SUPPRESS)
+    recover_local.add_argument("--config", required=True)
+    recover_local.add_argument("--source-revision-file", required=True)
+    recover_local.add_argument("--state-path", default="")
     return parser
 
 
@@ -1532,6 +2243,25 @@ def main(argv: Sequence[str] | None = None) -> int:
                 webui_container=args.webui_container,
                 expected_worker_commit_sha=args.expected_worker_commit_sha,
                 expected_webui_commit_sha=args.expected_webui_commit_sha,
+                fault_summary_path=args.fault_summary,
+                worker_repo=args.worker_repo,
+                webui_repo=args.webui_repo,
+                worker_config_path=args.worker_config,
+                worker_source_revision_file=args.worker_source_revision_file,
+                webui_source_revision_file=args.webui_source_revision_file,
+                runtime_state_path_override=args.state_path,
+            )
+        elif args.command == "recover":
+            result = recover_runtime_on_host(
+                docker_binary=args.docker,
+                worker_container=args.worker_container,
+                webui_container=args.webui_container,
+                expected_worker_commit_sha=args.expected_worker_commit_sha,
+                expected_webui_commit_sha=args.expected_webui_commit_sha,
+                expected_old_gate_id=args.expected_old_gate_id,
+                expected_breaker_reason=args.expected_breaker_reason,
+                affected_stage=args.affected_stage,
+                failure_code=args.failure_code,
                 fault_summary_path=args.fault_summary,
                 worker_repo=args.worker_repo,
                 webui_repo=args.webui_repo,
@@ -1560,17 +2290,38 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise RuntimeContractError("runtime_evidence_invalid") from exc
             if not isinstance(evidence, dict):
                 raise RuntimeContractError("runtime_evidence_invalid")
-            state = initialize_gate(
-                config,
-                evidence,
-                source_revision_file=args.source_revision_file,
-                state_path_override=args.state_path or None,
-            )
-            result = _public_summary(state)
+            if args.command == "recover-local":
+                result = recover_runtime_local(
+                    config,
+                    evidence,
+                    source_revision_file=args.source_revision_file,
+                    state_path_override=args.state_path or None,
+                )
+            else:
+                state = initialize_gate(
+                    config,
+                    evidence,
+                    source_revision_file=args.source_revision_file,
+                    state_path_override=args.state_path or None,
+                )
+                result = _public_summary(state)
     except RuntimeContractError as exc:
         print(
             json.dumps(
                 {"status": exc.status, "reason_code": exc.reason_code},
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+        return 2
+    except Exception as exc:  # noqa: BLE001 - CLI output must remain bounded and path-free.
+        reason = _safe_code(
+            getattr(exc, "reason_code", type(exc).__name__),
+            "runtime_recovery_failed",
+        )
+        print(
+            json.dumps(
+                {"status": "DEGRADED", "reason_code": reason},
                 ensure_ascii=False,
                 sort_keys=True,
             )

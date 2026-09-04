@@ -52,6 +52,7 @@ SCHEMA_VERSION = 2
 OBSERVATION_CONTRACT = "m2-production-observation-v2"
 _LOCK = threading.RLock()
 _PROCESS_LOCAL_CIRCUIT_OPEN = False
+_PROCESS_LOCAL_CIRCUIT_OPEN_AT = 0.0
 
 
 class ObservationStateError(ValueError):
@@ -138,20 +139,42 @@ def require_durable_claim_pause(config: Any) -> dict[str, Any]:
 
 
 def circuit_breaker_active(config: Any) -> bool:
+    global _PROCESS_LOCAL_CIRCUIT_OPEN, _PROCESS_LOCAL_CIRCUIT_OPEN_AT
     if not bool(getattr(config, "m2_server_canary_circuit_breaker_enabled", False)):
         return False
-    if _PROCESS_LOCAL_CIRCUIT_OPEN:
-        return True
     path = circuit_breaker_state_path(config)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return False
+        return bool(_PROCESS_LOCAL_CIRCUIT_OPEN)
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         # A malformed latch must fail closed. Operators can inspect or archive
         # it after the cause is understood; restart must not silently clear it.
         return path.exists()
-    return bool(payload.get("tripped")) if isinstance(payload, dict) else True
+    if not isinstance(payload, dict):
+        return True
+    if bool(payload.get("tripped")):
+        return True
+    if _PROCESS_LOCAL_CIRCUIT_OPEN:
+        recovery = payload.get("recovery_record")
+        try:
+            recovered_at = float(
+                recovery.get("recovered_at_epoch")
+                if isinstance(recovery, Mapping)
+                else 0
+            )
+        except (TypeError, ValueError):
+            recovered_at = 0.0
+        if (
+            not isinstance(recovery, Mapping)
+            or recovery.get("contract") != "m2-controlled-breaker-recovery-v1"
+            or not str(recovery.get("recovery_record_id") or "")
+            or recovered_at < float(_PROCESS_LOCAL_CIRCUIT_OPEN_AT or 0)
+        ):
+            return True
+        _PROCESS_LOCAL_CIRCUIT_OPEN = False
+        _PROCESS_LOCAL_CIRCUIT_OPEN_AT = 0.0
+    return False
 
 
 def admit_new_job(config: Any, *, logger: Any | None = None) -> bool:
@@ -599,11 +622,16 @@ def record_job_result(
                 f"{sanitized.get('error_code') or sanitized.get('reason_code') or 'unknown'}"
             )
             is_oom = bool(sanitized.get("oom_event")) or _is_oom(text)
+            from m2_production_recovery import breaker_streak_eligible
+
+            streak_eligible = breaker_streak_eligible(sanitized)
+            breaker_job_key = _job_key(gate_job_identity or job_identity)
             projected_streaks = _preview_failure_streaks(
                 sqlite_meta_state(connection),
-                failed=bool(sanitized.get("failed")),
+                failed=streak_eligible,
                 is_oom=is_oom,
                 signature=signature,
+                job_key=breaker_job_key,
             )
             breaker_reason = (
                 _breaker_reason(sanitized, projected_streaks, config)
@@ -693,8 +721,9 @@ def record_job_result(
                     connection,
                     sanitized,
                     is_oom=is_oom,
-                    failed=bool(sanitized.get("failed")),
+                    failed=streak_eligible,
                     signature=signature,
+                    job_key=breaker_job_key,
                 )
                 if streaks != projected_streaks:
                     raise ObservationStoreError("failure_streak_projection_mismatch")
@@ -704,7 +733,7 @@ def record_job_result(
                         config,
                         breaker_reason,
                         evidence={
-                            "job_key": sanitized["job_key"],
+                            "job_key": breaker_job_key,
                             "stage": sanitized["stage"],
                             "error_code": sanitized["error_code"],
                             "identical_failure_streak": streaks[
@@ -1399,9 +1428,10 @@ def trip_circuit_breaker(
 ) -> dict[str, Any]:
     """Latch stop-new-work state without touching jobs, attempts, or checkpoints."""
 
-    global _PROCESS_LOCAL_CIRCUIT_OPEN
+    global _PROCESS_LOCAL_CIRCUIT_OPEN, _PROCESS_LOCAL_CIRCUIT_OPEN_AT
     _PROCESS_LOCAL_CIRCUIT_OPEN = True
     now = time.time()
+    _PROCESS_LOCAL_CIRCUIT_OPEN_AT = now
     reason = _safe_code(reason_code, default="unknown_safety_event", limit=120)
     safe_evidence = _sanitize_evidence(evidence or {})
     path = circuit_breaker_state_path(config)
@@ -2136,24 +2166,40 @@ def _sanitize_outcome(job_identity: str, outcome: Mapping[str, Any]) -> dict[str
 
 
 def _update_failure_streaks(state: dict[str, Any], outcome: Mapping[str, Any]) -> None:
-    if not bool(outcome.get("failed")):
+    from m2_production_recovery import breaker_streak_eligible
+
+    if not breaker_streak_eligible(outcome):
         state["oom_streak"] = 0
+        state["oom_job_ids"] = []
         state["identical_failure_signature"] = ""
         state["identical_failure_streak"] = 0
+        state["identical_failure_job_ids"] = []
         return
     text = " ".join(
         str(outcome.get(key) or "")
         for key in ("error_code", "reason_code", "_classification_detail")
     )
     is_oom = bool(outcome.get("oom_event")) or _is_oom(text)
-    state["oom_streak"] = int(state.get("oom_streak") or 0) + 1 if is_oom else 0
+    job_key = str(outcome.get("job_key") or "unknown_job")
+    if is_oom:
+        oom_jobs = list(state.get("oom_job_ids") or [])
+        if job_key not in oom_jobs:
+            oom_jobs.append(job_key)
+        state["oom_job_ids"] = oom_jobs[-50:]
+        state["oom_streak"] = len(state["oom_job_ids"])
+    else:
+        state["oom_streak"] = 0
+        state["oom_job_ids"] = []
     signature = f"{outcome.get('stage') or 'worker'}:{outcome.get('error_code') or outcome.get('reason_code') or 'unknown'}"
     if signature == state.get("identical_failure_signature"):
-        state["identical_failure_streak"] = int(
-            state.get("identical_failure_streak") or 0
-        ) + 1
+        identical_jobs = list(state.get("identical_failure_job_ids") or [])
+        if job_key not in identical_jobs:
+            identical_jobs.append(job_key)
+        state["identical_failure_job_ids"] = identical_jobs[-50:]
+        state["identical_failure_streak"] = len(state["identical_failure_job_ids"])
     else:
         state["identical_failure_signature"] = signature
+        state["identical_failure_job_ids"] = [job_key]
         state["identical_failure_streak"] = 1
 
 
@@ -2163,32 +2209,55 @@ def _preview_failure_streaks(
     failed: bool,
     is_oom: bool,
     signature: str,
+    job_key: str,
 ) -> dict[str, Any]:
     """Project the idempotent breaker counters before reserving an event."""
 
     projected = {
         "oom_streak": int(current.get("oom_streak") or 0),
+        "oom_job_ids": list(current.get("oom_job_ids") or []),
         "identical_failure_signature": str(
             current.get("identical_failure_signature") or ""
         ),
         "identical_failure_streak": int(
             current.get("identical_failure_streak") or 0
         ),
+        "identical_failure_job_ids": list(
+            current.get("identical_failure_job_ids") or []
+        ),
     }
     if not failed:
         projected.update(
             {
                 "oom_streak": 0,
+                "oom_job_ids": [],
                 "identical_failure_signature": "",
                 "identical_failure_streak": 0,
+                "identical_failure_job_ids": [],
             }
         )
         return projected
-    projected["oom_streak"] = projected["oom_streak"] + 1 if is_oom else 0
+    normalized_job = str(job_key or "unknown_job")
+    if is_oom:
+        if normalized_job not in projected["oom_job_ids"]:
+            projected["oom_job_ids"].append(normalized_job)
+        projected["oom_job_ids"] = projected["oom_job_ids"][-50:]
+        projected["oom_streak"] = len(projected["oom_job_ids"])
+    else:
+        projected["oom_streak"] = 0
+        projected["oom_job_ids"] = []
     if signature == projected["identical_failure_signature"]:
-        projected["identical_failure_streak"] += 1
+        if normalized_job not in projected["identical_failure_job_ids"]:
+            projected["identical_failure_job_ids"].append(normalized_job)
+        projected["identical_failure_job_ids"] = projected[
+            "identical_failure_job_ids"
+        ][-50:]
+        projected["identical_failure_streak"] = len(
+            projected["identical_failure_job_ids"]
+        )
     else:
         projected["identical_failure_signature"] = str(signature)
+        projected["identical_failure_job_ids"] = [normalized_job]
         projected["identical_failure_streak"] = 1
     return projected
 

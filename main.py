@@ -1748,6 +1748,7 @@ def _background_control_command_loop(config, logger, shutdown_event: threading.E
     # Recheck at low frequency while this single-consumer inbox is alive.  The
     # reconciler remains fail-closed and never replays an arbitrary command.
     next_reconcile_at = time.monotonic() + _CONTROL_COMMAND_RECONCILE_INTERVAL_SECONDS
+    next_m2_recovery_at = 0.0
     while not shutdown_event.is_set():
         command = None
         try:
@@ -1769,12 +1770,31 @@ def _background_control_command_loop(config, logger, shutdown_event: threading.E
             if command is None:
                 if not hold_active:
                     active_canary = _active_ai_canary_campaign(config)
-                    if active_canary is None:
-                        _ensure_configured_ai_failed_retry_sweep(config, logger)
-                    _advance_ai_failed_retry_sweep(config, logger)
-                    if active_canary is None:
-                        _advance_ai_quality_review_autopilot(config, logger)
-                        _advance_target_review_autopilot(config, logger)
+                    if bool(getattr(config, "m2_recovery_enabled", False)):
+                        if active_canary is None and now >= next_m2_recovery_at:
+                            _advance_m2_recovery_lane(config, logger)
+                            check_interval = min(
+                                60,
+                                max(
+                                    5,
+                                    int(
+                                        getattr(
+                                            config,
+                                            "m2_recovery_dispatch_interval_seconds",
+                                            300,
+                                        )
+                                        or 300
+                                    ),
+                                ),
+                            )
+                            next_m2_recovery_at = time.monotonic() + check_interval
+                    else:
+                        if active_canary is None:
+                            _ensure_configured_ai_failed_retry_sweep(config, logger)
+                        _advance_ai_failed_retry_sweep(config, logger)
+                        if active_canary is None:
+                            _advance_ai_quality_review_autopilot(config, logger)
+                            _advance_target_review_autopilot(config, logger)
                 if shutdown_event.wait(1.0):
                     break
                 continue
@@ -4893,6 +4913,38 @@ def _apply_preparing_auto_remediation_item(
     )
 
 
+def _advance_m2_recovery_lane(config, logger) -> bool:
+    """Advance only the next indexed recovery item; never enumerate media."""
+
+    from m2_guardrail_runtime import runtime_guardrail_status
+    from m2_production_recovery import dispatch_next_recovery
+    from scan_state import ScanStateStore
+
+    state = ScanStateStore.from_config(config)
+    try:
+        guardrail = runtime_guardrail_status(config)
+        result = dispatch_next_recovery(
+            state.observation_connection,
+            runtime_status=str(guardrail.get("status") or "DEGRADED"),
+            dispatch_interval_seconds=int(
+                getattr(config, "m2_recovery_dispatch_interval_seconds", 300)
+                or 300
+            ),
+        )
+        state.commit()
+    finally:
+        state.close()
+    if result.get("dispatched") is True:
+        logger.warning(
+            "M2 recovery lane dispatched one durable item. recovery_id=%s canary=%s decision=%s",
+            result.get("recovery_id"),
+            result.get("canary"),
+            result.get("decision"),
+        )
+        return True
+    return False
+
+
 def _advance_ai_failed_retry_sweep(config, logger) -> None:
     from control_state import (
         create_and_bind_auto_remediation_item,
@@ -7472,6 +7524,14 @@ def _mark_queue_running(
         claimed["obligation_id"] = str(obligation["obligation_id"])
         claimed["input_fingerprint"] = str(media["media_fingerprint"])
         claimed["started_at"] = float(attempt.get("started_at") or 0.0)
+        if bool(getattr(config, "m2_recovery_enabled", False)):
+            from m2_production_recovery import mark_recovery_claimed
+
+            mark_recovery_claimed(
+                state.observation_connection,
+                video,
+                str(attempt["attempt_id"]),
+            )
         _record_m2_job_claim(
             config,
             str(attempt["attempt_id"]),
@@ -8276,6 +8336,40 @@ def _mark_queue_result(
                     failure_stage,
                     failure_message,
                 )
+                if retry_strategy == "manual_review":
+                    # A deterministic quality/source ambiguity is a terminal
+                    # review outcome, not a retryable runtime failure.  Keeping
+                    # these two states distinct prevents expected review work
+                    # from participating in the system-failure breaker streak.
+                    state.mark_ai_queue_review_required(
+                        video,
+                        failure_message,
+                        source="quality_review",
+                        error_code=error_code,
+                    )
+                    if delivery_attempt is not None:
+                        state.finish_ai_delivery_attempt(
+                            delivery_attempt_id,
+                            status="review_required",
+                            stage=failure_stage,
+                            error_code=error_code,
+                            detail=failure_message,
+                        )
+                    pipeline_events.extend(
+                        _record_pipeline_queue_result(
+                            pipeline_store,
+                            pipeline_job,
+                            transition_cursor,
+                            config=config,
+                            delivery_attempt_id=delivery_attempt_id,
+                            target_state="NEEDS_REVIEW",
+                            stage=failure_stage,
+                            reason_code="quality_blocked_requires_review",
+                            error_code=error_code,
+                            detail=failure_message,
+                        )
+                    )
+                    return
                 open_review = open_ai_quality_review_for_target(config, str(video.resolve()))
                 if open_review is not None and error_code in _AI_REVIEW_BYPASS_FAILURE_CODES:
                     # A review remains open, but infrastructure failures such
@@ -8426,6 +8520,20 @@ def _mark_queue_result(
 
     def write_result_and_observe() -> None:
         write_result()
+        if delivery_attempt_id and bool(
+            getattr(config, "m2_recovery_enabled", False)
+        ):
+            from m2_production_recovery import settle_recovery_attempt
+
+            settle_recovery_attempt(
+                state.observation_connection,
+                video,
+                delivery_attempt_id,
+                retry_after_seconds=int(
+                    getattr(config, "m2_recovery_dispatch_interval_seconds", 300)
+                    or 300
+                ),
+            )
         if observe_terminal:
             _record_terminal_m2_observation(
                 state,
@@ -8530,6 +8638,18 @@ def _commit_m2_completion_rejection(
                 detail=rejection_message,
             )
         )
+        if bool(getattr(config, "m2_recovery_enabled", False)):
+            from m2_production_recovery import settle_recovery_attempt
+
+            settle_recovery_attempt(
+                state.observation_connection,
+                video,
+                delivery_attempt_id,
+                retry_after_seconds=int(
+                    getattr(config, "m2_recovery_dispatch_interval_seconds", 300)
+                    or 300
+                ),
+            )
         if observe_terminal:
             _record_terminal_m2_observation(
                 state,

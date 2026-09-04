@@ -14,7 +14,7 @@ from typing import Any, Iterator, Mapping
 from safe_files import atomic_write_text
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 ELIGIBILITY_POLICY_VERSION = "m2-frozen-first-20-v1"
 ACTIVE = "ACTIVE"
 SETTLED = "SETTLED"
@@ -213,7 +213,7 @@ def ensure_observation_schema(connection: sqlite3.Connection) -> None:
     """Install or migrate the frozen-gate schema atomically."""
 
     owns_transaction = not connection.in_transaction
-    savepoint = "m2_observation_schema_migration_v3"
+    savepoint = "m2_observation_schema_migration_v4"
     if owns_transaction:
         connection.execute("BEGIN IMMEDIATE")
     else:
@@ -520,8 +520,10 @@ def _ensure_observation_schema_unprotected(connection: sqlite3.Connection) -> No
     now = time.time()
     for key, default in (
         ("oom_streak", "0"),
+        ("oom_job_ids", "[]"),
         ("identical_failure_signature", ""),
         ("identical_failure_streak", "0"),
+        ("identical_failure_job_ids", "[]"),
     ):
         connection.execute(
             "INSERT OR IGNORE INTO m2_observation_meta(key, value, updated_at) VALUES(?, ?, ?)",
@@ -1387,30 +1389,50 @@ def update_failure_streaks(
     is_oom: bool,
     failed: bool,
     signature: str,
+    job_key: str,
 ) -> dict[str, Any]:
     current = meta_state(connection)
     if not failed:
         current = {
             "oom_streak": 0,
+            "oom_job_ids": [],
             "identical_failure_signature": "",
             "identical_failure_streak": 0,
+            "identical_failure_job_ids": [],
         }
     else:
-        current["oom_streak"] = int(current["oom_streak"]) + 1 if is_oom else 0
+        normalized_job = _safe_code(job_key, "unknown_job")
+        if is_oom:
+            oom_jobs = list(current.get("oom_job_ids") or [])
+            if normalized_job not in oom_jobs:
+                oom_jobs.append(normalized_job)
+            current["oom_job_ids"] = oom_jobs[-50:]
+            current["oom_streak"] = len(current["oom_job_ids"])
+        else:
+            current["oom_streak"] = 0
+            current["oom_job_ids"] = []
         normalized_signature = _safe_code(signature, "unknown_failure")
         if normalized_signature == current["identical_failure_signature"]:
-            current["identical_failure_streak"] = int(current["identical_failure_streak"]) + 1
+            identical_jobs = list(current.get("identical_failure_job_ids") or [])
+            if normalized_job not in identical_jobs:
+                identical_jobs.append(normalized_job)
+            current["identical_failure_job_ids"] = identical_jobs[-50:]
+            current["identical_failure_streak"] = len(
+                current["identical_failure_job_ids"]
+            )
         else:
             current["identical_failure_signature"] = normalized_signature
+            current["identical_failure_job_ids"] = [normalized_job]
             current["identical_failure_streak"] = 1
     now = time.time()
     for key, value in current.items():
+        stored = json.dumps(value, sort_keys=True) if isinstance(value, list) else str(value)
         connection.execute(
             """
             INSERT INTO m2_observation_meta(key, value, updated_at) VALUES(?, ?, ?)
             ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
             """,
-            (key, str(value), now),
+            (key, stored, now),
         )
     return current
 
@@ -1418,15 +1440,50 @@ def update_failure_streaks(
 def meta_state(connection: sqlite3.Connection) -> dict[str, Any]:
     values = dict(
         connection.execute(
-            "SELECT key, value FROM m2_observation_meta WHERE key IN (?, ?, ?)",
-            ("oom_streak", "identical_failure_signature", "identical_failure_streak"),
+            "SELECT key, value FROM m2_observation_meta WHERE key IN (?, ?, ?, ?, ?)",
+            (
+                "oom_streak",
+                "oom_job_ids",
+                "identical_failure_signature",
+                "identical_failure_streak",
+                "identical_failure_job_ids",
+            ),
         ).fetchall()
     )
+    def job_ids(key: str) -> list[str]:
+        try:
+            decoded = json.loads(str(values.get(key) or "[]"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            decoded = []
+        return [str(value) for value in decoded if str(value)] if isinstance(decoded, list) else []
+
     return {
         "oom_streak": int(values.get("oom_streak") or 0),
+        "oom_job_ids": job_ids("oom_job_ids"),
         "identical_failure_signature": str(values.get("identical_failure_signature") or ""),
         "identical_failure_streak": int(values.get("identical_failure_streak") or 0),
+        "identical_failure_job_ids": job_ids("identical_failure_job_ids"),
     }
+
+
+def reset_failure_streaks(connection: sqlite3.Connection) -> None:
+    """Reset breaker counters only after controlled recovery evidence is durable."""
+
+    now = time.time()
+    for key, value in (
+        ("oom_streak", "0"),
+        ("oom_job_ids", "[]"),
+        ("identical_failure_signature", ""),
+        ("identical_failure_streak", "0"),
+        ("identical_failure_job_ids", "[]"),
+    ):
+        connection.execute(
+            """
+            INSERT INTO m2_observation_meta(key,value,updated_at) VALUES(?,?,?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
+            """,
+            (key, value, now),
+        )
 
 
 def status_summary(connection: sqlite3.Connection) -> dict[str, Any]:

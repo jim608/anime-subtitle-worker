@@ -2630,6 +2630,7 @@ class ScanStateStore:
             {exact_target_sql}
             ORDER BY
                 CASE q.source
+                    WHEN 'm2_recovery' THEN 4
                     WHEN 'manual_priority' THEN 3
                     WHEN 'manual_force' THEN 2
                     WHEN 'auto_retry_sweep' THEN 1
@@ -4591,6 +4592,11 @@ class ScanStateStore:
         from m2_observation_store import ensure_observation_schema
 
         ensure_observation_schema(self._conn)
+        # The bounded M2 recovery lane shares this database so its decision,
+        # queue transition, claim, and terminal evidence survive restarts.
+        from m2_production_recovery import ensure_recovery_schema
+
+        ensure_recovery_schema(self._conn)
         self._conn.commit()
 
     def _prune_stage_events(self, *, force: bool = False) -> int:

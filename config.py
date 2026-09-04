@@ -88,6 +88,10 @@ class AppConfig:
     m2_server_canary_circuit_breaker_state_path: str = "m2_server_canary_circuit_breaker.json"
     m2_server_canary_repeated_oom_threshold: int = 3
     m2_server_canary_identical_failure_threshold: int = 3
+    m2_recovery_enabled: bool = False
+    m2_recovery_retry_budget: int = 2
+    m2_recovery_dispatch_interval_seconds: int = 300
+    m2_recovery_stale_running_seconds: int = 21600
     auto_enable_ai_fallback: bool = True
     auto_mikan_parallel_with_ai: bool = False
     auto_ai_run_before_mikan: bool = False
@@ -719,6 +723,22 @@ def load_config(config_path: str | Path) -> AppConfig:
             raw,
             "m2_server_canary_identical_failure_threshold",
             3,
+        ),
+        m2_recovery_enabled=_optional_bool(raw, "m2_recovery_enabled", False),
+        m2_recovery_retry_budget=_optional_positive_int(
+            raw,
+            "m2_recovery_retry_budget",
+            2,
+        ),
+        m2_recovery_dispatch_interval_seconds=_optional_positive_int(
+            raw,
+            "m2_recovery_dispatch_interval_seconds",
+            300,
+        ),
+        m2_recovery_stale_running_seconds=_optional_non_negative_int(
+            raw,
+            "m2_recovery_stale_running_seconds",
+            21600,
         ),
         auto_enable_ai_fallback=_optional_bool(raw, "auto_enable_ai_fallback", True),
         auto_mikan_parallel_with_ai=_optional_bool(raw, "auto_mikan_parallel_with_ai", False),

@@ -3098,6 +3098,29 @@ class MainQueueResultTest(unittest.TestCase):
         )
         state.mark_ai_queue_review_required.assert_not_called()
 
+    def test_source_selection_review_is_terminal_review_not_retryable_failure(self) -> None:
+        video = Path("/anime/Ambiguous S01E01.mkv")
+        message = "Source analysis needs review before translation"
+        state = Mock()
+        state.ai_job_failure.return_value = ("source_selection_review", message)
+        config = SimpleNamespace(
+            auto_ai_failure_cooldown_seconds=60,
+            auto_ai_max_attempts=3,
+        )
+        with patch(
+            "control_state.open_ai_quality_review_for_target",
+            return_value=None,
+        ):
+            main_module._mark_queue_result(state, video, False, config)
+
+        state.mark_ai_queue_review_required.assert_called_once_with(
+            video,
+            message,
+            source="quality_review",
+            error_code="source_selection_needs_review",
+        )
+        state.mark_ai_queue_failed.assert_not_called()
+
     def test_exact_translation_omission_routes_to_review_without_full_retry(self) -> None:
         message = (
             "Translation safe-omission remained after bounded same-job recovery: "

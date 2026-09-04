@@ -1293,6 +1293,50 @@ class M2ProductionObservationTests(unittest.TestCase):
             sentinel,
         )
 
+    def test_same_job_retries_do_not_advance_identical_failure_streak(self) -> None:
+        config = self._config("identical-one-job")
+        repeated = self._failed(stage="translation", error_code="model_timeout")
+
+        for index in range(5):
+            result = observation.record_job_result(
+                config,
+                job_identity=f"attempt-{index}",
+                gate_job_identity="one-durable-obligation",
+                outcome=repeated,
+            )
+            self.assertFalse(result["circuit_breaker_tripped"])
+            self.assertTrue(observation.admit_new_job(config))
+
+        connection = sqlite3.connect(observation_database_path(config))
+        try:
+            values = dict(
+                connection.execute(
+                    "SELECT key,value FROM m2_observation_meta WHERE key IN "
+                    "('identical_failure_streak','identical_failure_job_ids')"
+                ).fetchall()
+            )
+        finally:
+            connection.close()
+        self.assertEqual(values["identical_failure_streak"], "1")
+        self.assertEqual(len(json.loads(values["identical_failure_job_ids"])), 1)
+
+    def test_quality_review_outcomes_do_not_participate_in_failure_streak(self) -> None:
+        config = self._config("quality-not-system-failure")
+        outcome = self._failed(
+            stage="source_selection_review",
+            error_code="source_selection_needs_review",
+        )
+        outcome["terminal_status"] = "RETRYING"
+        for index in range(5):
+            result = observation.record_job_result(
+                config,
+                job_identity=f"quality-attempt-{index}",
+                gate_job_identity=f"quality-job-{index}",
+                outcome=outcome,
+            )
+            self.assertFalse(result["circuit_breaker_tripped"])
+        self.assertTrue(observation.admit_new_job(config))
+
     def test_insufficient_disk_trips_before_new_job_claim(self) -> None:
         config = self._config("disk", disk_min_free_gb=2.0)
         sentinel = self._checkpoint_sentinel(config)

@@ -4,11 +4,15 @@
 
 Recorded on 2026-09-04.
 
+Recovery candidate revalidated on 2026-09-05.
+
 - Local focused harness: **PASS (7/7 breaker cases)**
 - Focused unit and CLI contract tests: **PASS (6/6 tests)**
 - Frozen cohort/schema/event-journal tests: **PASS (24/24 tests)**
 - Recovery/replay tests: **PASS (11/11 tests)**
 - Complete Worker regression: **OK (1,649 run; 1 conditional skip)**
+- Recovery candidate targeted regression: **OK**
+- Recovery candidate complete Worker regression: **OK (1,720 run; 1 conditional skip)**
 - Historical pre-repair server image/runtime execution: **PASS (7/7 breaker cases)**
 - Historical server timestamped full log validation: **PASS**
 - Historical runtime status after initialization: **ARMED**
@@ -35,6 +39,23 @@ Production acceptance. A repaired deployment must generate a fresh timestamped
 
 Both repeated-failure thresholds were `3`. The first two observations remained
 closed and the third opened the expected breaker.
+
+The recovery candidate adds explicit coverage that five retry attempts for one
+stable job count as one streak member, while three distinct jobs still trip.
+It also verifies that `source_selection_needs_review` remains
+`QUALITY_BLOCKED`/`NEEDS_REVIEW`, not a retryable system failure.
+
+## Historical recovery matrix
+
+The focused recovery tests cover known fixed-version failures, canonical and
+schema-compatible checkpoint resume, completed-ASR/translation-stage reuse,
+partial-translation continuation, QC-only resume, incompatible-checkpoint
+minimum-stage replay, stale running recovery, unsupported/quarantined input,
+single-canary dispatch, retry budget/no-progress blocking, durable restart,
+source/output immutability, required metrics, controlled latch recovery, and
+old-Gate runtime-change invalidation. Existing frozen-cohort and observation
+recovery suites continue to cover no backfill, immutable first-20 membership,
+terminal replay idempotency, and exactly-once summary publication.
 
 ## Assertions applied to every case
 

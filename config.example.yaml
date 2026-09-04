@@ -35,3 +35,7 @@ m2_server_canary_circuit_breaker_enabled: true
 m2_server_canary_circuit_breaker_state_path: "m2_server_canary_circuit_breaker.json"
 m2_server_canary_repeated_oom_threshold: 3
 m2_server_canary_identical_failure_threshold: 3
+m2_recovery_enabled: false
+m2_recovery_retry_budget: 2
+m2_recovery_dispatch_interval_seconds: 300
+m2_recovery_stale_running_seconds: 21600
