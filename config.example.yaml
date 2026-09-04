@@ -21,3 +21,16 @@ source_analyzer_tie_margin: 0.025
 source_analyzer_version: "m2-source-analyzer-v1"
 source_decision_schema_version: 1
 source_decision_version: "m2-source-decision-v1"
+
+# M2 server-canary closeout. Keep one Worker lane; summaries are emitted only
+# after each 20 newly observed, strictly verified completed outputs.
+max_concurrent_videos: 1
+source_integrity_sha256_enabled: true
+m2_server_canary_observer_enabled: true
+m2_server_canary_observation_gate_size: 20
+m2_server_canary_observation_state_path: "m2_server_canary_observation.json"
+m2_server_canary_observation_output_dir: "m2_server_canary_observations"
+m2_server_canary_circuit_breaker_enabled: true
+m2_server_canary_circuit_breaker_state_path: "m2_server_canary_circuit_breaker.json"
+m2_server_canary_repeated_oom_threshold: 3
+m2_server_canary_identical_failure_threshold: 3

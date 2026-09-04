@@ -86,6 +86,14 @@ qbit_password: "${{TEST_QBIT_PASSWORD:-CHANGE_ME}}"
             self.assertEqual(config.config_path, config_path)
             self.assertTrue(config.ai_process_isolation_enabled)
             self.assertEqual(config.ai_subprocess_timeout_seconds, 14400)
+            self.assertFalse(config.m2_server_canary_observer_enabled)
+            self.assertEqual(config.m2_server_canary_observation_gate_size, 20)
+            self.assertFalse(config.m2_server_canary_circuit_breaker_enabled)
+            self.assertEqual(config.m2_server_canary_repeated_oom_threshold, 3)
+            self.assertEqual(
+                config.m2_server_canary_identical_failure_threshold,
+                3,
+            )
             self.assertFalse(config.resource_admission_enabled)
             self.assertEqual(config.resource_admission_state_path, "resource_admission_state.json")
             self.assertFalse(config.completed_delivery_enabled)
@@ -230,6 +238,21 @@ qbit_password: "${{TEST_QBIT_PASSWORD:-CHANGE_ME}}"
                 path.write_text(base.replace(old, new, 1), encoding="utf-8")
                 with self.assertRaises(ConfigError):
                     load_config(path)
+
+    def test_m2_circuit_breaker_requires_observer(self):
+        base = Path("config.yaml").read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.yaml"
+            path.write_text(
+                base.replace(
+                    "m2_server_canary_observer_enabled: true",
+                    "m2_server_canary_observer_enabled: false",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ConfigError):
+                load_config(path)
 
     def test_rejects_invalid_japanese_final_fallback_backend(self):
         base = Path("config.yaml").read_text(encoding="utf-8")

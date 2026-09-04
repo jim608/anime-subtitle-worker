@@ -44,6 +44,10 @@ M2 translation quality, Translation Memory, full QC redesign and WebUI work are 
 - [x] Complete the M2 design, source-selection, Decision-schema and confidence-policy documents.
 - [x] Run final changed-file compile, diff checks and release review with no private deployment details in tracked files.
 
-M2 implementation, acceptance, the complete local repository regression and final post-edit static/diff verification are green, but external release gates remain. The current results do not prove the 100-input release gate, the rolling-500 Production SLO, an UNRAID deployment, or a measured 99%/99.9% autonomy rate.
+M2 implementation is deployed under the `M2_SERVER_CANARY_ACTIVE` observation
+state documented in [`docs/M2_PRODUCTION_OBSERVATION.md`](docs/M2_PRODUCTION_OBSERVATION.md).
+It is not `M2_PRODUCTION_ACCEPTED`; the 20-output observation gate, 100-input
+release gate, rolling-500 Production SLO, and any measured 99%/99.9% autonomy
+claim remain unverified.
 
 Translation-quality improvements, Translation Memory, full QC redesign, WebUI redesign and M3 model-fallback work remain out of scope for this milestone.

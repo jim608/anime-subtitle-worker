@@ -79,6 +79,14 @@ class AppConfig:
     translation_max_line_chars: int = 320
     translation_max_line_expansion_ratio: float = 8.0
     max_concurrent_videos: int = 1
+    m2_server_canary_observer_enabled: bool = False
+    m2_server_canary_observation_gate_size: int = 20
+    m2_server_canary_observation_state_path: str = "m2_server_canary_observation.json"
+    m2_server_canary_observation_output_dir: str = "m2_server_canary_observations"
+    m2_server_canary_circuit_breaker_enabled: bool = False
+    m2_server_canary_circuit_breaker_state_path: str = "m2_server_canary_circuit_breaker.json"
+    m2_server_canary_repeated_oom_threshold: int = 3
+    m2_server_canary_identical_failure_threshold: int = 3
     auto_enable_ai_fallback: bool = True
     auto_mikan_parallel_with_ai: bool = False
     auto_ai_run_before_mikan: bool = False
@@ -666,6 +674,46 @@ def load_config(config_path: str | Path) -> AppConfig:
         max_retries=_as_positive_int(raw, "max_retries"),
         watch_interval_seconds=_as_positive_int(raw, "watch_interval_seconds"),
         max_concurrent_videos=_optional_positive_int(raw, "max_concurrent_videos", 1),
+        m2_server_canary_observer_enabled=_optional_bool(
+            raw,
+            "m2_server_canary_observer_enabled",
+            False,
+        ),
+        m2_server_canary_observation_gate_size=_optional_positive_int(
+            raw,
+            "m2_server_canary_observation_gate_size",
+            20,
+        ),
+        m2_server_canary_observation_state_path=_as_optional_str(
+            raw,
+            "m2_server_canary_observation_state_path",
+            "m2_server_canary_observation.json",
+        ),
+        m2_server_canary_observation_output_dir=_as_optional_str(
+            raw,
+            "m2_server_canary_observation_output_dir",
+            "m2_server_canary_observations",
+        ),
+        m2_server_canary_circuit_breaker_enabled=_optional_bool(
+            raw,
+            "m2_server_canary_circuit_breaker_enabled",
+            False,
+        ),
+        m2_server_canary_circuit_breaker_state_path=_as_optional_str(
+            raw,
+            "m2_server_canary_circuit_breaker_state_path",
+            "m2_server_canary_circuit_breaker.json",
+        ),
+        m2_server_canary_repeated_oom_threshold=_optional_positive_int(
+            raw,
+            "m2_server_canary_repeated_oom_threshold",
+            3,
+        ),
+        m2_server_canary_identical_failure_threshold=_optional_positive_int(
+            raw,
+            "m2_server_canary_identical_failure_threshold",
+            3,
+        ),
         auto_enable_ai_fallback=_optional_bool(raw, "auto_enable_ai_fallback", True),
         auto_mikan_parallel_with_ai=_optional_bool(raw, "auto_mikan_parallel_with_ai", False),
         auto_ai_run_before_mikan=_optional_bool(raw, "auto_ai_run_before_mikan", False),
@@ -2040,6 +2088,23 @@ def _validate_config(config: AppConfig) -> None:
     if config.source_analyzer_enabled and not config.pipeline_job_store_required:
         raise ConfigError(
             "source_analyzer_enabled requires pipeline_job_store_required so decisions are durable."
+        )
+
+    if (
+        config.m2_server_canary_circuit_breaker_enabled
+        and not config.m2_server_canary_observer_enabled
+    ):
+        raise ConfigError(
+            "m2_server_canary_circuit_breaker_enabled requires "
+            "m2_server_canary_observer_enabled."
+        )
+    if (
+        config.m2_server_canary_observer_enabled
+        and config.max_concurrent_videos != 1
+    ):
+        raise ConfigError(
+            "max_concurrent_videos must be exactly 1 while the M2 server "
+            "canary observer is enabled."
         )
 
     if config.resource_admission_enabled:

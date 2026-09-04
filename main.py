@@ -371,6 +371,17 @@ def _scan_and_process(
         )
         logger.info("Deployment hold is active; no AI work will be claimed.")
         return 0
+    if not _m2_server_canary_admit_new_job(worker.config, logger=logger):
+        update_ai_scheduler_state(
+            worker.config,
+            state="paused",
+            reason_code="m2_server_canary_circuit_open",
+            message="M2 server-canary circuit breaker is stopping new AI claims.",
+            current_video=None,
+            logger=logger,
+        )
+        logger.error("M2 server-canary circuit breaker is open; no new AI work will be claimed.")
+        return 0
     if (
         _ai_queue_paused(worker.config)
         and acceptance_lane is None
@@ -519,6 +530,12 @@ def _scan_and_process(
                 if _shutdown_requested(shutdown_event):
                     logger.info("Shutdown requested; stopping before next queued video.")
                     break
+                if not _m2_server_canary_admit_new_job(worker.config, logger=logger):
+                    logger.error(
+                        "M2 server-canary circuit breaker opened; "
+                        "the next queued video remains untouched."
+                    )
+                    break
                 if (
                     canary_binding is None
                     and _active_ai_canary_campaign(
@@ -563,7 +580,13 @@ def _scan_and_process(
                         guarded_canary = _is_active_ai_canary_campaign_snapshot(
                             guarded_campaign
                         )
-                        if canary_binding is None and (
+                        if not _m2_server_canary_admit_new_job(
+                            worker.config,
+                            logger=logger,
+                        ):
+                            claim_blocked_by_control = True
+                            reserved_command = None
+                        elif canary_binding is None and (
                             (
                                 _ai_queue_paused(worker.config)
                                 and acceptance_lane is None
@@ -629,7 +652,7 @@ def _scan_and_process(
                     logger,
                     **process_kwargs,
                 )
-                _mark_queue_result(
+                _mark_queue_result_and_observe(
                     queue_state,
                     video,
                     ok,
@@ -682,13 +705,23 @@ def _scan_and_process(
                     if _shutdown_requested(shutdown_event):
                         logger.info("Shutdown requested; not starting additional queued videos.")
                         return
+                    if not _m2_server_canary_admit_new_job(worker.config, logger=logger):
+                        logger.error(
+                            "M2 server-canary circuit breaker opened; "
+                            "running videos may finish but no additional video will start."
+                        )
+                        return
                     if _ai_queue_paused(worker.config) and acceptance_lane is None:
                         logger.info("AI queue pause requested; running videos may finish but no additional video will start.")
                         return
                     with _AI_REVIEW_REMEDIATION_HANDOFF_LOCK:
                         with auto_remediation_claim_guard(worker.config) as guarded_campaign:
                             if (
-                                (
+                                not _m2_server_canary_admit_new_job(
+                                    worker.config,
+                                    logger=logger,
+                                )
+                                or (
                                     _ai_queue_paused(worker.config)
                                     and acceptance_lane is None
                                 )
@@ -761,7 +794,7 @@ def _scan_and_process(
                         ok = bool(future.result())
                     except Exception as exc:
                         logger.exception("Unhandled concurrent processing error for %s: %s", video, exc)
-                    _mark_queue_result(
+                    _mark_queue_result_and_observe(
                         queue_state,
                         video,
                         ok,
@@ -6772,7 +6805,41 @@ def _deployment_hold_active(config) -> bool:
     return bool(payload.get("active", True)) if isinstance(payload, dict) else True
 
 
+def _m2_server_canary_admit_new_job(config, *, logger=None) -> bool:
+    """Fail closed before claims without changing running jobs or checkpoints."""
+
+    if not bool(getattr(config, "m2_server_canary_observer_enabled", False)):
+        return True
+    try:
+        from m2_production_observation import admit_new_job
+
+        return bool(admit_new_job(config, logger=logger))
+    except Exception as exc:  # noqa: BLE001 - an unavailable safety guard must fail closed.
+        if logger is not None:
+            logger.exception("M2 server-canary admission guard failed: %s", exc)
+        try:
+            from m2_production_observation import trip_circuit_breaker
+
+            trip_circuit_breaker(
+                config,
+                "observation_guard_failure",
+                evidence={"stage": "new_job_admission"},
+                logger=logger,
+            )
+        except Exception:  # noqa: BLE001 - the caller still refuses the claim.
+            pass
+        return False
+
+
 def _ai_queue_paused(config) -> bool:
+    if bool(getattr(config, "m2_server_canary_circuit_breaker_enabled", False)):
+        try:
+            from m2_production_observation import circuit_breaker_active
+
+            if circuit_breaker_active(config):
+                return True
+        except Exception:  # noqa: BLE001 - an unreadable safety latch must fail closed.
+            return True
     path = _ai_control_path(config)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -7557,6 +7624,67 @@ def _record_pipeline_queue_result(
     )
 
 
+def _mark_queue_result_and_observe(
+    state,
+    video,
+    ok: bool,
+    config,
+    *,
+    delivery_attempt_id: str = "",
+    logger=None,
+) -> None:
+    """Commit the terminal queue state, then emit bounded canary evidence."""
+
+    _mark_queue_result(
+        state,
+        video,
+        ok,
+        config,
+        delivery_attempt_id=delivery_attempt_id,
+        logger=logger,
+    )
+    if (
+        state is None
+        or not delivery_attempt_id
+        or not bool(getattr(config, "m2_server_canary_observer_enabled", False))
+    ):
+        return
+    try:
+        attempt = state.get_ai_delivery_attempt(delivery_attempt_id)
+        if not isinstance(attempt, dict):
+            raise RuntimeError("terminal delivery attempt is unavailable")
+        status = str(attempt.get("status") or "").strip().casefold()
+        from m2_production_observation import record_job_result
+
+        record_job_result(
+            config,
+            job_identity=delivery_attempt_id,
+            outcome={
+                "verified_completed": status == "succeeded",
+                "failed": status != "succeeded",
+                "stage": str(attempt.get("stage") or "worker"),
+                "error_code": str(attempt.get("error_code") or ""),
+                "reason_code": status,
+                "detail": str(attempt.get("detail") or ""),
+            },
+            logger=logger,
+        )
+    except Exception as exc:  # noqa: BLE001 - preserve the committed job and stop future claims.
+        if logger is not None:
+            logger.exception("M2 server-canary observation failed: %s", exc)
+        try:
+            from m2_production_observation import trip_circuit_breaker
+
+            trip_circuit_breaker(
+                config,
+                "observation_pipeline_failure",
+                evidence={"stage": "terminal_observation"},
+                logger=logger,
+            )
+        except Exception:  # noqa: BLE001 - process-local latch is set before persistence.
+            pass
+
+
 def _mark_queue_result(
     state,
     video,
@@ -7916,6 +8044,38 @@ def _ai_failure_policy(stage: str, message: str) -> tuple[str, str]:
         return "source_unsupported", "permanent"
     if normalized_stage == "source_selection_review":
         return "source_selection_needs_review", "manual_review"
+    if any(
+        marker in normalized_message
+        for marker in (
+            "source changed while its identity was captured",
+            "source identity changed during processing",
+            "source checksum changed during processing",
+            "source media changed during mux",
+            "source candidate fingerprint changed",
+            "source sidecar identity changed",
+        )
+    ):
+        return "source_mutation", "manual_review"
+    if normalized_stage == "completed_delivery" and any(
+        marker in normalized_message
+        for marker in (
+            "completed-path collision",
+            "destination exists without a matching receipt",
+            "destination belongs to different delivery evidence",
+            "destination appeared during",
+        )
+    ):
+        return "duplicate_publish", "permanent"
+    if normalized_stage in {"completed_delivery", "delivery_verification", "mux", "publish"} and any(
+        marker in normalized_message
+        for marker in (
+            "publication manifest is unreadable",
+            "failed revalidation",
+            "ffprobe returned",
+            "output parse",
+        )
+    ):
+        return "output_parse_failure", "bounded_retry"
     if normalized_stage == "resource_runtime" and any(
         marker in normalized_message for marker in ("sigkill", "returncode=-9", "returncode=137", "oom")
     ):
