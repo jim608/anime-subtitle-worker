@@ -396,7 +396,7 @@ class AssUtilsTest(unittest.TestCase):
         ):
             self.assertEqual(flattened.count(text), 1)
 
-    def test_converter_rejects_overlapping_dominant_skeleton(self) -> None:
+    def test_converter_normalizes_overlapping_dominant_skeleton_without_losing_text(self) -> None:
         events = [
             (
                 f"Dialogue: 0,0:00:{index * 2:02d}.00,"
@@ -410,11 +410,41 @@ class AssUtilsTest(unittest.TestCase):
             "Overlapping dominant dialogue"
         )
 
-        with self.assertRaisesRegex(
-            AssExportError,
-            "dominant Dialogue cues overlap",
-        ):
-            ass_dialogue_style_to_srt_blocks("\n".join(events), "Default")
+        blocks = ass_dialogue_style_to_srt_blocks("\n".join(events), "Default")
+
+        self.assertEqual(len(blocks), 19)
+        self.assertEqual(blocks[0].timing, "00:00:02,000 --> 00:00:04,500")
+        self.assertEqual(
+            blocks[0].text,
+            ["English dialogue 1", "Overlapping dominant dialogue"],
+        )
+        flattened = [line for block in blocks for line in block.text]
+        self.assertIn("English dialogue 1", flattened)
+        self.assertIn("Overlapping dominant dialogue", flattened)
+
+    def test_converter_clips_overlapping_dominant_when_result_remains_readable(self) -> None:
+        events = [
+            (
+                f"Dialogue: 0,0:00:{index * 2:02d}.00,"
+                f"0:00:{index * 2 + 1:02d}.00,Default,,0,0,0,,"
+                f"English dialogue {index}"
+            )
+            for index in range(1, 21)
+        ]
+        events[0] = (
+            "Dialogue: 0,0:00:02.00,0:00:03.00,Default,,0,0,0,,Hi"
+        )
+        events[1] = (
+            "Dialogue: 0,0:00:02.50,0:00:04.50,Default,,0,0,0,,"
+            "Overlapping dominant dialogue"
+        )
+
+        blocks = ass_dialogue_style_to_srt_blocks("\n".join(events), "Default")
+
+        self.assertEqual(len(blocks), 20)
+        self.assertEqual(blocks[0].timing, "00:00:02,000 --> 00:00:02,500")
+        self.assertEqual(blocks[0].text, ["Hi"])
+        self.assertEqual(blocks[1].timing, "00:00:02,500 --> 00:00:04,500")
 
     def test_high_cps_orphan_expands_only_to_target_duration(self) -> None:
         content = "\n".join(
@@ -444,7 +474,7 @@ class AssUtilsTest(unittest.TestCase):
             "00:00:03,125 --> 00:00:03,875",
         )
 
-    def test_high_cps_orphan_fails_when_gap_cannot_reach_target(self) -> None:
+    def test_high_cps_orphan_is_omitted_without_losing_dominant_dialogue(self) -> None:
         content = "\n".join(
             [
                 (
@@ -460,11 +490,37 @@ class AssUtilsTest(unittest.TestCase):
             ]
         )
 
-        with self.assertRaisesRegex(
-            AssExportError,
-            "cannot reach safe CPS within its gap",
-        ):
-            ass_dialogue_style_to_srt_blocks(content, "Default")
+        blocks = ass_dialogue_style_to_srt_blocks(content, "Default")
+
+        self.assertEqual(len(blocks), 20)
+        self.assertFalse(
+            any("A" * 20 in line for block in blocks for line in block.text)
+        )
+        self.assertEqual(blocks[0].text, ["English dialogue 1"])
+
+    def test_impossible_attached_secondary_keeps_safe_dominant_text(self) -> None:
+        events = [
+            (
+                f"Dialogue: 0,0:00:{index * 2:02d}.00,"
+                f"0:00:{index * 2 + 1:02d}.00,Default,,0,0,0,,"
+                f"English dialogue {index}"
+            )
+            for index in range(1, 21)
+        ]
+        events[0] = (
+            "Dialogue: 0,0:00:02.00,0:00:03.00,Default,,0,0,0,,"
+            "Safe dialogue"
+        )
+        events.append(
+            "Dialogue: 0,0:00:02.00,0:00:03.00,Signs,,0,0,0,,"
+            + ("B" * 100)
+        )
+
+        blocks = ass_dialogue_style_to_srt_blocks("\n".join(events), "Default")
+
+        self.assertEqual(blocks[0].timing, "00:00:02,000 --> 00:00:03,000")
+        self.assertEqual(blocks[0].text, ["Safe dialogue"])
+        self.assertFalse(any("B" in line for block in blocks for line in block.text))
 
     def test_attached_secondary_expands_only_newly_high_cps_dominant_cue(self) -> None:
         events = [

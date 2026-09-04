@@ -192,11 +192,16 @@ def ass_dialogue_style_to_srt_blocks(content: str, style: str) -> list[SrtBlock]
     """Convert every ASS Dialogue event under a trusted dominant-style gate.
 
     The requested style must be the independently recomputed dominant style.
-    Its non-overlapping cues form the timeline.  Secondary dialogue that
-    overlaps that timeline is merged once into the cue with the greatest
-    overlap; remaining secondary dialogue is clustered into non-overlapping
-    cues.  ASS ``Comment:`` events are not dialogue and remain excluded by
-    :func:`_ass_dialogue_fields`.
+    Its cues form the timeline.  Overlapping dominant cues are normalized
+    deterministically without dropping text: the earlier cue is clipped at
+    the later cue's start when it retains a usable duration, otherwise the
+    two cues are merged.  Secondary dialogue that overlaps that timeline is
+    merged once into the cue with the greatest overlap; remaining secondary
+    dialogue is clustered into non-overlapping cues.  Supplemental secondary
+    text that cannot be represented inside a non-overlapping hard-CPS SRT
+    window is left in the authoritative ASS source instead of failing or
+    corrupting the dominant dialogue timeline.  ASS ``Comment:`` events are
+    not dialogue and remain excluded by :func:`_ass_dialogue_fields`.
     """
 
     requested_style = str(style or "").strip()
@@ -269,14 +274,60 @@ def ass_dialogue_style_to_srt_blocks(content: str, style: str) -> list[SrtBlock]
             _srt_timestamp_milliseconds(timing[1]),
         ),
     )
-    for previous, current in zip(dominant_timings, dominant_timings[1:]):
-        if _srt_timestamp_milliseconds(current[0]) < _srt_timestamp_milliseconds(previous[1]):
-            raise AssExportError(
-                "ASS dominant Dialogue cues overlap and cannot form a safe timeline: "
-                f"previous={previous!r} current={current!r}"
-            )
+    normalized_dominant_timings: list[tuple[str, str]] = []
+    for current in dominant_timings:
+        if not normalized_dominant_timings:
+            normalized_dominant_timings.append(current)
+            continue
+        previous = normalized_dominant_timings[-1]
+        current_start_ms = _srt_timestamp_milliseconds(current[0])
+        previous_start_ms = _srt_timestamp_milliseconds(previous[0])
+        previous_end_ms = _srt_timestamp_milliseconds(previous[1])
+        if current_start_ms >= previous_end_ms:
+            normalized_dominant_timings.append(current)
+            continue
+
+        clipped_previous_duration_ms = current_start_ms - previous_start_ms
+        previous_characters = _nonspace_character_count(
+            dominant_text_by_timing[previous]
+        )
+        if (
+            clipped_previous_duration_ms >= ASS_SECONDARY_MIN_CUE_DURATION_MS
+            and previous_characters * 1000
+            <= ASS_SECONDARY_HARD_CPS * clipped_previous_duration_ms
+        ):
+            clipped_previous = (previous[0], current[0])
+            dominant_text_by_timing[clipped_previous] = dominant_text_by_timing.pop(previous)
+            dominant_seen_by_timing[clipped_previous] = dominant_seen_by_timing.pop(previous)
+            normalized_dominant_timings[-1] = clipped_previous
+            normalized_dominant_timings.append(current)
+            continue
+
+        merged_end = max(
+            previous[1],
+            current[1],
+            key=_srt_timestamp_milliseconds,
+        )
+        merged = (previous[0], merged_end)
+        merged_text: list[str] = []
+        merged_lines_seen: set[str] = set()
+        for line in dominant_text_by_timing.pop(previous) + dominant_text_by_timing.pop(current):
+            normalized_line = " ".join(line.split()).casefold()
+            if normalized_line in merged_lines_seen:
+                continue
+            merged_lines_seen.add(normalized_line)
+            merged_text.append(line)
+        merged_seen = dominant_seen_by_timing.pop(previous) | dominant_seen_by_timing.pop(current)
+        dominant_text_by_timing[merged] = merged_text
+        dominant_seen_by_timing[merged] = merged_seen
+        normalized_dominant_timings[-1] = merged
+    dominant_timings = normalized_dominant_timings
     dominant_original_character_counts = {
         timing: len(re.sub(r"\s+", "", "".join(dominant_text_by_timing[timing])))
+        for timing in dominant_timings
+    }
+    dominant_original_text_by_timing = {
+        timing: list(dominant_text_by_timing[timing])
         for timing in dominant_timings
     }
 
@@ -367,7 +418,6 @@ def ass_dialogue_style_to_srt_blocks(content: str, style: str) -> list[SrtBlock]
         if not chunks:
             raise AssExportError("ASS secondary Dialogue cluster has no usable text chunks")
         cluster["chunks"] = chunks
-        character_count = sum(_nonspace_character_count(chunk) for chunk in chunks)
         duration_ms = end_ms - start_ms
         required_ms = sum(
             max(
@@ -398,11 +448,13 @@ def ass_dialogue_style_to_srt_blocks(content: str, style: str) -> list[SrtBlock]
         available_left_ms = start_ms - left_boundary_ms
         available_right_ms = right_boundary_ms - end_ms
         if extra_ms > available_left_ms + available_right_ms:
-            raise AssExportError(
-                "ASS secondary Dialogue cluster cannot reach safe CPS within its gap: "
-                f"characters={character_count} duration_ms={duration_ms} "
-                f"available_ms={available_left_ms + available_right_ms}"
-            )
+            # SRT cannot model an independent on-screen sign concurrently
+            # with the dominant dialogue timeline.  Preserve the complete ASS
+            # as the source of record, but do not let an impossible legal
+            # notice/credit/sign cluster fail every otherwise usable dialogue
+            # cue or force overlapping SRT output.
+            cluster["omitted_from_srt"] = True
+            continue
         minimum_left_ms = max(0, extra_ms - available_right_ms)
         maximum_left_ms = min(extra_ms, available_left_ms)
         left_ms = min(max(extra_ms // 2, minimum_left_ms), maximum_left_ms)
@@ -466,11 +518,15 @@ def ass_dialogue_style_to_srt_blocks(content: str, style: str) -> list[SrtBlock]
         available_left_ms = start_ms - left_boundary_ms
         available_right_ms = right_boundary_ms - end_ms
         if extra_ms > available_left_ms + available_right_ms:
-            raise AssExportError(
-                "ASS dominant Dialogue with attached secondary text cannot reach safe CPS: "
-                f"characters={final_characters} duration_ms={duration_ms} "
-                f"available_ms={available_left_ms + available_right_ms}"
+            # The dominant text was safe before supplemental text was
+            # attached.  Prefer the verified dialogue cue over making the
+            # entire source unusable or emitting an unreadable/overlapping
+            # SRT cue.  The secondary event remains preserved in the ASS
+            # source snapshot.
+            dominant_text_by_timing[timing] = list(
+                dominant_original_text_by_timing[timing]
             )
+            continue
         minimum_left_ms = max(0, extra_ms - available_right_ms)
         maximum_left_ms = min(extra_ms, available_left_ms)
         left_ms = min(max(extra_ms // 2, minimum_left_ms), maximum_left_ms)
@@ -489,6 +545,8 @@ def ass_dialogue_style_to_srt_blocks(content: str, style: str) -> list[SrtBlock]
         for timing in dominant_timings
     ]
     for cluster in secondary_clusters:
+        if bool(cluster.get("omitted_from_srt")):
+            continue
         start_ms = int(cluster["start_ms"])
         end_ms = int(cluster["end_ms"])
         chunks = cluster.get("chunks")
