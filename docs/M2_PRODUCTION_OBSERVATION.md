@@ -59,7 +59,10 @@ Full operational logs remain on the server under the configured log retention po
 
 ## Automatic circuit breaker
 
-Canary target state: `ARMED`, with no confirmed trip in this snapshot. Runtime activation and every trigger path remain subject to the verification items below.
+Repository target state: `ARMED_CLOSED`, with no confirmed trip in this
+snapshot. The last confirmed server Worker revision predates this closeout
+guardrail commit, so runtime activation is explicitly **not yet verified** and
+must not be reported as active until the next safe stack update completes.
 
 | Trigger | Trip rule |
 | --- | --- |
