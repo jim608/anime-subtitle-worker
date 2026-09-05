@@ -937,13 +937,15 @@ def gate_claim_eligible(
     return True, "eligible"
 
 
-def _durable_recovery_snapshot(connection: sqlite3.Connection) -> dict[str, Any]:
+def _durable_recovery_snapshot(
+    connection: sqlite3.Connection, *, queue_exclusions: Sequence[str] = (),
+) -> dict[str, Any]:
     """Hash durable identities that recovery is forbidden to change."""
 
-    def digest_rows(query: str) -> tuple[int, str]:
+    def digest_rows(query: str, values: Sequence[Any] = ()) -> tuple[int, str]:
         digest = hashlib.sha256()
         count = 0
-        for row in connection.execute(query):
+        for row in connection.execute(query, values):
             digest.update(
                 json.dumps(
                     list(row),
@@ -956,8 +958,11 @@ def _durable_recovery_snapshot(connection: sqlite3.Connection) -> dict[str, Any]
             count += 1
         return count, "sha256:" + digest.hexdigest()
 
+    queue_filter = (" WHERE path NOT IN (" + ",".join("?" for _ in queue_exclusions) + ")"
+                    if queue_exclusions else "")
     queue_count, queue_identity = digest_rows(
-        "SELECT path,mtime_ns FROM ai_candidate_queue ORDER BY path COLLATE NOCASE"
+        "SELECT path,mtime_ns FROM ai_candidate_queue" + queue_filter + " ORDER BY path COLLATE NOCASE",
+        tuple(queue_exclusions),
     )
     checkpoint_count, checkpoint_identity = digest_rows(
         """
@@ -978,7 +983,8 @@ def _durable_recovery_snapshot(connection: sqlite3.Connection) -> dict[str, Any]
     queue_states = {
         str(row[0]): int(row[1])
         for row in connection.execute(
-            "SELECT status,COUNT(1) FROM ai_candidate_queue GROUP BY status"
+            "SELECT status,COUNT(1) FROM ai_candidate_queue" + queue_filter + " GROUP BY status",
+            tuple(queue_exclusions),
         ).fetchall()
     }
     return {
@@ -992,9 +998,11 @@ def _durable_recovery_snapshot(connection: sqlite3.Connection) -> dict[str, Any]
     }
 
 
-def _planned_change_snapshot(connection: sqlite3.Connection, gate_id: str) -> dict[str, Any]:
+def _planned_change_snapshot(
+    connection: sqlite3.Connection, gate_id: str, *, queue_exclusions: Sequence[str] = (),
+) -> dict[str, Any]:
     """Freeze durable work and append-only activity, never alter queue policy."""
-    snapshot = _durable_recovery_snapshot(connection)
+    snapshot = _durable_recovery_snapshot(connection, queue_exclusions=queue_exclusions)
     activity = {}
     for table, timestamp in (
         ("ai_delivery_attempts", "updated_at"),
@@ -1029,6 +1037,35 @@ def _planned_change_snapshot(connection: sqlite3.Connection, gate_id: str) -> di
     ).hexdigest()
     snapshot["member_count"] = len(members)
     return snapshot
+
+
+def _validate_planned_snapshot(connection: sqlite3.Connection, receipt: Mapping[str, Any]) -> dict[str, Any]:
+    """Preserve the exact old Queue while allowing proven unclaimed scan arrivals."""
+    expected = receipt["snapshot"]
+    current = _planned_change_snapshot(connection, receipt["gate"]["gate_id"])
+    if current == expected:
+        return {"late_unclaimed_queue_arrivals": 0}
+    delta = current["queue_count"] - expected["queue_count"]
+    if not 0 < delta <= 20:
+        raise RuntimeContractError("planned_change_new_work_or_evidence_changed")
+    # Discovery time may precede a slow read-only source proof. The commit's
+    # updated_at, not added_at, identifies the post-snapshot arrival window.
+    rows = connection.execute(
+        "SELECT path,mtime_ns,added_at,updated_at FROM ai_candidate_queue "
+        "WHERE updated_at>? AND status='queued' AND source='scan' AND attempts=0 "
+        "AND COALESCE(running_at,0)=0 AND force_ai=0 ORDER BY path COLLATE NOCASE LIMIT 21",
+        (float(receipt["prepared_at_epoch"]),),
+    ).fetchall()
+    paths = [str(row[0]) for row in rows]
+    if len(rows) != delta or _planned_change_snapshot(
+        connection, receipt["gate"]["gate_id"], queue_exclusions=paths,
+    ) != expected:
+        raise RuntimeContractError("planned_change_new_work_or_evidence_changed")
+    # No rows are removed or rewritten: filtering is only an identity proof.
+    # Checkpoints, output ledger, claims/events and cohort must still match.
+    return {"late_unclaimed_queue_arrivals": delta,
+            "late_queue_identity_sha256": "sha256:" + hashlib.sha256(
+                json.dumps([list(row) for row in rows], separators=(",", ":")).encode()).hexdigest()}
 
 
 def _require_planned_change_idle(connection: sqlite3.Connection, config: Any, now: float) -> None:
@@ -1141,7 +1178,10 @@ def _planned_change_incident(
     require_durable_claim_pause(config)
     _require_planned_change_idle(connection, config, now)
     old = receipt["runtime"]["baseline"]
-    if evidence["worker_commit_sha"] != receipt["expected_new_worker_sha"]:
+    followup = root_cause.get("expected_deployment_handoff")
+    expected_sha = (followup.get("expected_final_worker_sha") if isinstance(followup, Mapping)
+                    else receipt["expected_new_worker_sha"])
+    if evidence["worker_commit_sha"] != expected_sha:
         raise RuntimeContractError("planned_change_new_sha_mismatch")
     for key in ("worker_commit_sha", "worker_source_revision", "worker_runtime_code_revision",
                 "worker_container_id", "worker_container_identity", "worker_image_id",
@@ -1160,8 +1200,7 @@ def _planned_change_incident(
     fault = evidence["fault_results"]
     if not prepared < float(fault.get("container_started_at_epoch") or 0) <= float(fault.get("started_at_epoch") or 0) <= float(fault.get("finished_at_epoch") or 0) <= now:
         raise RuntimeContractError("planned_change_fault_evidence_not_fresh")
-    if _planned_change_snapshot(connection, receipt["gate"]["gate_id"]) != receipt["snapshot"]:
-        raise RuntimeContractError("planned_change_new_work_or_evidence_changed")
+    queue_preservation = _validate_planned_snapshot(connection, receipt)
     gate = gate_by_id(connection, receipt["gate"]["gate_id"])
     if not gate or active_gate(connection) is not None or gate.get("status") != INVALIDATED_RUNTIME:
         raise RuntimeContractError("planned_change_old_gate_not_invalidated")
@@ -1175,10 +1214,21 @@ def _planned_change_incident(
         or breaker.get("reasons") != [*previous_reasons, latest]
         or latest.get("observed_at") != breaker.get("updated_at")):
         raise RuntimeContractError("planned_change_unexpected_breaker")
+    handoff = None
+    if followup is not None:
+        handoff = _verified_deployment_handoff(
+            connection, config=config, root_cause=root_cause, breaker=breaker,
+            gate=gate, origin_epoch=prepared,
+        )
+        if (evidence["worker_commit_sha"] == handoff["first_worker_sha"]
+            or evidence["worker_container_id"] == handoff["first_container_id"]
+            or evidence["worker_source_revision"] == handoff["first_source_revision"]
+            or float(fault["container_started_at_epoch"]) <= handoff["first_attested_at"]):
+            raise RuntimeContractError("planned_change_followup_runtime_not_proven")
     try:
         invalidation = json.loads(gate["invalidation_evidence_json"])
         expected, actual = invalidation["expected"], invalidation["actual"]
-        if (not prepared < float(fault["container_started_at_epoch"]) <= float(gate["invalidated_at"]) <= float(latest["observed_at"]) <= now
+        if handoff is None and (not prepared < float(fault["container_started_at_epoch"]) <= float(gate["invalidated_at"]) <= float(latest["observed_at"]) <= now
             or invalidation.get("reason_code") != "live_worker_container_identity_mismatch"
             or actual.get("reason_code") != "live_worker_container_identity_mismatch"
             or actual.get("container_identity") != evidence["worker_container_identity"]
@@ -1194,7 +1244,8 @@ def _planned_change_incident(
                 json.dumps(receipt["snapshot"], sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
             "planned_change_receipt_sha256": root_cause["planned_change_receipt_sha256"],
             "prepared_at_epoch": prepared, "old_gate_id": gate["gate_id"],
-            "new_work_observed": False, "member_count": receipt["snapshot"]["member_count"]}
+            "new_work_observed": False, "member_count": receipt["snapshot"]["member_count"],
+            "queue_preservation": queue_preservation, "deployment_handoff": handoff}
 
 
 def _breaker_incident_sources(
@@ -1324,7 +1375,17 @@ def _verified_deployment_handoff(
     if not isinstance(receipt, Mapping) or not isinstance(receipt.get("identity"), Mapping):
         raise RuntimeContractError("handoff_attestation_receipt_invalid")
     original = receipt.get("root_cause_evidence")
-    if not isinstance(original, Mapping) or any(original.get(key) != root_cause.get(key) for key in (
+    planned = root_cause.get("mode") == "planned_runtime_change"
+    if planned:
+        prepared_receipt = _planned_change_receipt(config, root_cause)
+        first_plan = receipt.get("planned_receipt")
+        if (not isinstance(first_plan, Mapping)
+            or first_plan.get("status") != "PREPARED"
+            or first_plan.get("receipt_sha256") != root_cause.get("planned_change_receipt_sha256")
+            or first_plan.get("old_gate_id") != root_cause.get("expected_old_gate_id")
+            or receipt.get("worker_sha") != prepared_receipt.get("expected_new_worker_sha")):
+            raise RuntimeContractError("handoff_original_incident_mismatch")
+    elif not isinstance(original, Mapping) or any(original.get(key) != root_cause.get(key) for key in (
         "mode", "breaker_reason", "affected_stage", "failure_code", "expected_old_gate_id",
         "expected_breaker_updated_at", "expected_counter_updated_at", "members", "lane_quality_pause",
     )):
@@ -1342,7 +1403,7 @@ def _verified_deployment_handoff(
         if started_at.tzinfo is None:
             raise ValueError("deployment timestamp needs timezone")
         started = started_at.timestamp()
-        created = float(receipt["created_at"])
+        created = float(receipt["at"] if planned else receipt["created_at"])
         invalidated = float(gate["invalidated_at"])
         tripped = float(latest["observed_at"])
     except (KeyError, TypeError, ValueError) as exc:
@@ -1367,6 +1428,7 @@ def _verified_deployment_handoff(
     return {"first_attestation_sha256": proof["first_attestation_sha256"],
             "first_worker_sha": receipt["worker_sha"], "first_container_id": container_id,
             "first_source_revision": source_revision,
+            "first_attested_at": created,
             "latest_trip_observed_at_epoch": tripped,
             "invalidation_evidence_sha256": proof["invalidation_evidence_sha256"],
             "new_work_observed": False}
@@ -1706,7 +1768,10 @@ def _prepare_pending_recovery_resume(
     collision_mode = root_cause.get("mode") == "generic_failure_signature_collision"
     if planned_mode:
         receipt = _planned_change_receipt(config, root_cause)
-        if worker_commit != receipt.get("expected_new_worker_sha"):
+        followup = root_cause.get("expected_deployment_handoff")
+        expected_sha = (followup.get("expected_final_worker_sha") if isinstance(followup, Mapping)
+                        else receipt.get("expected_new_worker_sha"))
+        if worker_commit != expected_sha:
             raise RuntimeContractError("planned_change_new_sha_mismatch")
     elif collision_mode:
         _validate_collision_regression(config, evidence, root_cause, now)
@@ -1797,6 +1862,7 @@ def _prepare_pending_recovery_resume(
         raise RuntimeContractError("pending_collision_evidence_mismatch")
     if planned_mode and (
         recovery_log.get("recovery_mode") != "planned_runtime_change"
+        or recovery_log.get("planned_deployment_handoff") != root_cause.get("expected_deployment_handoff")
         or recovery_log.get("planned_change_receipt_sha256") != root_cause.get("planned_change_receipt_sha256")
         or not isinstance(recovery_log.get("completion_runtime"), Mapping)
         or any(evidence.get(key) != value for key, value in recovery_log["completion_runtime"].items())
@@ -1816,8 +1882,7 @@ def _prepare_pending_recovery_resume(
             raise RuntimeContractError("pending_recovery_unexpected_active_gate")
         if planned_mode and prior_runtime.get("status") == "DISARMED":
             _require_planned_change_idle(store.observation_connection, config, now)
-            if _planned_change_snapshot(store.observation_connection, expected_old_gate) != receipt["snapshot"]:
-                raise RuntimeContractError("planned_change_new_work_or_evidence_changed")
+            _validate_planned_snapshot(store.observation_connection, receipt)
         if prior_runtime.get("status") == "ARMED":
             current_gate_id = str((prior_runtime.get("gate") or {}).get("gate_id") or "")
             if not isinstance(current_active, Mapping) or current_active.get("gate_id") != current_gate_id:
@@ -2235,6 +2300,7 @@ def recover_runtime_local(
         if planned_mode:
             recovery_evidence.update({
                 "recovery_mode": "planned_runtime_change",
+                "planned_deployment_handoff": root_cause.get("expected_deployment_handoff"),
                 "source_identity_preserved": None,
                 "source_integrity_verification": "not_reprobed_no_media_mutation_operations",
                 "planned_change_receipt_sha256": root_cause["planned_change_receipt_sha256"],

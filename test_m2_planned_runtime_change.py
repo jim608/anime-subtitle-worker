@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+from datetime import datetime, timezone
 from pathlib import Path
 import time
 import unittest
@@ -218,11 +220,104 @@ class PlannedRuntimeChangeTests(unittest.TestCase):
         self.evidence["worker_commit_sha"] = "3" * 40
         self.assert_refused("planned_change_new_sha_mismatch")
 
+    def test_late_unclaimed_scan_enqueue_is_preserved(self):
+        self.connection.execute("UPDATE ai_candidate_queue SET updated_at=?", (self.now - 1,))
+        self.state.commit()
+        self.deploy()
+        late = self.fixture.root / "late-arrival.mkv"
+        late.write_bytes(b"unmodified-late-source")
+        self.state.upsert_ai_queue_candidate(late, late.stat().st_mtime_ns)
+        # Scanner records discovery time before its slow read-only proof;
+        # the queued row is committed after the planned snapshot.
+        self.connection.execute(
+            "UPDATE ai_candidate_queue SET added_at=?,updated_at=? WHERE path=?",
+            (self.now - 10, self.now + 1, str(late)),
+        )
+        self.state.commit()
+        before = tuple(self.connection.execute(
+            "SELECT * FROM ai_candidate_queue WHERE path=?", (str(late),)).fetchone())
+        self.assertEqual("DISARMED", self.recover()["status"])
+        self.assertEqual(before, tuple(self.connection.execute(
+            "SELECT * FROM ai_candidate_queue WHERE path=?", (str(late),)).fetchone()))
+        self.assertEqual(b"unmodified-late-source", late.read_bytes())
+
     def test_refuses_configuration_drift(self):
         self.deploy()
         self.config.m2_recovery_retry_budget += 1
         self.evidence["configuration_fingerprint"] = runtime.configuration_fingerprint(self.config)
         self.assert_refused("planned_change_frozen_policy_changed")
+
+    def test_late_enqueue_does_not_hide_changed_existing_identity(self):
+        self.connection.execute("UPDATE ai_candidate_queue SET updated_at=?", (self.now - 1,))
+        self.state.commit()
+        self.deploy()
+        late = self.fixture.root / "late.mkv"
+        self.state.upsert_ai_queue_candidate(late, 10)
+        self.connection.execute("UPDATE ai_candidate_queue SET updated_at=? WHERE path=?", (self.now + 1, str(late)))
+        self.connection.execute("UPDATE ai_candidate_queue SET mtime_ns=mtime_ns+1 WHERE path=?", (str(self.media),))
+        self.state.commit()
+        self.assert_refused("planned_change_new_work_or_evidence_changed")
+
+    def test_late_previously_attempted_queue_is_not_exempted(self):
+        self.connection.execute("UPDATE ai_candidate_queue SET updated_at=?", (self.now - 1,))
+        self.state.commit()
+        self.deploy()
+        late = self.fixture.root / "late.mkv"
+        self.state.upsert_ai_queue_candidate(late, 10)
+        self.connection.execute("UPDATE ai_candidate_queue SET updated_at=?,attempts=1 WHERE path=?", (self.now + 1, str(late)))
+        self.state.commit()
+        self.assert_refused("planned_change_new_work_or_evidence_changed")
+
+    def deploy_followup(self):
+        self.deploy()
+        gate = gate_by_id(self.connection, self.old_gate)
+        breaker = json.loads(observation.circuit_breaker_state_path(self.config).read_text())
+        first = Path(self.prepared["receipt_path"]).parent / "first-attestation.json"
+        first.write_text(json.dumps({
+            "at": self.now + 6, "worker_sha": "2" * 40, "planned_receipt": self.prepared,
+            "identity": {"container_id": "f" * 64, "image_id": "sha256:" + "e" * 64,
+                         "source_revision": "b" * 64,
+                         "started_at": datetime.fromtimestamp(self.now + 2, timezone.utc).isoformat()},
+        }))
+        proof = {
+            "first_attestation_path": str(first), "first_attestation_sha256": "sha256:" + runtime.sha256_file(first),
+            "expected_breaker_updated_at": breaker["updated_at"],
+            "latest_trip_sha256": "sha256:" + hashlib.sha256(json.dumps(breaker["latest_trip"], sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+            "invalidation_evidence_sha256": "sha256:" + hashlib.sha256(gate["invalidation_evidence_json"].encode()).hexdigest(),
+            "expected_final_worker_sha": "3" * 40,
+        }
+        root_cause = {**self.evidence["root_cause"], "expected_deployment_handoff": proof}
+        self.fixture.identity.write_text("a" * 12 + "\n")
+        self.fixture.revision.write_text("c" * 64 + "\n")
+        (self.fixture.runtime_app / "worker.py").write_text("VALUE = 4\n")
+        self.evidence = self.fixture._evidence("3" * 40, self.now + 10)
+        self.evidence.update({"root_cause": root_cause, "worker_source_revision": "c" * 64,
+                             "worker_container_id": "a" * 64, "worker_container_identity": "a" * 12,
+                             "worker_image_id": "sha256:" + "b" * 64})
+        self.evidence["fault_results"]["worker_source_revision"] = "c" * 64
+
+    def test_attested_followup_preserves_original_receipt_and_gate(self):
+        self.deploy_followup()
+        before = Path(self.prepared["receipt_path"]).read_bytes()
+        result = self.recover()
+        self.assertEqual("DISARMED", result["status"])
+        self.assertEqual(before, Path(self.prepared["receipt_path"]).read_bytes())
+        self.assertEqual(result["recovery_record_id"], self.recover()["recovery_record_id"])
+        new = runtime.initialize_gate(self.config, self.evidence,
+                                      source_revision_file=self.fixture.revision, now=self.now + 11)
+        self.assertEqual("3" * 40, new["baseline"]["worker_commit_sha"])
+        self.assertEqual("INVALIDATED_BY_RUNTIME_CHANGE", gate_by_id(self.connection, self.old_gate)["status"])
+        self.assertEqual(self.before_files, {p: p.read_bytes() for p in self.before_files})
+
+    def test_followup_refuses_changed_attestation(self):
+        self.deploy_followup()
+        self.evidence["root_cause"]["expected_deployment_handoff"]["first_attestation_sha256"] = "sha256:" + "0" * 64
+        self.assert_refused("handoff_attestation_receipt_invalid")
+
+    def test_followup_refuses_wrong_planned_final_sha(self):
+        self.deploy_followup()
+        self.evidence["root_cause"]["expected_deployment_handoff"]["expected_final_worker_sha"] = "4" * 40
+        self.assert_refused("planned_change_new_sha_mismatch")
 
     def test_refuses_old_fault_evidence(self):
         self.deploy()
