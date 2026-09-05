@@ -3,14 +3,17 @@
 ## Status
 
 - Milestone state: `M2_GUARDRAILS_ARMED`
-- Circuit-breaker runtime status before the repair deployment: `ARMED` (`runtime_baseline_match`)
-- Former Gate final status: `INVALIDATED_OBSERVATION_AUTOMATION_NOT_READY`
-- Frozen-cohort repository candidate: **locally ready; Production deployment validation pending**
-- Active replacement Gate: **not yet started by this document**
+- Circuit-breaker runtime status after controlled recovery: `ARMED` (`runtime_baseline_match`)
+- Incident breaker transition: `TRIPPED` -> `ARMED`
+- Historical automation-repair Gate final status: `INVALIDATED_OBSERVATION_AUTOMATION_NOT_READY`
+- Pre-recovery Gate final status: `INVALIDATED_BY_RUNTIME_CHANGE`
+- Frozen-cohort/recovery runtime: **deployed and bounded validation complete**
+- Active replacement Gate: `m2-gate-20260905T020845085531Z-7d0c5c7333`, started `2026-09-05T02:08:45.085531Z`
+- Active replacement Gate counter: **`0 / 20`; this closeout did not wait for any member**
 - Former Gate counter: **`0 / 20` at invalidation; it is not a valid cohort and cannot be resumed or backfilled**
 - Production acceptance: **not accepted**
 - Scope: M2 observation-automation repair and deployment closeout only. This work does not start M3.
-- Evidence boundary: fixed values below describe the invalidated historical Gate and its bounded snapshot. New live Worker/image/Gate values are deployment-time evidence and are intentionally not invented here. The queue is not continuously polled or observed item by item.
+- Evidence boundary: fixed values below preserve both invalidated historical Gates and the bounded live recovery snapshot. The queue was not continuously polled or observed item by item.
 
 This status must not be represented as `M2_PRODUCTION_ACCEPTED`, and it is not evidence that the platform has reached 99% or 99.9% autonomy.
 
@@ -239,13 +242,61 @@ exact affected source identities, invalidates the old Gate as
 only then clears the latch into `DISARMED` pending a new Gate. Re-arming creates
 the new baseline at `0/20`; recovery never mixes versions into the old Gate.
 
+## 2026-09-05 live recovery result
+
+The first live recovery attempt correctly stopped after invalidating the old
+Gate and clearing the breaker latch to `DISARMED`: the Gate initializer rejected
+the operation with `ai_claims_not_paused`. The deployment hold had restored the
+WebUI scheduler state, but it had not established the durable `ai_control.json`
+operator pause required by Gate initialization. Commit
+`d9dfcd01aa9ebeffe65c8367f4e1bbace56d5bcc` made recovery restart-safe: it writes
+and validates the durable pause before reconciliation/Gate creation, resumes a
+validated pending recovery after deployment, and clears the pause only after
+the runtime is `ARMED` with the matching active Gate.
+
+| Live recovery field | Verified value |
+| --- | --- |
+| Old Worker runtime SHA | `45b61eb7da3c7e88fce70e1bea9573ad930e2a21` |
+| New Worker runtime SHA | `d9dfcd01aa9ebeffe65c8367f4e1bbace56d5bcc` |
+| WebUI runtime SHA | `7bd36c30fb07e393eba71760a164246d267c5b16` |
+| Worker image ID | `sha256:8448157ef1b8cd720c35451e0642e6472f2f19a4e758ecbba77b6f991ab4ccea` |
+| WebUI image ID | `sha256:4b0e2458b770de20c9fda8af01926a97e8cc5104aff1458c18f79c403abc26a2` |
+| Configuration fingerprint | `sha256:355300b197164801be4616a688d852c1b8b5274fe91e91e40a2a21f12a3c4dbc` |
+| Decision schema version | `1` |
+| Breaker before / after | `TRIPPED` / `ARMED` |
+| Invalidated Gate | `m2-gate-20260904T163053158998Z-f3076238c7` (`INVALIDATED_BY_RUNTIME_CHANGE`) |
+| New Gate ID | `m2-gate-20260905T020845085531Z-7d0c5c7333` |
+| New Gate baseline | `m2-guardrail-v1:0180b8779ee97524bf0150d2` |
+| New Gate start | `2026-09-05T02:08:45.085531Z` |
+| Eligibility policy | `m2-frozen-first-20-v1` |
+| Initial Gate progress | `0 / 20` |
+| Normal claims | resumed after `ARMED` and matching Gate validation |
+| Recovery lane | one mandatory canary dispatched; `CANARY_IN_FLIGHT` at the bounded final snapshot |
+| Recovery log | `/logs/m2-production-recovery-resume-20260905T020843873483Z-b68b9cda.json` |
+| Production source media affected | No |
+| Formal outputs affected | No |
+
+The durable recovery matrix contained 2 historical `FAILED`, 470 `RETRYING`,
+4 stale `RUNNING`, 0 `QUARANTINED`, and 693 historical `NEEDS_REVIEW` rows.
+There were 222 recoverable entries; one was dispatched as the mandatory
+recovery canary, 221 remained ready, 947 were permanently excluded, and no
+checkpoint resume had occurred at closeout. This is a bounded reconciliation
+snapshot, not a claim that the recovery backlog or frozen 20-job Gate finished.
+
 ## Automatic circuit breaker
 
-The pre-repair runtime state is `ARMED`, with no confirmed trip at historical
-initialization. That running Worker image executed the isolated fault suite
-after its container start and passed all seven required breaker classes. These
-records remain valid historical breaker evidence; the repaired image must run
-a fresh timestamped 7/7 suite before replacement Gate creation.
+The repaired runtime is `ARMED` and its active Gate reports
+`runtime_baseline_match`. After the final container start, the running Worker
+image executed a fresh isolated fault suite and passed all seven required
+breaker classes before replacement Gate creation.
+
+- Current validation run: `m2-guardrail-fi-20260905T020807095602Z-7f551399`
+- Current full event log: `/logs/m2-guardrail-fi-20260905T020807095602Z-7f551399/events.jsonl`
+- Current result: `/logs/m2-guardrail-fi-20260905T020807095602Z-7f551399/result.json`
+- Current breaker tests: `7 / 7 PASS`
+- Current production source/output affected by fault injection: **No**
+
+The following older run remains historical evidence for the pre-repair image:
 
 - Validation run: `m2-guardrail-fi-20260904T105817974649Z-b7176039`
 - Validation window: `2026-09-04T10:58:17.974636Z` to `2026-09-04T10:58:18.758425Z`
@@ -278,13 +329,10 @@ Circuit-breaker semantics are fail-closed for **new claims only**:
 ## Items not yet verified
 
 - Terminal results of the eight pre-gate running attempts; this goal did not wait for them and they remain excluded from the formal gate.
-- New Worker runtime SHA and container identity after the repaired image is deployed.
-- Fresh server-image results for the 24 core observation tests, 11 recovery/replay tests, 7 isolated breaker cases, and related M1/M2 regression.
-- Replacement Gate ID, baseline, start timestamp, and bounded initial `0/20` status.
 - Real Production execution of the replacement first-20 cohort; this work must not wait for it.
 - Exactly-once Production summary publication after those same fixed 20 members are terminal.
 - A real Production runtime-drift event; isolated drift invalidation and same-baseline restart are locally verified.
-- Live production trip and controlled runtime reload/recovery after an actual breaker cause is removed. Isolated safe recovery is verified.
+- Terminal result of the single dispatched recovery canary and later recovery-lane items; this closeout intentionally did not wait for them.
 - Full M2 release-acceptance corpus of at least 100 eligible inputs.
 - Separate restart, Docker restart, model crash/timeout, OOM, partial-stage, duplicate-event, and temporary-output fault-injection gates.
 - Rolling 500-job production SLO evidence.

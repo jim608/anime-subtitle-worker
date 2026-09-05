@@ -193,16 +193,44 @@ terminalized as interrupted without deleting its checkpoint; and the runtime
 must be probed again before admission resumes.
 
 Production recovery uses `m2_guardrail_runtime.py recover`. It refuses an
-untripped or unsupported cause, unchanged Worker runtime, missing fresh 7/7
-evidence, mismatched runtime/config/Decision identity, active recent work,
-changed source identity, changed queue identity, changed checkpoint content,
-or changed formal-output evidence. It appends a recovery event and timestamped
-full log, invalidates the old Gate, and writes `DISARMED` before closing the
-latch. A second attested arm creates a new immutable `0/20` Gate; no deletion of
-the breaker file or observation rows is part of recovery.
+unsupported cause, unchanged Worker runtime, missing fresh 7/7 evidence,
+mismatched runtime/config/Decision identity, active recent work, changed source
+identity, changed queue identity, changed checkpoint content, or changed
+formal-output evidence. It writes and validates a durable operator claim pause,
+appends a recovery event and timestamped full log, invalidates the old Gate,
+and writes `DISARMED` before closing the latch. A second attested arm creates a
+new immutable `0/20` Gate. The durable pause is cleared only after the runtime
+is `ARMED`, the new Gate is active, and observation reports a matching baseline;
+no deletion of the breaker file or observation rows is part of recovery.
+
+If deployment or process restart occurs after the latch is cleared but before
+the replacement Gate is armed, recovery remains fail-closed. A pending-resume
+operation must revalidate the original recovery record and log, old-Gate
+invalidation, current runtime/source/config/Decision identity, and fresh fault
+evidence before re-establishing the durable pause and continuing. It must not
+repeat historical reconciliation or mix Worker versions in one Gate.
 
 The isolated harness proves this sequence by requiring persisted reason
 evidence, moving only the sandbox latch to a recovery archive, writing a
 recovery record, clearing only the sandbox process latch, re-running the real
 admission wrapper, and rechecking all fixture hashes. This sandbox proof does
 not by itself validate a live-container restart or production recovery.
+
+## 2026-09-05 live controlled recovery
+
+The Production incident was caused by three distinct
+`source_selection_needs_review` outcomes at `source_selection_review`. Durable
+pipeline state correctly held them as `NEEDS_REVIEW`, while the legacy adapter
+misclassified them as retryable system failures and the breaker counted that
+signature. The repaired classification excludes `QUALITY_BLOCKED` review
+outcomes, and streak membership is now keyed to distinct stable jobs.
+
+The final running Worker
+`d9dfcd01aa9ebeffe65c8367f4e1bbace56d5bcc` passed the fresh server-image 7/7
+suite, completed the restart-safe pending recovery, transitioned the breaker
+from `TRIPPED` to `ARMED`, invalidated the prior Gate as
+`INVALIDATED_BY_RUNTIME_CHANGE`, and created
+`m2-gate-20260905T020845085531Z-7d0c5c7333` at `0/20`. Normal claims resumed
+only after the active baseline matched. Exactly one recovery canary was
+dispatched. The bounded checks reported no Production source-media or formal-
+output change.

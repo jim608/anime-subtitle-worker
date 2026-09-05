@@ -13,17 +13,22 @@ Recovery candidate revalidated on 2026-09-05.
 - Complete Worker regression: **OK (1,649 run; 1 conditional skip)**
 - Recovery candidate targeted regression: **OK**
 - Recovery candidate complete Worker regression: **OK (1,720 run; 1 conditional skip)**
+- Restart-safe recovery complete Worker regression: **OK (1,721 run; 1 conditional skip)**
 - Historical pre-repair server image/runtime execution: **PASS (7/7 breaker cases)**
 - Historical server timestamped full log validation: **PASS**
 - Historical runtime status after initialization: **ARMED**
+- Final repaired server image/runtime execution: **PASS (7/7 breaker cases)**
+- Live controlled recovery: **PASS (`TRIPPED` -> `ARMED`)**
+- Replacement frozen Gate: **ACTIVE (`0/20`)**
 - Production source media or formal outputs affected by fault injection: **No**
 
 The server run below was executed before the frozen-cohort automation repair.
 It proves that historical guardrail runtime only. Its observation Gate is
 invalidated as `INVALIDATED_OBSERVATION_AUTOMATION_NOT_READY`; the result does
 not initialize or pass a replacement 20-job Gate and does not establish
-Production acceptance. A repaired deployment must generate a fresh timestamped
-7/7 result before arming its replacement Gate.
+Production acceptance. The repaired deployment generated a separate fresh
+timestamped 7/7 result before arming its replacement Gate; both runs remain
+independently auditable.
 
 ## Isolated fault matrix
 
@@ -89,6 +94,30 @@ that boundary is synthetic and isolated; no production queue backend is opened.
 - Full event-log digest: `sha256:371c300b231fdc42efa0203533d7473d07344eebd236d973839770abe10e674a`
 - Historical runtime gate initialization: `ARMED`, baseline `m2-guardrail-v1:276fdef781528ba2059c114e`, initial progress `0/20`; subsequently invalidated as `INVALIDATED_OBSERVATION_AUTOMATION_NOT_READY`
 
+## Final repaired server validation and recovery evidence
+
+- Worker runtime SHA: `d9dfcd01aa9ebeffe65c8367f4e1bbace56d5bcc`
+- WebUI runtime SHA: `7bd36c30fb07e393eba71760a164246d267c5b16`
+- Fault run ID: `m2-guardrail-fi-20260905T020807095602Z-7f551399`
+- Fault result: `/logs/m2-guardrail-fi-20260905T020807095602Z-7f551399/result.json`
+- Full fault event log: `/logs/m2-guardrail-fi-20260905T020807095602Z-7f551399/events.jsonl`
+- Breaker tests: `7/7 PASS`
+- Controlled recovery log: `/logs/m2-production-recovery-resume-20260905T020843873483Z-b68b9cda.json`
+- Breaker transition: `TRIPPED` -> `ARMED`
+- Invalidated Gate: `m2-gate-20260904T163053158998Z-f3076238c7` (`INVALIDATED_BY_RUNTIME_CHANGE`)
+- Replacement Gate: `m2-gate-20260905T020845085531Z-7d0c5c7333`
+- Replacement baseline: `m2-guardrail-v1:0180b8779ee97524bf0150d2`
+- Gate start: `2026-09-05T02:08:45.085531Z`
+- Initial progress: `0/20`
+- Production source/output affected: `false`
+
+The persisted recovery snapshot recorded 2 historical `FAILED`, 470
+`RETRYING`, 4 stale `RUNNING`, 0 `QUARANTINED`, and 693 historical
+`NEEDS_REVIEW` rows. It classified 222 entries as recoverable and 947 as
+permanently excluded. At the bounded closeout snapshot, one recovery canary had
+been dispatched, 221 entries remained ready, and the checkpoint-resume count
+was 0. The canary result and later recovery work were deliberately not awaited.
+
 ## Commands and focused results
 
 ```text
@@ -121,13 +150,10 @@ stored in `result.json` under the same timestamped run directory.
 
 The following evidence remains explicitly pending:
 
-- Fresh repaired-image server validation, runtime arming, and the replacement
-  Gate's bounded initial `0/20` evidence. Local tests cover no-backfill
-  selection, complete per-job evidence, exactly-once reporting, recovery, and
-  `INVALIDATED_BY_RUNTIME_CHANGE`; they do not substitute for live deployment.
 - The replacement frozen first-20 cohort outcome. This closeout initializes it
   but does not wait for its 20 jobs or claim Production acceptance.
-- Live production trip recovery, including a controlled runtime reload after a real cause is remediated.
+- The terminal result of the single dispatched recovery canary and later
+  recovery-lane items.
 - Full 100-input M2 release gate and later rolling-production SLO evidence.
 - Any measured production autonomy-rate claim.
 

@@ -55,17 +55,20 @@ M2 translation quality, Translation Memory, full QC redesign and WebUI work are 
 - [x] Make repeated OOM/identical-stage streaks distinct-job aware and replay-idempotent, while keeping three distinct systemic failures fail-closed.
 - [x] Add the evidence-bound `m2_guardrail_runtime.py recover` flow: preserve trip evidence, verify runtime/queue/checkpoint/source/output identities, invalidate the old Gate, journal recovery, and require a new attested `0/20` Gate before claims resume.
 - [x] Pass the 2026-09-05 recovery candidate regression: 1,720 tests run, OK with one conditional skip.
-- [ ] While claims are paused, deploy this repository candidate, apply the exact former-Gate invalidation, rerun the focused regression and seven-breaker suite in the new server image, and verify the live runtime remains `ARMED`.
-- [ ] Create a new deployment-bound Gate ID/baseline/start timestamp at `0/20`, then resume claims without waiting for the cohort to finish.
+- [x] Make controlled recovery restart-safe by durably pausing claims before Gate initialization, validating a pending recovery across deployment, and resuming claims only after an `ARMED` matching baseline; pass the complete 1,721-test regression with one conditional skip.
+- [x] While claims were paused, safely deploy the repaired Worker, preserve the exact former-Gate invalidation, run a fresh seven-breaker suite in the new server image, and verify the live runtime is `ARMED`.
+- [x] Create deployment-bound Gate `m2-gate-20260905T020845085531Z-7d0c5c7333` with baseline `m2-guardrail-v1:0180b8779ee97524bf0150d2` at `2026-09-05T02:08:45.085531Z` and `0/20`, then resume normal claims and dispatch only one recovery canary without waiting for either workflow to finish.
 
 The former `0/20` observation baseline is not a valid Gate and has the final
 status `INVALIDATED_OBSERVATION_AUTOMATION_NOT_READY`. Its eight pre-gate
 attempts remain supplemental records and cannot be enrolled retroactively.
-The replacement frozen-cohort implementation is locally tested, but its live
-Worker SHA, image identity, Gate ID, baseline and start time remain
-deployment-time evidence. No new Production Gate is represented as started by
-this plan. M2 is not `M2_PRODUCTION_ACCEPTED`; the 20-job Gate, 100-input
-release gate, rolling-500 Production SLO, and any measured 99%/99.9% autonomy
+The replacement frozen-cohort implementation is deployed at Worker runtime
+`d9dfcd01aa9ebeffe65c8367f4e1bbace56d5bcc`; the fresh server-image breaker
+suite passed 7/7 and the bounded Production recovery reported no source-media
+or formal-output change. The new frozen Gate is active at `0/20`, but this plan
+does not claim any member result or wait for it. M2 is not
+`M2_PRODUCTION_ACCEPTED`; the 20-job Gate, 100-input release gate, rolling-500
+Production SLO, recovery-canary result, and any measured 99%/99.9% autonomy
 claim remain unverified.
 
 Translation-quality improvements, Translation Memory, full QC redesign, WebUI redesign and M3 model-fallback work remain out of scope for this milestone.
