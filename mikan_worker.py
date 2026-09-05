@@ -35,6 +35,7 @@ from control_state import (
 from file_times import file_time_metadata
 from lock import VideoLock
 from mikan_source import (
+    MikanSourceDeadline,
     MikanSourceError,
     MikanRelease,
     extract_episode_number,
@@ -318,6 +319,8 @@ MIKAN_REDOWNLOAD_ALL_CANCEL_NAME = "mikan_redownload_all.cancel.json"
 MIKAN_EXTRACT_CANCEL_NAME = "mikan_extract_cancel.request.json"
 MIKAN_COMPLETED_STATE_UPDATE_REQUEST_NAME = "mikan_completed_state_update.request.json"
 MIKAN_REPLACEMENT_ENQUEUE_REQUEST_NAME = "mikan_replacement_enqueue.request.json"
+MIKAN_ENQUEUE_CURSOR_NAME = "mikan_enqueue.cursor.json"
+MIKAN_ENQUEUE_SLICE_SECONDS = 60.0
 MIKAN_REVIEW_SOURCE_RECONCILE_SECONDS = 30.0
 MIKAN_REVIEW_SOURCE_MISSING_GRACE_SECONDS = 60.0
 _SQLITE_AUTHORITATIVE_PENDING_PATHS: set[Path] = set()
@@ -365,6 +368,9 @@ class MikanWorker:
             if self.consume_deferred_requests() is not None:
                 return
             self.enqueue_latest_releases(required=False)
+            # A request may become due while discovery is in progress.  Give
+            # it a turn before the outer watcher sleeps again.
+            self.consume_replacement_enqueue_request()
             self.consume_deferred_requests()
         except QBitError as exc:
             self.logger.warning("Mikan qBittorrent work skipped this cycle: %s", exc)
@@ -1055,15 +1061,19 @@ class MikanWorker:
                     targets.append(MikanReplacementTarget(int(target["bangumi_id"]), int(target["episode"])))
                 except (KeyError, TypeError, ValueError):
                     continue
-        targets = _unique_replacement_targets(targets)
+        # Preserve the durable round-robin order; the general-purpose helper
+        # sorts by series and would move a yielded large series back to front.
+        targets = list({(target.bangumi_id, target.episode): target for target in targets}.values())
         if not targets:
             request_path.unlink(missing_ok=True)
             return {"deferred": False, "request": request, "queued": 0, "targets": []}
 
-        # Drain one series per watch interval; the remainder stays in the
+        # Drain a bounded part of one series per watch interval; the remainder stays in the
         # existing durable replacement request across restarts.
         selected_bangumi = targets[0].bangumi_id
-        batch = [target for target in targets if target.bangumi_id == selected_bangumi]
+        batch = [target for target in targets if target.bangumi_id == selected_bangumi][
+            :max(1, int(getattr(self.config, "mikan_max_items_per_bangumi", 1) or 1))
+        ]
 
         lock = self._acquire_queue_lock(
             "consume_replacement_enqueue_request",
@@ -1075,12 +1085,29 @@ class MikanWorker:
             return {"deferred": True, "request_path": str(request_path), "targets": request.get("targets", [])}
         try:
             qbit = self._qbit()
-            self._fallback_sources.begin_cycle()
+            deadline = time.monotonic() + min(
+                MIKAN_ENQUEUE_SLICE_SECONDS,
+                max(1.0, float(getattr(self.config, "mikan_watch_interval_seconds", 300) or 300)),
+            )
+            self._fallback_sources.begin_cycle(deadline_monotonic=deadline)
             queued = self._enqueue_replacements_after_extract_failure_unlocked(
                 batch,
                 qbit,
                 queue_lock_held=True,
+                deadline_monotonic=deadline,
             )
+        except MikanSourceDeadline:
+            latest = _load_request_file(request_path)
+            current = latest.get("targets", [])
+            # Local preemption must not consume failure budget or drop jobs.
+            # Rotate this series so another due source gets the next turn.
+            rotated = [item for item in current if int(item["bangumi_id"]) != selected_bangumi]
+            rotated.extend(item for item in current if int(item["bangumi_id"]) == selected_bangumi)
+            _save_json_atomic(request_path, {**latest, "targets": rotated,
+                "next_retry_at": time.time() + max(1, int(getattr(self.config, "mikan_watch_interval_seconds", 300) or 300)),
+                "yield_reason": "elapsed_budget_exhausted"})
+            self.logger.info("Mikan replacement discovery yielded without consuming retries. bangumi_id=%s targets=%s", selected_bangumi, len(batch))
+            return {"deferred": True, "request_path": str(request_path), "yield_reason": "elapsed_budget_exhausted"}
         except (QBitError, requests.RequestException, MikanSourceError) as exc:
             latest = _load_request_file(request_path)
             attempts = int(latest.get("retry_attempts") or 0) + 1
@@ -1099,6 +1126,9 @@ class MikanWorker:
         done = {(target.bangumi_id, target.episode) for target in batch}
         remaining = [target for target in latest.get("targets", [])
                      if (int(target["bangumi_id"]), int(target["episode"])) not in done]
+        remaining = [target for target in remaining if int(target["bangumi_id"]) != selected_bangumi] + [
+            target for target in remaining if int(target["bangumi_id"]) == selected_bangumi
+        ]
         if remaining:
             _save_json_atomic(request_path, {**latest, "targets": remaining, "retry_attempts": 0,
                 "next_retry_at": time.time() + max(1, int(getattr(self.config, "mikan_watch_interval_seconds", 300) or 300))})
@@ -1378,6 +1408,51 @@ class MikanWorker:
     def enqueue_latest_releases(self, *, required: bool = True) -> int:
         return self._enqueue_latest_releases_unlocked(state_required=required)
 
+    def _enqueue_series_slice(self, bangumi_ids: list[int], *, deadline: float):
+        """Resume a bounded discovery sweep without restarting at series one.
+
+        The cursor is saved *before* yielding a series and advanced only after
+        its caller finishes.  An exception, cancellation, or interrupted process
+        therefore retries that series through the existing idempotent enqueue
+        path.  This is scheduling evidence, not a second job/claim store.
+        """
+        cursor_path = self.config.work_path / MIKAN_ENQUEUE_CURSOR_NAME
+        cursor = _load_request_file(cursor_path)
+        next_id = cursor.get("next_bangumi_id")
+        start = bangumi_ids.index(next_id) if next_id in bangumi_ids else 0
+        ordered = bangumi_ids[start:] + bangumi_ids[:start]
+        processed = 0
+        for index, bangumi_id in enumerate(ordered):
+            request = _load_request_file(_mikan_replacement_enqueue_request_path(self.config))
+            recovery_due = bool(request.get("targets")) and float(request.get("next_retry_at") or 0) <= time.time()
+            reason = ""
+            if time.monotonic() >= deadline:
+                reason = "elapsed_budget_exhausted"
+            elif processed and recovery_due:
+                reason = "due_recovery_request"
+            _save_json_atomic(cursor_path, {
+                "schema_version": 1,
+                "next_bangumi_id": bangumi_id,
+                "last_completed_bangumi_id": cursor.get("last_completed_bangumi_id"),
+                "updated_at": _utc_now().isoformat(),
+                "yield_reason": reason or "series_in_progress",
+                "processed_this_slice": processed,
+            })
+            if reason:
+                self.logger.info("Mikan discovery yielded. reason=%s processed=%s next_bangumi_id=%s", reason, processed, bangumi_id)
+                return
+            yield bangumi_id
+            processed += 1
+            cursor["last_completed_bangumi_id"] = bangumi_id
+            _save_json_atomic(cursor_path, {
+                "schema_version": 1,
+                "next_bangumi_id": ordered[(index + 1) % len(ordered)],
+                "last_completed_bangumi_id": bangumi_id,
+                "updated_at": _utc_now().isoformat(),
+                "yield_reason": "sweep_complete" if processed == len(ordered) else "series_complete",
+                "processed_this_slice": processed,
+            })
+
     def _enqueue_latest_releases_unlocked(
         self,
         *,
@@ -1386,8 +1461,11 @@ class MikanWorker:
         redownload_progress: bool = False,
         queue_lock_held: bool = False,
     ) -> int:
-        self._fallback_sources.begin_cycle()
-
+        deadline = None if redownload_progress else time.monotonic() + min(
+            MIKAN_ENQUEUE_SLICE_SECONDS,
+            max(1.0, float(getattr(self.config, "mikan_watch_interval_seconds", 300) or 300)),
+        )
+        self._fallback_sources.begin_cycle(deadline_monotonic=deadline)
         def stop_for_cancel(queued_count: int = 0, deferred_count: int = 0) -> bool:
             if not redownload_progress or not self._redownload_all_cancel_requested():
                 return False
@@ -1442,11 +1520,17 @@ class MikanWorker:
             return 0
         pending, seen, queued, stalled_targets = prepared
         if qbit is not None and stalled_targets:
-            replacement_queued = self._enqueue_replacements_after_extract_failure_unlocked(
-                stalled_targets,
-                qbit,
-                queue_lock_held=queue_lock_held,
-            )
+            try:
+                replacement_queued = self._enqueue_replacements_after_extract_failure_unlocked(
+                    stalled_targets,
+                    qbit,
+                    queue_lock_held=queue_lock_held,
+                    deadline_monotonic=deadline,
+                )
+            except MikanSourceDeadline:
+                self.request_replacement_enqueue(stalled_targets, reason="Stalled download replacement reached discovery scheduling deadline.")
+                self.logger.info("Mikan stalled replacement yielded to durable recovery request. targets=%s", len(stalled_targets))
+                return queued
             queued += replacement_queued
             self.logger.warning(
                 "Mikan stalled downloads switched to replacement candidates immediately. targets=%s queued=%s",
@@ -1459,13 +1543,23 @@ class MikanWorker:
             pending, seen = refreshed
         if redownload_progress:
             _update_redownload_all_active(self.config, stage="resolve_series", stage_label="整理番劇對應")
-        series_mappings = self._series_mappings(cached_only=redownload_progress)
+        # A slow unmatched series must not spend the entire discovery turn.
+        # Reserve half the remaining slice for already-mapped download work;
+        # partial cold lookups resume from the same durable matcher cache.
+        mapping_started = time.monotonic()
+        mapping_deadline = None if deadline is None else mapping_started + max(0.0, deadline - mapping_started) / 2.0
+        series_mappings = self._series_mappings(cached_only=redownload_progress) if deadline is None else self._series_mappings(
+            deadline_monotonic=mapping_deadline,
+        )
         if redownload_progress and not series_mappings:
             self.logger.warning("Mikan cached series mappings are empty during redownload; falling back to full local series discovery.")
             series_mappings = self._series_mappings()
         library_scan_mappings = _library_scan_series_mappings(self.config, self.logger, series_mappings)
-        library_scan_mappings, episode_index_ready = self._library_scan_plan(
-            library_scan_mappings
+        if deadline is not None and time.monotonic() >= deadline:
+            self.logger.info("Mikan discovery yielded during mapping preparation; partial matcher cache retained.")
+            return queued
+        library_scan_mappings, episode_index_ready = self._library_scan_plan(library_scan_mappings) if deadline is None else self._library_scan_plan(
+            library_scan_mappings, deadline_monotonic=deadline,
         )
         bangumi_ids = _bangumi_ids_for_run(self.config, library_scan_mappings)
         if not bangumi_ids:
@@ -1485,7 +1579,10 @@ class MikanWorker:
         deferred = 0
         mappings_by_bangumi = _series_mappings_by_bangumi(library_scan_mappings)
         total_bangumi = len(bangumi_ids)
-        for index, bangumi_id in enumerate(bangumi_ids, start=1):
+        # Manual redownload-all retains its explicit progress/cancel lifecycle.
+        # Normal discovery must yield so due durable recovery work can run.
+        series_to_visit = bangumi_ids if deadline is None else self._enqueue_series_slice(bangumi_ids, deadline=deadline)
+        for index, bangumi_id in enumerate(series_to_visit, start=1):
             if stop_for_cancel(queued, deferred):
                 return queued
             if allow_redownload_preempt and self._redownload_all_requested():
@@ -1522,8 +1619,14 @@ class MikanWorker:
                 releases = fetch_bangumi_releases(
                     self.config.mikan_base_url,
                     bangumi_id,
-                    timeout_seconds=self.config.mikan_request_timeout_seconds,
+                    timeout_seconds=self.config.mikan_request_timeout_seconds if deadline is None else max(
+                        0.001, min(self.config.mikan_request_timeout_seconds, deadline - time.monotonic())
+                    ),
+                    deadline_monotonic=deadline,
                 )
+            except MikanSourceDeadline:
+                self.logger.info("Mikan discovery yielded during RSS lookup; current series will resume. bangumi_id=%s", bangumi_id)
+                return queued
             except (requests.RequestException, MikanSourceError) as exc:
                 primary_lookup_succeeded = False
                 releases = []
@@ -1613,6 +1716,8 @@ class MikanWorker:
                 def should_stop_scan() -> bool:
                     nonlocal last_scan_heartbeat
                     now_monotonic = time.monotonic()
+                    if deadline is not None and now_monotonic >= deadline:
+                        return True
                     if redownload_progress and now_monotonic - last_scan_heartbeat >= 30.0:
                         last_scan_heartbeat = now_monotonic
                         _update_redownload_all_active(
@@ -1638,8 +1743,11 @@ class MikanWorker:
                     candidate_episodes=candidate_episodes,
                     episode_index_ready=episode_index_ready,
                     progress_callback=report_scan_progress if redownload_progress else None,
-                    stop_callback=should_stop_scan if redownload_progress or allow_redownload_preempt else None,
+                    stop_callback=should_stop_scan if deadline is not None or redownload_progress or allow_redownload_preempt else None,
                 )
+                if deadline is not None and time.monotonic() >= deadline:
+                    self.logger.info("Mikan discovery yielded during target lookup; current series will resume. bangumi_id=%s", bangumi_id)
+                    return queued
                 if stop_for_cancel(queued, deferred):
                     return queued
                 if allow_redownload_preempt and self._redownload_all_requested():
@@ -1774,6 +1882,9 @@ class MikanWorker:
                     )
 
             for release in selected:
+                if deadline is not None and time.monotonic() >= deadline:
+                    self.logger.info("Mikan discovery yielded before enqueue; current series will resume. bangumi_id=%s", bangumi_id)
+                    return queued
                 if stop_for_cancel(queued, deferred):
                     return queued
                 if allow_redownload_preempt and self._redownload_all_requested():
@@ -3154,6 +3265,7 @@ class MikanWorker:
         qbit: QBitClient,
         *,
         queue_lock_held: bool = False,
+        deadline_monotonic: float | None = None,
     ) -> int:
         qbit.ensure_category(self.config.qbit_category, save_path=self.config.qbit_save_path)
         pending = _load_pending(self.pending_path)
@@ -3167,6 +3279,8 @@ class MikanWorker:
         deferred = 0
 
         for bangumi_id, episodes in grouped_targets.items():
+            if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                raise MikanSourceDeadline("replacement discovery slice ended before target reconciliation")
             if not self._reconcile_verified_history_outputs(
                 bangumi_id, episodes, operation="history_output_reconciliation", state_required=False,
             ):
@@ -3183,7 +3297,10 @@ class MikanWorker:
                     self.config.mikan_base_url,
                     bangumi_id,
                     timeout_seconds=self.config.mikan_request_timeout_seconds,
+                    deadline_monotonic=deadline_monotonic,
                 )
+            except MikanSourceDeadline:
+                raise
             except (requests.RequestException, MikanSourceError) as exc:
                 self.logger.warning(
                     "Mikan replacement RSS fetch failed; trying fallback sources. bangumi_id=%s error=%s",
@@ -3220,6 +3337,8 @@ class MikanWorker:
                     bangumi_mappings,
                     fallback_episodes,
                 )
+                if getattr(fallback_search_result, "deferred_reason", "") == "elapsed_budget_exhausted":
+                    raise MikanSourceDeadline("replacement fallback yielded at discovery deadline")
                 fallback_candidates = _release_candidates_by_episode(
                     fallback_search_result,
                     fallback_episodes,
@@ -3308,6 +3427,8 @@ class MikanWorker:
                 )
 
             for release in selected:
+                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                    raise MikanSourceDeadline("replacement discovery slice ended before enqueue")
                 covered_episodes = release_episode_numbers(release)
                 if covered_episodes and all(_has_active_pending(release.bangumi_id, episode, pending) for episode in covered_episodes):
                     continue
@@ -4259,8 +4380,13 @@ class MikanWorker:
             self.logger.info("Mikan deferred queue drain complete. queued=%s", queued)
         return queued
 
-    def _series_mappings(self, *, cached_only: bool = False) -> list[dict[str, object]]:
-        if cached_only:
+    def _series_mappings(self, *, cached_only: bool = False, deadline_monotonic: float | None = None) -> list[dict[str, object]]:
+        if deadline_monotonic is not None:
+            # Revisit persisted profiles each watch so a partial cold lookup or
+            # a newly indexed series can continue; do not freeze a partial list
+            # into the lifetime-only cache.
+            resolved = resolve_mikan_series_mappings(self.config, self.logger, deadline_monotonic=deadline_monotonic)
+        elif cached_only:
             resolved = resolve_mikan_series_mappings(self.config, self.logger, cached_only=True)
         else:
             if self._resolved_series_mappings is None:
@@ -4304,6 +4430,8 @@ class MikanWorker:
     def _library_scan_plan(
         self,
         mappings: list[dict[str, object]],
+        *,
+        deadline_monotonic: float | None = None,
     ) -> tuple[list[dict[str, object]], bool]:
         """Use the persistent index and reconcile at most N roots per cooled run."""
 
@@ -4365,8 +4493,11 @@ class MikanWorker:
                 # Recheck the persistent deadline after taking the lock so
                 # concurrent worker processes cannot each scan another batch.
                 if _mikan_episode_index_reconcile_due(self.config):
-                    _refresh_mikan_episode_index(self.config, self.logger, selected)
-                    refresh_succeeded = True
+                    if deadline_monotonic is None:
+                        _refresh_mikan_episode_index(self.config, self.logger, selected)
+                    else:
+                        _refresh_mikan_episode_index(self.config, self.logger, selected, deadline_monotonic=deadline_monotonic)
+                    refresh_succeeded = deadline_monotonic is None or time.monotonic() < deadline_monotonic
             else:
                 self.logger.warning(
                     "Mikan episode index incremental reconciliation is owned by another worker."
@@ -5225,6 +5356,8 @@ def _refresh_mikan_episode_index(
     config: AppConfig,
     logger: logging.Logger,
     series_mappings: list[dict[str, object]],
+    *,
+    deadline_monotonic: float | None = None,
 ) -> int:
     """Incrementally replace only the selected roots in the persistent index."""
 
@@ -5232,6 +5365,8 @@ def _refresh_mikan_episode_index(
     rows: list[tuple[int, int, int | None, str, str, float]] = []
     scanned_roots: list[tuple[int, str, float]] = []
     for mapping in series_mappings:
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            break
         bangumi_id = _coerce_int(mapping.get("bangumi_id"))
         if bangumi_id is None:
             continue
@@ -5240,11 +5375,15 @@ def _refresh_mikan_episode_index(
             logger.warning("Mikan episode index skipped missing series path: bangumi_id=%s path=%s", bangumi_id, root)
             continue
         resolved_root = str(_safe_resolve(root))
-        for video in _find_video_files(root, config.video_extensions):
+        root_rows = []
+        videos = _find_video_files(root, config.video_extensions) if deadline_monotonic is None else _find_video_files(
+            root, config.video_extensions, cancelled=lambda: time.monotonic() >= deadline_monotonic,
+        )
+        for video in videos:
             episode = extract_episode_number(video.name)
             if episode is None:
                 continue
-            rows.append(
+            root_rows.append(
                 (
                     bangumi_id,
                     episode,
@@ -5254,10 +5393,15 @@ def _refresh_mikan_episode_index(
                     now,
                 )
             )
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            break  # Never replace a valid index with a partially scanned root.
+        rows.extend(root_rows)
         # Empty roots are still durably reconciled; otherwise they would be
         # selected and walked on every fallback cycle forever.
         scanned_roots.append((bangumi_id, resolved_root, now))
 
+    if not scanned_roots and deadline_monotonic is not None:
+        return 0
     conn = _mikan_state_connect(config)
     try:
         for bangumi_id, series_path, _scanned_at in scanned_roots:
@@ -5414,7 +5558,10 @@ def _missing_episodes_by_bangumi(
             logger.warning("Mikan mapped series path does not exist: bangumi_id=%s path=%s", bangumi_id, root)
             continue
 
-        for video in _find_video_files(root, config.video_extensions):
+        videos = _find_video_files(root, config.video_extensions) if stop_callback is None else _find_video_files(
+            root, config.video_extensions, cancelled=stop_callback,
+        )
+        for video in videos:
             if _has_official_chinese_subtitle(video):
                 continue
             episode = extract_episode_number(video.name)
@@ -9569,6 +9716,9 @@ def _assess_release_identity(
             "mapping_has_multiple_seasons",
         )
     expected_season = next(iter(expected_seasons), None)
+    if (any(mapping.get("identity_source") == "cached_season_nfo" for mapping in mappings)
+            and release_season is None):
+        return _ReleaseIdentityAssessment(release, False, "", "scoped_source_season_unverified")
     if (
         release_season is not None
         and expected_season is not None
@@ -11253,6 +11403,13 @@ def _fallback_video_files_for_torrent(
             if extract_episode_number(video.name) in episodes:
                 matches.append(video)
 
+    if _scoped_completed_source_season_unverified(
+        source_video=None, torrent_name=torrent.name, mappings=candidate_mappings,
+    ) or _explicit_completed_season_conflict(
+        source_video=None, torrent_name=torrent.name,
+        mappings=candidate_mappings, pending_entries=pending_entries,
+    ):
+        return []
     season_hint = _season_hint_for_completed_target(
         source_video=None,
         torrent_name=torrent.name,
@@ -11533,6 +11690,23 @@ def _target_video_for_torrent_source(
                 episode,
             )
             return None
+    if _scoped_completed_source_season_unverified(
+        source_video=source_video, torrent_name=torrent.name, mappings=candidate_mappings,
+    ):
+        if target_diagnostics is not None:
+            target_diagnostics.append({"path": "", "score": 0, "reason": "scoped_source_season_unverified",
+                                       "reasons": ["completed_source_explicit_season_required"]})
+        logger.warning("Recovered season scope needs explicit completed-source season; keep source for review: %s", source_video)
+        return None
+    if _explicit_completed_season_conflict(
+        source_video=source_video, torrent_name=torrent.name,
+        mappings=candidate_mappings, pending_entries=pending_entries,
+    ):
+        if target_diagnostics is not None:
+            target_diagnostics.append({"path": "", "score": 0, "reason": "conflicting_explicit_seasons",
+                                       "reasons": ["source_mapping_season_conflict"]})
+        logger.warning("Conflicting explicit source/mapping seasons; keep completed source for review: %s", source_video)
+        return None
     season_hint = _season_hint_for_completed_target(
         source_video=source_video,
         torrent_name=torrent.name,
@@ -12952,6 +13126,42 @@ def _series_mapping_declared_season_matches_path(mapping: dict[str, object]) -> 
     return match is not None and int(match.group(1)) == declared
 
 
+def _scoped_completed_source_season_unverified(
+    *, source_video: Path | None, torrent_name: str, mappings: list[dict[str, object]],
+) -> bool:
+    scoped = [mapping for mapping in mappings if mapping.get("identity_source") == "cached_season_nfo"]
+    if not scoped:
+        return False
+    expected = {_coerce_int(mapping.get("season")) for mapping in scoped}
+    titles = [torrent_name]
+    if source_video is not None:
+        titles.extend((source_video.name, source_video.parent.name))
+    seasons = {season for title in titles if (season := release_season_number(title)) is not None}
+    return len(expected) != 1 or None in expected or seasons != expected
+
+
+def _explicit_completed_season_conflict(
+    *,
+    source_video: Path | None,
+    torrent_name: str,
+    mappings: list[dict[str, object]],
+    pending_entries: list[dict[str, Any]] | None,
+) -> bool:
+    """An explicit release/locked scope contradiction cannot be a scoring hint."""
+    values = [torrent_name]
+    if source_video is not None:
+        values.extend((source_video.name, source_video.parent.name))
+    for entry in pending_entries or []:
+        values.extend(str(entry.get(key) or "") for key in ("title", "deferred_title"))
+    seasons = {season for value in values if (season := _season_number_from_release_title(value)) is not None}
+    for mapping in mappings:
+        for key in ("season", "season_number"):
+            season = _coerce_int(mapping.get(key))
+            if season is not None and 0 <= season <= 99:
+                seasons.add(season)
+    return len(seasons) > 1
+
+
 def _season_hint_for_completed_target(
     *,
     source_video: Path | None,
@@ -12989,7 +13199,7 @@ def _season_hint_for_completed_target(
     if not candidates:
         return None
     first = candidates[0]
-    return first if all(candidate == first for candidate in candidates) else first
+    return first if all(candidate == first for candidate in candidates) else None
 
 
 def _season_number_from_source_release(source_video: Path | None) -> int | None:

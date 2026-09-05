@@ -1,5 +1,26 @@
 # M2 Circuit Breaker Policy
 
+## Recovery unblock candidate safety boundary (2026-09-05)
+
+Normal discovery and due recovery share bounded, restartable source scheduling.
+Elapsed-budget preemption preserves pending requests and retry budgets; incomplete
+matching evidence cannot become a confirmed miss or a selected winner. Source
+network calls must not hold SQLite write transactions. This is cooperative time
+bounding with existing HTTP timeouts, not a hard kill of arbitrary filesystem or
+trickling network operations.
+
+Official import must pass complete parsing, existing source validation and the
+unchanged hard QC. Actual staged bytes are checked again before any formal write,
+backup or receipt. Bad downloaded ASS files are not repaired by byte-copy
+normalization. Failed content cannot overwrite valid output or become COMPLETED.
+Verified season-scoped metadata does not authorize unseasoned legacy batches.
+
+The candidate does not change breaker thresholds, Decision Schema, models,
+frozen-cohort membership or runtime configuration. Actual deployment must preserve
+the old Gate as INVALIDATED_BY_RUNTIME_CHANGE and attest the new running image
+with fresh isolated 7/7 evidence before claims resume. Read-only verification and
+document synchronization never trigger that transition.
+
 ## Acceptance-only follow-up, 2026-09-05
 
 Read-only target validation, bounded source lookup, immutable-event inspection

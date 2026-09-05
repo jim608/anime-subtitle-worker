@@ -47,6 +47,10 @@ class _ProviderCircuitState:
 _PROVIDER_CIRCUITS: dict[tuple[str, str], _ProviderCircuitState] = {}
 
 
+class _FallbackDeadlineReached(RuntimeError):
+    """Local scheduler yield, not evidence of a provider failure."""
+
+
 class FallbackSearchResult(list[MikanRelease]):
     """List-compatible fallback result with retry-scheduling evidence."""
 
@@ -98,6 +102,7 @@ class FallbackSourcePool:
         self.cache_path = _resolve_cache_path(config)
         self._circuit_scope = os.path.normcase(os.path.abspath(str(self.cache_path)))
         self.lookup_count = 0
+        self._deadline_monotonic: float | None = None
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": USER_AGENT})
         with _FALLBACK_CACHE_LOCK:
@@ -107,9 +112,18 @@ class FallbackSourcePool:
         _restore_provider_circuits(self._circuit_scope, self._cache, self.sources)
         self._kisssub_items: list[MikanRelease] | None = None
 
-    def begin_cycle(self) -> None:
+    def begin_cycle(self, *, deadline_monotonic: float | None = None) -> None:
         self.lookup_count = 0
         self._kisssub_items = None
+        self._deadline_monotonic = deadline_monotonic
+
+    def _request_timeout(self) -> float:
+        if self._deadline_monotonic is None:
+            return self.timeout_seconds
+        remaining = self._deadline_monotonic - time.monotonic()
+        if remaining <= 0:
+            raise _FallbackDeadlineReached("discovery elapsed budget exhausted")
+        return min(self.timeout_seconds, remaining)
 
     def search(
         self,
@@ -145,6 +159,8 @@ class FallbackSourcePool:
         if cached is not None:
             cached[:] = _filter_releases(cached, aliases, episodes, self.min_nyaa_seeders)
             return cached
+        if self._deadline_monotonic is not None and time.monotonic() >= self._deadline_monotonic:
+            return FallbackSearchResult(conclusive=False, deferred_reason="elapsed_budget_exhausted")
         if self.lookup_count >= self.max_lookups:
             self.logger.info(
                 "Mikan fallback source lookup budget exhausted. bangumi_id=%s episodes=%s lookups=%s max=%s",
@@ -179,6 +195,7 @@ class FallbackSourcePool:
 
         self.lookup_count += 1
         circuit_dirty = False
+        deadline_reached = False
         with ThreadPoolExecutor(max_workers=max(1, min(6, len(claimed_sources)))) as executor:
             source_results = [
                 (
@@ -198,7 +215,22 @@ class FallbackSourcePool:
                             "Mikan fallback source circuit closed after successful probe. source=%s",
                             source,
                         )
-                except (requests.RequestException, ET.ParseError, ValueError, TypeError) as exc:
+                except (_FallbackDeadlineReached, requests.RequestException, ET.ParseError, ValueError, TypeError) as exc:
+                    if isinstance(exc, _FallbackDeadlineReached) or (
+                        isinstance(exc, requests.Timeout)
+                        and self._deadline_monotonic is not None
+                        and time.monotonic() >= self._deadline_monotonic
+                    ):
+                        deadline_reached = True
+                        skipped_sources.append(source)
+                        # A half-open probe not completed within our scheduling
+                        # slice must remain eligible; do not manufacture a
+                        # provider incident or consume its failure budget.
+                        with _PROVIDER_CIRCUIT_LOCK:
+                            state = _PROVIDER_CIRCUITS.get(_provider_circuit_key(self._circuit_scope, source))
+                            if state is not None:
+                                state.half_open_in_flight = False
+                        continue
                     failed_sources.append(source)
                     opened, failure_count = _record_provider_failure(
                         self._circuit_scope,
@@ -230,22 +262,27 @@ class FallbackSourcePool:
             and not failed_sources
             and not skipped_sources
         )
-        if conclusive:
+        if deadline_reached:
+            deferred_reason = "elapsed_budget_exhausted"
+        elif conclusive:
             deferred_reason = ""
         elif successful_sources:
             deferred_reason = "partial_provider_coverage"
         else:
             deferred_reason = "all_providers_failed"
         with _FALLBACK_CACHE_LOCK:
-            self._cache["entries"][key] = {
-                "fetched_at": time.time(),
-                "complete": conclusive,
-                "deferred_reason": deferred_reason,
-                "successful_sources": successful_sources,
-                "failed_sources": failed_sources,
-                "skipped_sources": skipped_sources,
-                "releases": [_release_payload(release) for release in cache_releases],
-            }
+            # Scheduler preemption is not a conclusive negative lookup, nor
+            # should its partial result block the next slice for cache TTL.
+            if not deadline_reached:
+                self._cache["entries"][key] = {
+                    "fetched_at": time.time(),
+                    "complete": conclusive,
+                    "deferred_reason": deferred_reason,
+                    "successful_sources": successful_sources,
+                    "failed_sources": failed_sources,
+                    "skipped_sources": skipped_sources,
+                    "releases": [_release_payload(release) for release in cache_releases],
+                }
             _prune_cache_entries(self._cache, FALLBACK_CACHE_MAX_ENTRIES)
             _save_cache(self.cache_path, self._cache, config=self.config)
         self.logger.warning(
@@ -325,7 +362,7 @@ class FallbackSourcePool:
             response = self.session.get(
                 "https://animes.garden/api/resources",
                 params={"search": primary_term, "pageSize": 100},
-                timeout=self.timeout_seconds,
+                timeout=self._request_timeout(),
             )
             response.raise_for_status()
             return _parse_animegarden(response.json(), bangumi_id)
@@ -377,7 +414,7 @@ class FallbackSourcePool:
         *,
         params: dict[str, str] | None = None,
     ) -> list[MikanRelease]:
-        response = self.session.get(url, params=params, timeout=self.timeout_seconds)
+        response = self.session.get(url, params=params, timeout=self._request_timeout())
         response.raise_for_status()
         return _parse_rss(response.content, bangumi_id, source)
 

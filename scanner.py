@@ -76,6 +76,10 @@ class VideoScanner:
         # Old ``local_chinese`` rows treated zh-CN as terminal and must never be
         # reused under the source-priority contract.
         self._config_signature = f"{scan_config_signature(config)}:{SOURCE_DECISION_CONTRACT}"
+        if bool(getattr(config, "source_analyzer_enabled", False)):
+            # Re-evaluate legacy text-only completion on the next normal scoped
+            # visit, without clearing state or changing Pipeline policy identity.
+            self._config_signature += ":m2-official-admission-v1"
         self._processing_policy_revision = processing_config_signature(config)
         self._cache_enabled = bool(getattr(config, "scanner_cache_enabled", True))
         self._queue_enabled = self._cache_enabled and bool(getattr(config, "scanner_queue_enabled", True))
@@ -1413,7 +1417,14 @@ class VideoScanner:
             self.config,
             source_kind="sidecar",
         )
-        if normalized_decision is not None and normalized_decision.strategy == USE_ZH_TW:
+        if (
+            normalized_decision is not None
+            and normalized_decision.strategy == USE_ZH_TW
+            and (
+                not bool(getattr(self.config, "source_analyzer_enabled", False))
+                or self._has_required_finished_subtitle(video)
+            )
+        ):
             if self._remove_ai_queue_candidate_lock_safe(
                 state,
                 video,
@@ -1501,7 +1512,14 @@ class VideoScanner:
             self.config,
             source_kind="sidecar",
         )
-        if normalized_decision is not None and normalized_decision.strategy == USE_ZH_TW:
+        if (
+            normalized_decision is not None
+            and normalized_decision.strategy == USE_ZH_TW
+            and (
+                not bool(getattr(self.config, "source_analyzer_enabled", False))
+                or self._has_required_finished_subtitle(video)
+            )
+        ):
             self._cleanup_srt_sidecars(video)
             return "local_chinese", True, False
         try:
@@ -1530,7 +1548,14 @@ class VideoScanner:
             self.config,
             source_kind="sidecar_or_embedded",
         )
-        if extracted_decision is not None and extracted_decision.strategy == USE_ZH_TW:
+        if (
+            extracted_decision is not None
+            and extracted_decision.strategy == USE_ZH_TW
+            and (
+                not bool(getattr(self.config, "source_analyzer_enabled", False))
+                or self._has_required_finished_subtitle(video)
+            )
+        ):
             self._cleanup_srt_sidecars(video)
             return "embedded_chinese", True, False
         if extracted_decision is not None:

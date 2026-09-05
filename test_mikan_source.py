@@ -53,6 +53,15 @@ RSS = """<?xml version="1.0" encoding="utf-8"?>
 
 
 class MikanSourceTest(unittest.TestCase):
+    def test_chinese_season_numbers_preserve_season_identity(self) -> None:
+        for marker, expected in (("第二季", 2), ("第三期", 3), ("第四季", 4),
+                                 ("第十季", 10), ("第十二季", 12), ("第二十一季", 21)):
+            with self.subTest(marker=marker):
+                self.assertEqual(release_season_number("Show " + marker), expected)
+                self.assertEqual(release_series_identity("Show " + marker), "show")
+        for title in ("Show 第零季", "Show 第二三季", "Show [06.5]", "Show OVA [6.5]"):
+            self.assertIsNone(release_season_number(title))
+
     def test_explicit_four_digit_episode_is_never_truncated(self) -> None:
         self.assertEqual(extract_episode_number("[Group] One Piece S01E1176 [SC_TC]"), 1176)
         self.assertEqual(extract_episode_numbers("[Group] One Piece S01E1176-S01E1178 [SC_TC]"), (1176, 1177, 1178))

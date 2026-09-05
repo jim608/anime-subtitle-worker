@@ -10,13 +10,13 @@ from subtitle_extract import normalize_sidecar_subtitles_for_output
 
 def dialogue_ass(text="這裡的學校讓我們一起選擇明天的課程", count=100):
     return "[Script Info]\nScriptType: v4.00+\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n" + "".join(
-        f"Dialogue: 0,0:{i // 60:02}:{i % 60:02}.00,0:{(i + 1) // 60:02}:{(i + 1) % 60:02}.00,Default,,0,0,0,,{text}\n"
+        f"Dialogue: 0,0:{i // 60:02}:{i % 60:02}.00,0:{(i + 1) // 60:02}:{(i + 1) % 60:02}.00,Default,,0,0,0,,{text} {i + 1}\n"
         for i in range(count)
     )
 
 
 def dialogue_srt(text):
-    return "".join(f"{i + 1}\n00:{i // 60:02}:{i % 60:02},000 --> 00:{(i + 1) // 60:02}:{(i + 1) % 60:02},000\n{text}\n\n" for i in range(100))
+    return "".join(f"{i + 1}\n00:{i // 60:02}:{i % 60:02},000 --> 00:{(i + 1) // 60:02}:{(i + 1) % 60:02},000\n{text} {i + 1}\n\n" for i in range(100))
 
 
 class MikanImportValidationTest(unittest.TestCase):

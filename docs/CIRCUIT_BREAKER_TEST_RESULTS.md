@@ -1,5 +1,20 @@
 # M2 Circuit Breaker Test Results
 
+## Recovery unblock candidate evidence (2026-09-05)
+
+Full server logs: `/logs/m2-recovery-unblock-20260905T064508843990Z/`.
+The admission/checkpoint isolated container suite passed **87 tests**. The frozen
+mapping probe used only the existing specified keys, 96 stored profiles/cache
+keys and exact indexed targets/NFOs: 83 unique local bindings, not source-content
+or publication passes. Production SQLite was read-only for these probes.
+
+Real-artifact fault reproduction in `e12-publication-guard-old.json` confirmed
+that the old normalizer published the downloaded hard-QC-failing ASS unchanged
+over a valid isolated fixture. Production source/subtitle and download hashes
+were unchanged. This is a reproduced import defect, not a Production incident.
+Candidate and combined regression results, deployment parity and fresh running-
+image breaker evidence must be recorded in closeout before claiming completion.
+
 ## Acceptance follow-up without redeployment (2026-09-05)
 
 No code change, container restart, Gate rebuild, full audit or repeat full

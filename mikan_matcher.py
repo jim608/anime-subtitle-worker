@@ -3,19 +3,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from html import unescape
+import hashlib
 import json
 import logging
 from pathlib import Path
 import re
+import time
+from typing import Callable
 import unicodedata
 from urllib.parse import urljoin
+import xml.etree.ElementTree as ET
 
 import requests
 
 from config import AppConfig
 from local_catalog import LocalSeries, discover_local_series
 from mikan_cache_store import MikanIndexedCache, sqlite_cache_enabled
-from mikan_source import MikanSourceError, fetch_bangumi_releases
+from mikan_source import MikanSourceDeadline, MikanSourceError, fetch_bangumi_releases, release_season_number, release_series_identity
 from series_metadata import SeriesMetadataStore
 
 
@@ -23,6 +27,7 @@ _OPENCC_T2S = None
 _OPENCC_T2S_UNAVAILABLE = False
 _AUTO_MATCH_MATCHER_VERSION = 2
 _AUTO_MATCH_MIN_MARGIN = 0.08
+_AUTO_MATCH_CURSOR_KEY = "__auto_match_cursor_v1__"
 
 
 @dataclass(frozen=True)
@@ -32,11 +37,16 @@ class MikanSearchCandidate:
     source_query: str
 
 
+class _AutoMatchLookupDeferred(MikanSourceDeadline):
+    """Some external lookup failed; partial evidence cannot decide identity."""
+
+
 def resolve_mikan_series_mappings(
     config: AppConfig,
     logger: logging.Logger,
     *,
     cached_only: bool = False,
+    deadline_monotonic: float | None = None,
 ) -> list[dict[str, object]]:
     mappings: list[dict[str, object]] = []
     for configured in config.mikan_series_path_mappings:
@@ -63,6 +73,7 @@ def resolve_mikan_series_mappings(
     cache_path = _resolve_cache_path(config)
     cache = _load_cache(cache_path, config=config)
     mappings = _suppress_invalidated_unlocked_metadata(mappings, cache, config)
+    mappings.extend(_season_scoped_cached_mappings(cache, metadata_mappings, config))
     if cached_only:
         cached_mappings = _cached_mappings_from_cache(cache, config, protected_paths)
         if cached_mappings:
@@ -80,8 +91,34 @@ def resolve_mikan_series_mappings(
     cache_changed = False
     max_lookups = int(getattr(config, "mikan_auto_match_max_lookups_per_cycle", 25) or 0)
 
-    for series in discover_local_series(config):
+    if deadline_monotonic is None:
+        local_series = discover_local_series(config)
+    else:
+        # The normal watcher already has scanner/metadata-sync indexes.  Cold
+        # online matching must not rediscover the whole media tree here.
+        local_series = []
+        with SeriesMetadataStore.from_config(config) as store:
+            offset = 0
+            while time.monotonic() < deadline_monotonic:
+                profiles = store.list_profiles(limit=1000, offset=offset)
+                local_series.extend(LocalSeries(
+                    Path(profile.local_path),
+                    _unique_tokens([*profile.aliases, *profile.titles, profile.canonical_title]),
+                    profile.premiered_year, profile.anidb_id or None,
+                ) for profile in profiles)
+                if len(profiles) < 1000:
+                    break
+                offset += len(profiles)
+        cursor = cache.get(_AUTO_MATCH_CURSOR_KEY, {})
+        next_path = cursor.get("next_path") if isinstance(cursor, dict) else None
+        paths = [str(series.path) for series in local_series]
+        start = paths.index(next_path) if next_path in paths else 0
+        local_series = local_series[start:] + local_series[:start]
+
+    for series_index, series in enumerate(local_series):
         series_key = str(series.path.resolve())
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            break
         if series_key.casefold() in protected_paths:
             continue
 
@@ -100,9 +137,43 @@ def resolve_mikan_series_mappings(
             continue
 
         lookup_count += 1
-        result = _auto_match_series(series, config, logger)
+        progress: dict[str, object] | None = None
+        checkpoint = None
+        if deadline_monotonic is not None:
+            identity = hashlib.sha256(json.dumps([
+                _AUTO_MATCH_MATCHER_VERSION, series_key, series.aliases, series.premiered_year,
+                series.anidb_id, config.mikan_base_url, config.mikan_auto_match_threshold,
+                config.mikan_auto_match_max_candidates,
+            ], ensure_ascii=True, sort_keys=True).encode()).hexdigest()
+            progress = dict(cached.get("progress", {})) if isinstance(cached, dict) and cached.get("progress_identity") == identity else {}
+
+            def checkpoint() -> None:
+                cache[series_key] = {"status": "deferred", "reason": "elapsed_budget_exhausted",
+                    "matcher_version": _AUTO_MATCH_MATCHER_VERSION, "progress_identity": identity,
+                    "progress": progress}
+                cache[_AUTO_MATCH_CURSOR_KEY] = {"next_path": str(local_series[(series_index + 1) % len(local_series)].path)}
+                _save_cache(cache_path, cache, config=config)
+
+        try:
+            result = _auto_match_series(series, config, logger) if deadline_monotonic is None else _auto_match_series(
+                series, config, logger, deadline_monotonic=deadline_monotonic,
+                progress=progress, checkpoint=checkpoint,
+            )
+        except MikanSourceDeadline as exc:
+            if checkpoint is not None:
+                checkpoint()
+            if isinstance(exc, _AutoMatchLookupDeferred):
+                cache[series_key]["reason"] = "source_lookup_failed"
+                _save_cache(cache_path, cache, config=config)
+                logger.info("Mikan auto-match retained incomplete source evidence for retry. path=%s", series.path)
+                continue
+            logger.info("Mikan auto-match yielded with persistent partial evidence. path=%s", series.path)
+            break
         cache[series_key] = result
         cache_changed = True
+        if deadline_monotonic is not None:
+            cache[_AUTO_MATCH_CURSOR_KEY] = {"next_path": str(local_series[(series_index + 1) % len(local_series)].path)}
+            _save_cache(cache_path, cache, config=config)
         if result.get("status") != "matched":
             if _cache_miss_invalidates_unlocked_metadata(result):
                 mappings = _remove_unlocked_metadata_mapping(mappings, series_key)
@@ -187,27 +258,57 @@ def _auto_match_series(
     series: LocalSeries,
     config: AppConfig,
     logger: logging.Logger,
+    *,
+    deadline_monotonic: float | None = None,
+    progress: dict[str, object] | None = None,
+    checkpoint: Callable[[], None] | None = None,
 ) -> dict[str, object]:
-    candidates = _search_candidates_for_series(series, config)
+    candidates = _search_candidates_for_series(series, config) if progress is None else _search_candidates_for_series(
+        series, config, deadline_monotonic=deadline_monotonic, progress=progress, checkpoint=checkpoint,
+    )
     if not candidates:
         return _miss_cache_entry(series, "no_candidates")
 
-    scored: list[tuple[float, MikanSearchCandidate, list[str]]] = []
-    for candidate in candidates:
+    scored: list[tuple[float, MikanSearchCandidate, list[str]]] = [] if progress is None else [
+        (float(row["confidence"]), MikanSearchCandidate(**row["candidate"]), list(row["tokens"]))
+        for row in progress.get("scored", [])
+    ]
+    start = 0 if progress is None else int(progress.get("next_candidate", 0))
+    completed = set() if progress is None else set(progress.get("completed_candidates", range(start)))
+    lookup_failed = False
+    for index, candidate in enumerate(candidates[start:], start=start):
+        if index in completed:
+            continue
         try:
             releases = fetch_bangumi_releases(
                 config.mikan_base_url,
                 candidate.bangumi_id,
                 timeout_seconds=config.mikan_request_timeout_seconds,
+                deadline_monotonic=deadline_monotonic,
             )
+        except MikanSourceDeadline:
+            raise
         except (requests.RequestException, MikanSourceError) as exc:
             logger.warning("Mikan auto-match failed to fetch RSS bangumi_id=%s: %s", candidate.bangumi_id, exc)
+            lookup_failed = True
             continue
 
         release_titles = [release.title for release in releases[:20]]
         confidence = _candidate_confidence(series, candidate, release_titles)
         match_tokens = _match_tokens(series, candidate, release_titles)
         scored.append((confidence, candidate, match_tokens))
+        if progress is not None:
+            completed.add(index)
+            progress["completed_candidates"] = sorted(completed)
+            progress["next_candidate"] = next((item for item in range(len(candidates)) if item not in completed), len(candidates))
+            progress["scored"] = [{"confidence": score,
+                "candidate": {"bangumi_id": item.bangumi_id, "title": item.title, "source_query": item.source_query},
+                "tokens": tokens} for score, item, tokens in scored]
+            if checkpoint is not None:
+                checkpoint()
+
+    if progress is not None and lookup_failed:
+        raise _AutoMatchLookupDeferred("candidate RSS evidence incomplete")
 
     if not scored:
         return _miss_cache_entry(series, "no_scored_candidates")
@@ -305,6 +406,9 @@ def _series_metadata_mappings(config: AppConfig, logger: logging.Logger) -> list
                 "metadata_match_source": str(profile.match_source or ""),
                 "match_confidence": float(profile.match_confidence or (1.0 if profile.locked else 0.0)),
                 "locked": bool(profile.locked),
+                "metadata_title": profile.canonical_title,
+                "metadata_provider": str(profile.provider or ""),
+                "metadata_provider_id": str(profile.provider_id or ""),
             }
         )
     return result
@@ -345,29 +449,64 @@ def _miss_cache_entry(
     return payload
 
 
-def _search_candidates_for_series(series: LocalSeries, config: AppConfig) -> list[MikanSearchCandidate]:
-    candidates: dict[int, MikanSearchCandidate] = {}
-    for alias in _search_aliases(series):
+def _search_candidates_for_series(
+    series: LocalSeries, config: AppConfig, *, deadline_monotonic: float | None = None,
+    progress: dict[str, object] | None = None, checkpoint: Callable[[], None] | None = None,
+) -> list[MikanSearchCandidate]:
+    candidates: dict[int, MikanSearchCandidate] = {} if progress is None else {
+        int(item["bangumi_id"]): MikanSearchCandidate(**item) for item in progress.get("candidates", [])
+    }
+    aliases = _search_aliases(series)
+    start = 0 if progress is None else int(progress.get("next_alias", 0))
+    completed = set() if progress is None else set(progress.get("completed_aliases", range(start)))
+    lookup_failed = False
+    for index, alias in enumerate(aliases[start:], start=start):
+        if index in completed:
+            continue
         try:
             results = search_mikan_bangumi(
                 config.mikan_base_url,
                 alias,
                 timeout_seconds=config.mikan_request_timeout_seconds,
+                deadline_monotonic=deadline_monotonic,
             )
+        except MikanSourceDeadline:
+            raise
         except requests.RequestException:
+            lookup_failed = True
             continue
         for result in results:
             candidates.setdefault(result.bangumi_id, result)
+        if progress is not None:
+            completed.add(index)
+            progress["completed_aliases"] = sorted(completed)
+            progress["next_alias"] = next((item for item in range(len(aliases)) if item not in completed), len(aliases))
+            progress["candidates"] = [{"bangumi_id": item.bangumi_id, "title": item.title, "source_query": item.source_query}
+                for item in candidates.values()]
+            if checkpoint is not None:
+                checkpoint()
+    if progress is not None and lookup_failed:
+        raise _AutoMatchLookupDeferred("alias search coverage incomplete")
     return list(candidates.values())[: config.mikan_auto_match_max_candidates]
 
 
-def search_mikan_bangumi(base_url: str, query: str, timeout_seconds: int = 30) -> list[MikanSearchCandidate]:
-    response = requests.get(
+def search_mikan_bangumi(base_url: str, query: str, timeout_seconds: int = 30, *, deadline_monotonic: float | None = None) -> list[MikanSearchCandidate]:
+    if deadline_monotonic is not None:
+        remaining = deadline_monotonic - time.monotonic()
+        if remaining <= 0:
+            raise MikanSourceDeadline("auto-match alias lookup reached scheduling deadline")
+        timeout_seconds = min(timeout_seconds, remaining)
+    try:
+        response = requests.get(
         urljoin(base_url.rstrip("/") + "/", "Home/Search"),
         params={"searchstr": query},
         timeout=timeout_seconds,
         headers={"User-Agent": "Mozilla/5.0"},
-    )
+        )
+    except requests.RequestException as exc:
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            raise MikanSourceDeadline("auto-match alias lookup reached scheduling deadline") from exc
+        raise
     response.raise_for_status()
     return parse_mikan_search_results(response.text, query)
 
@@ -541,6 +680,93 @@ def _suppress_invalidated_unlocked_metadata(
     return result
 
 
+def _season_scoped_cached_mappings(
+    cache: dict[str, object],
+    metadata_mappings: list[dict[str, object]],
+    config: AppConfig,
+) -> list[dict[str, object]]:
+    """Narrow matched or season-only ambiguous source IDs with local NFOs.
+
+    Do not restore an ambiguous whole-series mapping or infer season one from
+    an unnumbered release. Only the already persisted source ID with an
+    explicit season can gain a matching, independently declared NFO scope.
+    Original miss/failed records remain intact and changed NFOs are rechecked.
+    Completed-source import still requires independently explicit season data;
+    this local scope never makes an unnumbered historical batch safe to use.
+    """
+    result: list[dict[str, object]] = []
+    for mapping in metadata_mappings:
+        if _mapping_is_protected(mapping):
+            continue
+        root = Path(str(mapping.get("path") or ""))
+        cached = cache.get(str(root))
+        if not (isinstance(cached, dict) and mapping.get("metadata_provider") and mapping.get("metadata_provider_id")):
+            continue
+        if _valid_cached_mapping(cached, config):
+            raw = cached["mapping"]
+            candidates = [{"bangumi_id": raw.get("bangumi_id"), "title": raw.get("title") or cached.get("title"),
+                           "local_aliases": raw.get("match") or []}]
+        elif (_valid_cached_miss(cached, config) and cached.get("reason") == "ambiguous_candidates"
+              and float(cached.get("confidence") or 0) >= config.mikan_auto_match_threshold):
+            pair = [cached.get("best"), cached.get("runner_up")]
+            if not all(isinstance(candidate, dict) for candidate in pair):
+                continue
+            candidates = [candidate for candidate in pair if isinstance(candidate, dict)]
+        else:
+            continue
+        identities = {normalize_match_text(release_series_identity(str(c.get("title") or ""))) for c in candidates}
+        if len(identities) != 1 or not next(iter(identities), ""):
+            continue
+        selected = [c for c in candidates if c.get("bangumi_id") == mapping.get("bangumi_id")]
+        if len(selected) != 1:
+            continue
+        candidate = selected[0]
+        season = release_season_number(str(candidate.get("title") or ""))
+        if season is None or season <= 0:
+            continue
+        scope = root / f"Season {season}"
+        try:
+            show_bytes = (root / "tvshow.nfo").read_bytes()
+            season_bytes = (scope / "season.nfo").read_bytes()
+            if len(show_bytes) > 1024 * 1024 or len(season_bytes) > 1024 * 1024:
+                continue
+            show = ET.fromstring(show_bytes)
+            season_nfo = ET.fromstring(season_bytes)
+            if int(season_nfo.findtext("seasonnumber") or "-1") != season:
+                continue
+            nfo_aliases = {
+                normalize_match_text(alias.strip())
+                for tag in ("title", "originaltitle", "sorttitle")
+                for value in show.findall(tag)
+                for alias in [str(value.text or ""), *str(value.text or "").split(" / ")]
+            }
+            if normalize_match_text(str(mapping.get("metadata_title") or "")) not in nfo_aliases:
+                continue
+            source_aliases = [candidate.get("source_query"), *(candidate.get("local_aliases") or [])]
+            if not any(normalize_match_text(str(alias or "")) in nfo_aliases for alias in source_aliases if alias):
+                continue
+        except (OSError, ET.ParseError, TypeError, ValueError):
+            continue
+        evidence = {
+            "rule": "persisted-source-id-explicit-season-nfo-v1",
+            "source_id": int(candidate["bangumi_id"]),
+            "source_title": str(candidate["title"]),
+            "source_family": next(iter(identities)),
+            "provider": mapping["metadata_provider"],
+            "provider_id": mapping["metadata_provider_id"],
+            "season": season,
+            "show_nfo_sha256": hashlib.sha256(show_bytes).hexdigest(),
+            "season_nfo_sha256": hashlib.sha256(season_bytes).hexdigest(),
+        }
+        result.append({
+            **mapping, "path": str(scope), "season": season,
+            "title": str(candidate["title"]), "identity_source": "cached_season_nfo",
+            "identity_evidence": evidence,
+            "identity_fingerprint": hashlib.sha256(json.dumps(evidence, sort_keys=True).encode()).hexdigest(),
+        })
+    return result
+
+
 def _semantic_match_token(token: str) -> str:
     """Return a normalized title token only when it carries series identity.
 
@@ -571,10 +797,16 @@ def _semantic_match_token(token: str) -> str:
 def _deduplicate_mappings(mappings: list[dict[str, object]]) -> list[dict[str, object]]:
     result: list[dict[str, object]] = []
     seen: set[tuple[int, str]] = set()
+    scoped_roots = {
+        (int(mapping["bangumi_id"]), str(Path(str(mapping["path"])).parent).casefold())
+        for mapping in mappings if mapping.get("identity_source") == "cached_season_nfo"
+    }
     for mapping in mappings:
         bangumi_id = int(mapping["bangumi_id"])
         path = str(mapping["path"])
         key = (bangumi_id, path.casefold())
+        if key in scoped_roots and not _mapping_is_protected(mapping):
+            continue
         if key in seen:
             continue
         seen.add(key)

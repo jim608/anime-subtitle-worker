@@ -23,6 +23,88 @@ from subtitle_paths import paths_for_video
 
 
 class VideoScannerTest(unittest.TestCase):
+    def test_m2_legacy_finished_cache_is_revalidated_without_global_invalidation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Anime S01E01.mkv"
+            video.write_bytes(b"unchanged-video")
+            config = _config(root, source_analyzer_enabled=True)
+            scanner = VideoScanner(config, _logger())
+            old_signature = video_scan_signature(
+                video, config, scanner._config_signature.removesuffix(":m2-official-admission-v1")
+            )
+            state = scanner._state_store()
+            state.put_status(old_signature, "finished")
+            neighbor = root / "Anime S01E02.mkv"
+            neighbor.write_bytes(b"unchanged-neighbor")
+            neighbor_signature = video_scan_signature(
+                neighbor, config, scanner._config_signature.removesuffix(":m2-official-admission-v1")
+            )
+            state.put_status(neighbor_signature, "finished")
+            state.commit()
+            try:
+                with patch.object(scanner, "_classify_uncached", return_value=("needs_ai", True, False)) as classify:
+                    self.assertEqual(scanner._classify(video), ("needs_ai", "fresh", False))
+                    self.assertEqual(scanner._classify(video), ("needs_ai", "cached", False))
+                    classify.assert_called_once()
+                # Only this path is refreshed through ordinary put_status. No
+                # global cache, queue, retry, decision, or checkpoint reset.
+                self.assertEqual(state.get_status(neighbor_signature), "finished")
+            finally:
+                state.close()
+
+    def test_m2_partial_official_sidecar_stays_queued_across_restart_without_resetting_attempts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Anime S01E01.mkv"
+            video.write_bytes(b"unchanged-video")
+            sidecar = video.with_suffix(".zh-TW.ass")
+            _write_usable_ass(sidecar, "這裡會選擇開啟網路連線並顯示訊息")
+            original_subtitle = sidecar.read_bytes()
+            config = _config(root, source_analyzer_enabled=True)
+            state = ScanStateStore.from_config(config)
+            state.upsert_ai_queue_candidate(video, video.stat().st_mtime_ns)
+            # Fixture-only state represents a bounded prior attempt. Admission
+            # must not reset it merely because source completion was corrected.
+            state.observation_connection.execute(
+                "UPDATE ai_candidate_queue SET attempts=2, retry_strategy='existing-checkpoint-retry' WHERE path=?",
+                (str(video.resolve()),),
+            )
+            state.commit()
+            state.close()
+            normalized = SimpleNamespace(strategy="USE_ZH_TW")
+            for _ in range(2):
+                scanner = VideoScanner(config, _logger())
+                with (
+                    patch("subtitle_extract.verified_official_subtitle_languages", return_value=set()),
+                    patch("scanner.normalize_sidecar_subtitles", return_value=[]),
+                    patch("scanner.select_subtitle_source", return_value=normalized),
+                ):
+                    self.assertEqual(scanner.queued_candidates(max_candidates=1), [video.resolve()])
+                scanner._state_store().close()
+            state = ScanStateStore.from_config(config)
+            row = state.observation_connection.execute(
+                "SELECT status, attempts, source, retry_strategy FROM ai_candidate_queue WHERE path=?", (str(video.resolve()),)
+            ).fetchone()
+            self.assertEqual(tuple(row), ("queued", 2, "scan", "existing-checkpoint-retry"))
+            state.close()
+            self.assertEqual(video.read_bytes(), b"unchanged-video")
+            self.assertEqual(sidecar.read_bytes(), original_subtitle)
+
+    def test_m2_uncached_partial_normalized_and_embedded_subtitle_cannot_skip_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Anime S01E01.mkv"
+            video.write_bytes(b"unchanged-video")
+            scanner = VideoScanner(_config(root, source_analyzer_enabled=True), _logger())
+            with (
+                patch("scanner.has_finished_subtitle", return_value=False),
+                patch("scanner.normalize_sidecar_subtitles", return_value=[]),
+                patch("scanner.extract_available_subtitles", return_value=[]),
+                patch("scanner.select_subtitle_source", return_value=SimpleNamespace(strategy="USE_ZH_TW")),
+            ):
+                self.assertEqual(scanner._classify_uncached(video), ("needs_ai", True, False))
+
     def test_english_only_audio_excludes_existing_zero_attempt_obligation_by_exact_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

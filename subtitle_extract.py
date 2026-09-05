@@ -253,6 +253,7 @@ def _validated_import_candidates(
     """Apply the existing source policy before any external subtitle is published."""
     from source_analyzer import AnalyzerThresholds, analyze_subtitle_candidate
     from source_inventory import _probe_media, _subtitle_metrics
+    from subtitle_quality import analyze_subtitle_file
 
     if not candidates:
         return []
@@ -288,14 +289,25 @@ def _validated_import_candidates(
             media_duration_seconds=duration, thresholds=policy,
         )
         parse_pass = metrics.event_count > 0 and metrics.valid_timing_count == metrics.event_count
-        passed = parse_pass and analysis.eligible
+        quality = analyze_subtitle_file(
+            candidate.source_path, config,
+            role="japanese" if candidate.language == "ja" else "unknown",
+        )
+        hard_qc_pass = not quality.has_failures and quality.dialogues > 0
+        passed = parse_pass and analysis.eligible and hard_qc_pass
         if diagnostics is not None:
             diagnostics.append({
                 "source": "import_validation", "status": "validated" if passed else "validation_failed",
                 "path": str(candidate.source_path), "target": str(target_video),
                 "output_parse": "PASS" if parse_pass else "FAIL",
+                "hard_qc": "PASS" if hard_qc_pass else "FAIL",
+                "hard_qc_report": quality.to_dict(),
                 "source_analysis": analysis.to_dict(),
-                "detail": ",".join(analysis.rejection_reasons) or ("" if parse_pass else "invalid_timing"),
+                "detail": ",".join([
+                    *analysis.rejection_reasons,
+                    *([] if parse_pass else ["invalid_timing"]),
+                    *([] if hard_qc_pass else ["hard_qc_failed"]),
+                ]),
             })
         if passed:
             accepted.append(candidate)
@@ -352,6 +364,7 @@ def _publish_official_subtitle_set(
 
     if not publications:
         return
+    from subtitle_quality import analyze_subtitle_file
 
     effective: list[tuple[Path, Path, str, str]] = []
     seen_outputs: set[str] = set()
@@ -370,6 +383,18 @@ def _publish_official_subtitle_set(
             raise SubtitleExtractError(
                 "Official subtitle changed language during staging: "
                 f"expected={expected_language} detected={classification.language or 'unknown'} source={source}"
+            )
+        # Check the actual staged bytes before backups, mutation, or completion
+        # receipts. ASS normalization is byte-copy, not a QC repair stage;
+        # parse/coverage/language evidence alone cannot authorize publication.
+        quality = analyze_subtitle_file(
+            source, config, role="japanese" if expected_language == "ja" else "unknown"
+        )
+        if quality.has_failures or quality.dialogues <= 0:
+            failures = [issue.code for issue in quality.issues if issue.severity == "fail"]
+            raise SubtitleExtractError(
+                "Official subtitle staged hard QC failed: "
+                f"source={source} reasons={','.join(failures) or 'no_dialogue'}"
             )
         source_sha256 = sha256_file(source)
         if output.is_file() and sha256_file(output) == source_sha256:

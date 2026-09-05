@@ -1,5 +1,56 @@
 # M2 Production Observation
 
+## Recovery unblock validation in progress (2026-09-05)
+
+Evidence root: `/logs/m2-recovery-unblock-20260905T064508843990Z/`.
+The one entry attestation confirmed Worker `b911794ed0ec872cb475f714e1385e20e8ac4388`,
+WebUI `7bd36c30fb07e393eba71760a164246d267c5b16`, ARMED and the existing ACTIVE
+`m2-gate-20260905T045640981079Z-08147de925`. Candidate edits are not a deployed
+baseline. A real code deployment requires the existing guarded handoff; these
+queries, isolated tests and documentation do not themselves recreate a Gate.
+
+Reproduced defects and bounded candidate fixes:
+
+- Due replacement work was delayed by unbounded normal source discovery,
+  including cold online matching before the old slice. Discovery now uses a
+  durable cursor, shared deadlines across HTTP retries and bounded recovery
+  batches. Cold lookup uses the existing metadata index, checkpoints incomplete
+  evidence in the existing cache, and reserves time for already-matched series.
+  Local scheduling preemption is not a failed source or a consumed retry.
+- A No-Rin E1 half-episode official sidecar suppressed AI admission. The candidate
+  reuses existing full parse/coverage verification and changes only the scanner
+  cache signature so exact normal visits revalidate old completion entries.
+  All four diagnostic inventories selected trusted Japanese-audio ASR, but a
+  diagnostic decision is not a durable Worker claim or an AI success.
+- Persisted source IDs with explicit Chinese-numeral seasons were not properly
+  scoped to independently verified local season NFOs. The frozen-key-only server
+  probe resolved **83 unique local target bindings**: 59/387 missing mappings and
+  24/325 ambiguous targets. Twelve verified scopes were found. This is not 83
+  downloaded or publishable sources; unseasoned old batches remain rejected.
+  The other 629 of these 712 keys, and 159 other identity/index/review keys,
+  still require evidence (788 total). Terminal cached misses outside the verified
+  season rule are not promised automatic refresh from arbitrary metadata edits.
+- A real completed Amaburi E12 ASS passed full parse/coverage but failed existing
+  hard QC (empty/short/overlapping cues). The old runtime copied it verbatim over
+  a valid **isolated** prior subtitle. Candidate import and staged publication
+  now both apply the existing hard QC without changing rules or thresholds.
+
+The four No-Rin cases have 2/1/1/1 format-compatible candidates; all five are
+excluded by preserved failed URL/hash and seen URL/hash records. The persisted
+reason is `did not start`, not verified bad content. Missing historic qB-state
+evidence does not justify resetting these entries. The older shared unsafe
+mapping remains review-only. All six fallback providers responded in the bounded
+lookup; this was not evidence of a source-wide outage or permanent no-subtitle.
+
+Amaburi's existing torrent is being resumed without deletion or re-addition.
+Completed individual sidecars do not make the batch complete or allow the normal
+whole-torrent extraction dispatcher to claim it. The representative obligation
+`m2dl_6cdbf3974b0bb9979040` has no verified official output and currently fails
+hard QC; no Production publication is credited. New download, extraction,
+official-publication, AI routing and AI completion counts must remain separate.
+Full source-video checksums and existing subtitle hashes were unchanged in the
+real-artifact probes. No M3 or Production-accepted/SLO claim is made.
+
 ## Bounded acceptance follow-up (2026-09-05, no runtime change)
 
 This follow-up accepts **partial repair and recovery started**, not a completely

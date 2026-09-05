@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from subtitle_paths import finished_subtitle_paths, has_ai_finished_subtitle, has_finished_subtitle, paths_for_video
 
@@ -26,6 +27,50 @@ CONFIG = SimpleNamespace(
 
 
 class SubtitlePathsTest(unittest.TestCase):
+    def test_m2_official_completion_requires_full_video_coverage_and_rechecks_changes(self) -> None:
+        config = SimpleNamespace(**{**CONFIG.__dict__, "source_analyzer_enabled": True})
+        with tempfile.TemporaryDirectory() as temp_dir:
+            video = Path(temp_dir) / "Episode S01E01.mkv"
+            video.write_bytes(b"unchanged-production-source")
+            sidecar = video.with_suffix(".zh-TW.srt")
+            partial = _coverage_srt(12)
+            sidecar.write_text(partial, encoding="utf-8")
+            with patch("source_inventory._probe_media", return_value={"format": {"duration": "1000"}}):
+                self.assertTrue(has_finished_subtitle(video, CONFIG))
+                self.assertFalse(has_finished_subtitle(video, config))
+                self.assertFalse(has_finished_subtitle(video, config))
+                self.assertEqual(sidecar.read_text(encoding="utf-8"), partial)
+                sidecar.write_text(_coverage_srt(30), encoding="utf-8")
+                self.assertTrue(has_finished_subtitle(video, config))
+                sidecar.write_text(partial, encoding="utf-8")
+                self.assertFalse(has_finished_subtitle(video, config))
+            self.assertEqual(video.read_bytes(), b"unchanged-production-source")
+
+    def test_m2_official_probe_error_is_not_completion(self) -> None:
+        config = SimpleNamespace(**{**CONFIG.__dict__, "source_analyzer_enabled": True})
+        with tempfile.TemporaryDirectory() as temp_dir:
+            video = Path(temp_dir) / "Episode S01E01.mkv"
+            video.write_bytes(b"unchanged-production-source")
+            sidecar = video.with_suffix(".zh-TW.srt")
+            sidecar.write_text(_coverage_srt(30), encoding="utf-8")
+            with patch("source_inventory._probe_media", side_effect=OSError("temporary probe unavailable")):
+                self.assertFalse(has_finished_subtitle(video, config))
+            self.assertTrue(sidecar.is_file())
+
+    def test_m2_keeps_existing_ai_publication_admission_without_official_probe(self) -> None:
+        config = SimpleNamespace(**{**CONFIG.__dict__, "source_analyzer_enabled": True})
+        with tempfile.TemporaryDirectory() as temp_dir:
+            video = Path(temp_dir) / "Episode S01E01.mkv"
+            video.write_bytes(b"unchanged-production-source")
+            paths_for_video(video, config).ai_zh_tw_ass.write_text(
+                "Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,這裡會選擇開啟網路連線\n",
+                encoding="utf-8",
+            )
+            with patch("source_inventory._probe_media") as probe:
+                self.assertEqual(has_finished_subtitle(video, config), has_finished_subtitle(video, CONFIG))
+                self.assertTrue(has_finished_subtitle(video, config))
+                probe.assert_not_called()
+
     def test_ai_ass_paths_use_requested_names(self) -> None:
         paths = paths_for_video(Path("Anime S01E01.mkv"), CONFIG)
 
@@ -126,6 +171,17 @@ class SubtitlePathsTest(unittest.TestCase):
 
         self.assertEqual(paths.ass, Path("Anime S01E01.AIEnglish.en.ass"))
         self.assertTrue(paths.srt.name.endswith(".AIEnglish.en.srt"))
+
+
+def _coverage_srt(count: int) -> str:
+    def timestamp(seconds: int) -> str:
+        return f"{seconds // 3600:02}:{seconds // 60 % 60:02}:{seconds % 60:02},000"
+
+    return "\n\n".join(
+        f"{index + 1}\n{timestamp(index * 32)} --> {timestamp(index * 32 + 20)}\n"
+        f"這裡會選擇開啟網路連線並顯示訊息，第{index + 1}段。"
+        for index in range(count)
+    ) + "\n"
 
 
 if __name__ == "__main__":

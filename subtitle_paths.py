@@ -133,6 +133,17 @@ def has_finished_subtitle(video_path: str | Path, config: AppConfig) -> bool:
             config,
             allow_ai=path == paths.ai_zh_tw_ass,
         ):
+            if (
+                path != paths.ai_zh_tw_ass
+                and bool(getattr(config, "source_analyzer_enabled", False))
+            ):
+                # Legacy text-only QC cannot establish that an official
+                # sidecar covers this video. Keep the AI publication contract
+                # unchanged, but apply the existing M2 import/source policy
+                # before an official sidecar can suppress Worker admission.
+                return has_ai_finished_subtitle(video_path, config) or _has_verified_official_traditional_subtitle(
+                    Path(video_path), config
+                )
             return True
     return _has_traditional_chinese_sidecar(video_path, config)
 
@@ -345,8 +356,21 @@ def _has_traditional_chinese_sidecar(video_path: str | Path, config: AppConfig) 
         if not subtitle.is_file() or subtitle.suffix.lower() not in SIDECAR_SUBTITLE_EXTENSIONS:
             continue
         if _is_usable_traditional_chinese_subtitle(subtitle, config):
+            if bool(getattr(config, "source_analyzer_enabled", False)):
+                return _has_verified_official_traditional_subtitle(video, config)
             return True
     return False
+
+
+def _has_verified_official_traditional_subtitle(video: Path, config: AppConfig) -> bool:
+    from subtitle_extract import verified_official_subtitle_languages
+
+    try:
+        return "zh-tw" in verified_official_subtitle_languages(video, config)
+    except Exception:
+        # An unavailable probe is not proof of completion. Preserve admission
+        # so the durable source decision can retry/review through normal policy.
+        return False
 
 
 def _is_usable_traditional_chinese_subtitle(

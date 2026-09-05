@@ -133,15 +133,25 @@ def release_season_number(value: str) -> int | None:
         r"(?i)\bS\s*0*(\d{1,2})\s*[-_. ]+\s*\d{1,3}\b",
         r"(?i)\bSeason\s*0*(\d{1,2})\s*[-_. ]+\s*\d{1,3}\b",
         r"(?i)\b0*(\d{1,2})(?:st|nd|rd|th)\s+Season\b",
-        r"\u7b2c\s*0*(\d{1,2})\s*[\u5b63\u671f]",
+        r"(?i)\bS(?:eason)?\s*0*(\d{1,2})\s*$",
+        r"第\s*([0-9一二三四五六七八九十]{1,3})\s*[季期]",
     )
     for pattern in patterns:
         match = re.search(pattern, text)
         if not match:
             continue
         try:
-            season = int(match.group(1))
-        except (TypeError, ValueError):
+            raw = match.group(1)
+            if raw.isdecimal():
+                season = int(raw)
+            else:
+                digits = {value: index for index, value in enumerate("一二三四五六七八九", start=1)}
+                if re.fullmatch(r"[一二三四五六七八九]?十[一二三四五六七八九]?", raw):
+                    tens, units = raw.split("十")
+                    season = (digits[tens] if tens else 1) * 10 + (digits[units] if units else 0)
+                else:
+                    season = digits[raw]
+        except (KeyError, TypeError, ValueError):
             continue
         if 0 <= season <= 99:
             return season
@@ -174,7 +184,7 @@ def release_series_identity(value: str) -> str:
         r"(?i)\bS(?:eason)?\s*0*\d{1,2}\s*$",
         r"(?i)\bSeason\s*0*\d{1,2}\s*$",
         r"(?i)\b0*\d{1,2}(?:st|nd|rd|th)\s+Season\s*$",
-        r"\u7b2c\s*0*\d{1,2}\s*[\u5b63\u671f]\s*$",
+        r"第\s*(?:[0-9]{1,2}|[一二三四五六七八九]?十[一二三四五六七八九]?|[一二三四五六七八九])\s*[季期]\s*$",
     )
     for pattern in season_suffixes:
         text = re.sub(pattern, "", text).strip()
@@ -233,25 +243,42 @@ class MikanSourceError(RuntimeError):
     pass
 
 
+class MikanSourceDeadline(MikanSourceError):
+    """The caller's scheduling slice ended; not a failed source candidate."""
+
+
 def fetch_bangumi_releases(
     base_url: str,
     bangumi_id: int,
     timeout_seconds: int = 30,
     max_attempts: int = 3,
+    *,
+    deadline_monotonic: float | None = None,
 ) -> list[MikanRelease]:
     url = urljoin(base_url.rstrip("/") + "/", f"RSS/Bangumi?bangumiId={bangumi_id}")
     last_error: Exception | None = None
     attempts = max(1, max_attempts)
     for attempt in range(1, attempts + 1):
+        request_timeout = timeout_seconds
+        if deadline_monotonic is not None:
+            remaining = deadline_monotonic - time.monotonic()
+            if remaining <= 0:
+                raise MikanSourceDeadline(f"Mikan discovery slice ended for bangumi_id={bangumi_id}") from last_error
+            request_timeout = min(timeout_seconds, remaining)
         try:
-            response = requests.get(url, timeout=timeout_seconds)
+            response = requests.get(url, timeout=request_timeout)
             response.raise_for_status()
             return parse_mikan_rss(response.text, base_url, bangumi_id)
         except (requests.RequestException, MikanSourceError) as exc:
             last_error = exc
+            if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                raise MikanSourceDeadline(f"Mikan discovery slice ended for bangumi_id={bangumi_id}") from exc
             if attempt >= attempts:
                 break
-            time.sleep(min(0.25 * attempt, 1.0))
+            retry_delay = min(0.25 * attempt, 1.0)
+            if deadline_monotonic is not None:
+                retry_delay = min(retry_delay, max(0.0, deadline_monotonic - time.monotonic()))
+            time.sleep(retry_delay)
     if last_error is not None:
         raise last_error
     return []

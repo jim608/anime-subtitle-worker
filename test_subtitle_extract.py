@@ -18,6 +18,8 @@ from subtitle_extract import (
     _probe_subtitle_streams,
     _publish_official_subtitle_set,
     _read_subtitle_sample,
+    _SubtitleCandidate,
+    _validated_import_candidates,
     _subtitle_text_for_classification,
     classify_sidecar_subtitle,
     classify_sidecar_subtitle_language,
@@ -32,6 +34,63 @@ from subtitle_paths import paths_for_video
 
 
 class SubtitleExtractTest(unittest.TestCase):
+    def test_import_coverage_pass_cannot_override_existing_hard_qc_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            video = root / "Episode.mkv"
+            video.write_bytes(b"unchanged-video")
+            sidecar = root / "Episode.zh-TW.ass"
+            sidecar.write_text(_guard_ass(overlap=True), encoding="utf-8")
+            before = sidecar.read_bytes()
+            classification = classify_sidecar_subtitle(sidecar)
+            candidate = _SubtitleCandidate(sidecar, "zh-tw", -1, classification, (0, 0), sidecar.stem)
+            diagnostics = []
+            with patch("source_inventory._probe_media", return_value={"format": {"duration": "1000"}}):
+                self.assertEqual(_validated_import_candidates([candidate], video, SimpleNamespace(), diagnostics, None), [])
+            self.assertEqual(diagnostics[0]["output_parse"], "PASS")
+            self.assertTrue(diagnostics[0]["source_analysis"]["eligible"])
+            self.assertEqual(diagnostics[0]["hard_qc"], "FAIL")
+            self.assertIn("hard_qc_failed", diagnostics[0]["detail"])
+            self.assertEqual(sidecar.read_bytes(), before)
+            self.assertEqual(video.read_bytes(), b"unchanged-video")
+
+    def test_publisher_staged_hard_qc_rejects_before_any_output_or_receipt_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            video = root / "Episode.mkv"
+            video.write_bytes(b"unchanged-video")
+            staged = root / "staged.ass"
+            staged.write_text(_guard_ass(overlap=True), encoding="utf-8")
+            output = root / "Episode.zh-TW.ass"
+            output.write_text(_guard_ass(), encoding="utf-8")
+            before = output.read_bytes()
+            source_before = staged.read_bytes()
+            config = SimpleNamespace(work_path=root / "work")
+            for _restart in range(2):
+                with self.assertRaisesRegex(SubtitleExtractError, "staged hard QC failed.*timing_overlap"):
+                    _publish_official_subtitle_set(video, [(staged, output, "zh-tw")], config)
+                self.assertEqual(output.read_bytes(), before)
+                self.assertEqual(staged.read_bytes(), source_before)
+                self.assertFalse(config.work_path.exists())
+            self.assertEqual(video.read_bytes(), b"unchanged-video")
+
+    def test_publisher_hard_qc_passing_output_still_replays_idempotently(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            video = root / "Episode.mkv"
+            video.write_bytes(b"unchanged-video")
+            staged = root / "staged.ass"
+            staged.write_text(_guard_ass(), encoding="utf-8")
+            output = root / "Episode.zh-TW.ass"
+            config = SimpleNamespace(work_path=root / "work")
+            _publish_official_subtitle_set(video, [(staged, output, "zh-tw")], config)
+            first = output.read_bytes()
+            _publish_official_subtitle_set(video, [(staged, output, "zh-tw")], config)
+            self.assertEqual(output.read_bytes(), first)
+            self.assertEqual(first, staged.read_bytes())
+            self.assertEqual(len(list(config.work_path.rglob("manifest.json"))), 1)
+            self.assertEqual(video.read_bytes(), b"unchanged-video")
+
     def test_official_subtitle_set_publish_failure_restores_every_previous_output(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -44,11 +103,11 @@ class SubtitleExtractTest(unittest.TestCase):
             output_cn = root / "Anime S01E01.zh.ass"
             output_tw = root / "Anime S01E01.zh-TW.ass"
             source_cn.write_text(
-                "Dialogue: 0,0:00:00.00,0:00:01.00,,,明天选班长",
+                "Dialogue: 0,0:00:00.00,0:00:03.00,Default,,0,0,0,,明天选班长",
                 encoding="utf-8",
             )
             source_tw.write_text(
-                "Dialogue: 0,0:00:00.00,0:00:01.00,,,明天選班長",
+                "Dialogue: 0,0:00:00.00,0:00:03.00,Default,,0,0,0,,明天選班長",
                 encoding="utf-8",
             )
             output_cn.write_text("old-cn", encoding="utf-8")
@@ -121,7 +180,7 @@ class SubtitleExtractTest(unittest.TestCase):
 
             for index in range(5):
                 source.write_text(
-                    f"Dialogue: 0,0:00:00.00,0:00:01.00,,,明天選班長{index}",
+                    f"Dialogue: 0,0:00:00.00,0:00:03.00,Default,,0,0,0,,明天選班長{index}",
                     encoding="utf-8",
                 )
                 _publish_official_subtitle_set(video, [(source, output, "zh-tw")], config)
@@ -137,7 +196,7 @@ class SubtitleExtractTest(unittest.TestCase):
                 encoding="utf-8",
             )
             source.write_text(
-                "Dialogue: 0,0:00:00.00,0:00:01.00,,,明天選班長最後",
+                "Dialogue: 0,0:00:00.00,0:00:03.00,Default,,0,0,0,,明天選班長最後",
                 encoding="utf-8",
             )
             _publish_official_subtitle_set(video, [(source, output, "zh-tw")], config)
@@ -252,8 +311,8 @@ class SubtitleExtractTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             simplified = Path(temp_dir) / "Anime S01E01.stream_15.chi.ass"
             traditional = Path(temp_dir) / "Anime S01E01.stream_16.chi.ass"
-            simplified.write_text("Dialogue: 0,0:00:00.00,0:00:01.00,,,\u660e\u5929\u9009\u73ed\u957f", encoding="utf-8")
-            traditional.write_text("Dialogue: 0,0:00:00.00,0:00:01.00,,,\u660e\u5929\u9078\u73ed\u9577", encoding="utf-8")
+            simplified.write_text("Dialogue: 0,0:00:00.00,0:00:03.00,Default,,0,0,0,,\u660e\u5929\u9009\u73ed\u957f", encoding="utf-8")
+            traditional.write_text("Dialogue: 0,0:00:00.00,0:00:03.00,Default,,0,0,0,,\u660e\u5929\u9078\u73ed\u9577", encoding="utf-8")
 
             self.assertEqual(classify_sidecar_subtitle_language(simplified), "zh-cn")
             self.assertEqual(classify_sidecar_subtitle_language(traditional), "zh-tw")
@@ -756,8 +815,8 @@ Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{\\fn微软雅黑}明天選班
             video.write_text("", encoding="utf-8")
             simplified = Path(temp_dir) / "Anime S01E01.stream_15.chi.ass"
             traditional = Path(temp_dir) / "Anime S01E01.stream_16.chi.ass"
-            simplified.write_text("Dialogue: 0,0:00:00.00,0:00:01.00,,,\u660e\u5929\u9009\u73ed\u957f", encoding="utf-8")
-            traditional.write_text("Dialogue: 0,0:00:00.00,0:00:01.00,,,\u660e\u5929\u9078\u73ed\u9577", encoding="utf-8")
+            simplified.write_text("Dialogue: 0,0:00:00.00,0:00:03.00,Default,,0,0,0,,\u660e\u5929\u9009\u73ed\u957f", encoding="utf-8")
+            traditional.write_text("Dialogue: 0,0:00:00.00,0:00:03.00,Default,,0,0,0,,\u660e\u5929\u9078\u73ed\u9577", encoding="utf-8")
 
             normalized = normalize_sidecar_subtitles(video, config)
 
@@ -823,7 +882,7 @@ Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{\\fn微软雅黑}明天選班
             source_video.write_text("", encoding="utf-8")
             target_video.write_text("", encoding="utf-8")
             sidecar = source_dir / "Source Show - 01.zh-hant.ass"
-            sidecar.write_text("Dialogue: 0,0:00:00.00,0:00:01.00,,,\u660e\u5929\u9078\u73ed\u9577", encoding="utf-8")
+            sidecar.write_text("Dialogue: 0,0:00:00.00,0:00:03.00,Default,,0,0,0,,\u660e\u5929\u9078\u73ed\u9577", encoding="utf-8")
 
             normalized = normalize_sidecar_subtitles_for_output(
                 source_video,
@@ -850,7 +909,7 @@ Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{\\fn微软雅黑}明天選班
             ai_ass = Path(temp_dir) / "Anime S01E01.AI.zh-TW.ass"
             ai_ass.write_text("ai", encoding="utf-8")
             sidecar = Path(temp_dir) / "Anime S01E01.zh-hant.ass"
-            sidecar.write_text("Dialogue: 0,0:00:00.00,0:00:01.00,,,\u660e\u5929\u9078\u73ed\u9577", encoding="utf-8")
+            sidecar.write_text("Dialogue: 0,0:00:00.00,0:00:03.00,Default,,0,0,0,,\u660e\u5929\u9078\u73ed\u9577", encoding="utf-8")
 
             normalized = normalize_sidecar_subtitles(video, config)
 
@@ -874,7 +933,7 @@ Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{\\fn微软雅黑}明天選班
 
             def convert(_source: Path, output: Path) -> None:
                 output.write_text(
-                    "Dialogue: 0,0:00:00.00,0:00:01.00,,,明天選班長",
+                    "Dialogue: 0,0:00:00.00,0:00:03.00,Default,,0,0,0,,明天選班長",
                     encoding="utf-8",
                 )
 
@@ -1022,8 +1081,8 @@ Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{\\fn微软雅黑}明天選班
         )
         content = "\n".join(
             (
-                "Dialogue: 0,0:00:01.00,0:00:03.00,English,,0,0,0,,"
-                "This is the place where you and I are going, but we should not leave without them."
+                f"Dialogue: 0,0:{_index:02}:01.00,0:{_index:02}:05.00,English,,0,0,0,,"
+                f"We should wait here for our friends {_index + 1}."
             )
             for _index in range(20)
         )
@@ -1069,6 +1128,17 @@ Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{\\fn微软雅黑}明天選班
 
             self.assertEqual(normalized, [])
             self.assertFalse((root / "Anime S01E04.English.eng.ass").exists())
+
+
+def _guard_ass(*, overlap: bool = False) -> str:
+    def stamp(seconds: int) -> str:
+        return f"{seconds // 3600}:{seconds // 60 % 60:02}:{seconds % 60:02}.00"
+
+    return "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n" + "".join(
+        f"Dialogue: 0,{stamp(index * 30)},{stamp(index * 30 + (40 if overlap else 3))},Default,,0,0,0,,"
+        f"這裡會選擇開啟網路連線並顯示訊息，第{index + 1}段。\n"
+        for index in range(30)
+    )
 
 
 if __name__ == "__main__":
