@@ -1,5 +1,45 @@
 # M2 Circuit Breaker Test Results
 
+## Latest deployed M2 download/recovery closeout (2026-09-05)
+
+- Worker runtime: `b911794ed0ec872cb475f714e1385e20e8ac4388`.
+- Worker image: `sha256:300a394ebd181f57fa7f7d6e017957cbef86d3ce44eae747b37a092503361afa`.
+- Final source-image regression: **1,737 Worker + 229 WebUI tests PASS**.
+- Focused recovery/guardrail/observation regression: **74 PASS**.
+- Final deployed-image seven-breaker harness: **7/7 PASS**;
+  `/logs/m2-guardrail-fi-20260905T045613693910Z-334ff38d/result.json`
+  and the corresponding complete `events.jsonl`.
+- Controlled recovery: **TRIPPED -> ARMED**, claims resumed;
+  `/logs/m2-download-recovery-audit-20260905T030809930683Z/controlled-recovery-closeout.log`.
+- New Gate: `m2-gate-20260905T045640981079Z-08147de925`, start
+  `2026-09-05T04:56:40.981079Z`, baseline
+  `m2-guardrail-v1:5b4d2a88f2d5c0c5749f6747`, initial **0/20**.
+- No Production source/output was used as destructive fault-injection data.
+
+The Gate-publication regression inserts admission after the real SQLite Gate
+creation but before manifest publication. It proves denied claims without a
+false invalidation, and covers stale snapshots, missing pause, invalid recovery
+records and true drift. Recovery tests cover removed unclaimed items, exact
+restart persistence, no duplicate dispatch, running/CLAIMED preservation,
+local quality/bad-input isolation, retry budgets and automatic next canary.
+
+Real downloaded Dark Gathering S01E01 passed file-completion verification,
+actual extraction of both Chinese tracks, target matching and isolated atomic
+import (`real-source-proof.json` under the audit root). Existing Production
+outputs were already valid and preserved: **new Production imports 0**.
+The missing-output 304:10 sample is source-blocked; no failed hash was retried
+to fabricate an E2E pass. No backlog or 20-job Gate completion was awaited.
+
+The final bounded server snapshot also proves autonomous continuation: 12
+download targets were consumed (eight verified existing outputs, four still
+unsuccessful), 875 remained durable, and the server dispatched a different
+AI canary after recording one pre-claim exclusion. The next AI item remained
+queued with zero claims; its eventual claim/result is explicitly unverified.
+
+All sections below retain earlier candidate/historical results, not the current
+runtime identity. Full final deployment output is `safe-deploy-5.log` in the
+same timestamped audit directory. No M3 or production-acceptance claim is made.
+
 ## M2 download recovery candidate, 2026-09-05
 
 Full log: `/logs/m2-download-recovery-audit-20260905T030809930683Z/isolated-tests.log`.

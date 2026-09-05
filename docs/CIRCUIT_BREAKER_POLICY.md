@@ -2,6 +2,28 @@
 
 ## M2 download recovery boundary (2026-09-05)
 
+The final M2 runtime is Worker
+`b911794ed0ec872cb475f714e1385e20e8ac4388`. Runtime `ARMED` was re-attested
+after safe deployment and fresh 7/7 fault injection; the frozen baseline is
+`m2-guardrail-v1:5b4d2a88f2d5c0c5749f6747`, initially `0/20`.
+
+A controlled recovery publishes the SQLite Gate and runtime manifest under a
+durable claim pause. During the narrowly identified DISARMED handoff, valid
+recovery contract/record and pause evidence deny admission without invalidating
+the replacement Gate. A delayed sample is ignored only after transactional
+revalidation of the current ARMED runtime against the exact active Gate.
+Ordinary DISARMED states, damaged evidence and genuine runtime changes remain
+fail-closed. This exception never permits a claim or relaxes a breaker.
+
+An orphan DISPATCHED recovery item with no claim, no Queue item and no running
+job/delivery is recorded as `EXCLUDED / KEEP_NEEDS_REVIEW`, never succeeded.
+Its immutable pre-claim event preserves media identity evidence and advances
+only the existing single-canary lane. No Queue item is blindly recreated.
+Quality/bad-input exclusions and budgeted retries leave the lane CANARY_READY
+with existing backoff; a success is still required for ACTIVE. Permanent
+system faults remain paused and TRIPPED runtime always blocks dispatch.
+These records and all download recovery metrics cannot backfill a frozen Gate.
+
 Download repair leaves breaker thresholds, Decision Schema, AI QC, hallucination
 validation and model routing unchanged. External subtitle import applies the
 existing Source Analyzer policy plus full timestamp parsing before atomic

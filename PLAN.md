@@ -30,8 +30,12 @@ M2 translation quality, Translation Memory, full QC redesign and WebUI work are 
 
 - [x] Audit download/extraction/import history separately from AI recovery; verify qB authentication and actual mount parity with bounded server evidence.
 - [x] Repair four-digit episode parsing, partial queuedDL timeout handling, piece preservation, pre-publication subtitle validation and durable bounded replacement/backoff; pass 283 server candidate tests.
-- [ ] Safely deploy the M2 download extension, attest runtime and preserve/invalidate/re-arm the Gate only for the actual version change.
-- [ ] Apply deduplicated historical decisions to the existing replacement mechanism and record one real historical-case E2E result or explicit external blocker, without waiting for the backlog/Gate.
+- [x] Safely deploy the M2 download extension and recovery closeout as Worker `b911794ed0ec872cb475f714e1385e20e8ac4388`; pass 1,737 Worker and 229 WebUI tests, fresh 7/7 breakers, and attest ARMED without changing QC/models/configuration.
+- [x] Apply all 2,120 deduplicated historical decisions using existing state/locks; enqueue 887 bounded replacement targets, preserve one existing download, and record real download/extraction/matching/isolated-import PASS with safe Production no-op, not a false new-import claim.
+- [x] Repair the controlled DISARMED Gate-publication race and orphan pre-claim canary reconciliation; preserve strict invalidation, single-canary limits, retry budgets and local-failure isolation. Pass 74 focused integration tests.
+- [x] Preserve superseded Gates and initialize `m2-gate-20260905T045640981079Z-08147de925` at `2026-09-05T04:56:40.981079Z`, baseline `m2-guardrail-v1:5b4d2a88f2d5c0c5749f6747`, initial `0/20`; resume claims without waiting for the Gate.
+- [x] Record bounded server continuation evidence: 12 download targets consumed, eight existing outputs verified, and an independently dispatched next AI canary after one pre-claim exclusion; retain its queued/not-yet-claimed boundary.
+- [ ] Verify a genuinely new Production subtitle import when an eligible external source is available; the representative target already had valid outputs, and missing-output sample 304:10 had no eligible untried source. Do not redownload failed hashes or relax validation to close this item.
 
 - [x] Inventory supported subtitle sidecars, embedded subtitle streams and audio streams without modifying source media.
 - [x] Normalize language metadata and combine it with subtitle content, script and quality evidence.

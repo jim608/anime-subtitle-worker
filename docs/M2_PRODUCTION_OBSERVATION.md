@@ -1,6 +1,107 @@
 # M2 Production Observation
 
-## M2 download recovery extension (2026-09-05, deployment pending)
+## Current M2 download/recovery closeout (2026-09-05)
+
+The deployed Worker is `b911794ed0ec872cb475f714e1385e20e8ac4388`; WebUI
+remains `7bd36c30fb07e393eba71760a164246d267c5b16`. Safe deployment
+`20260905T045130Z-2559308` completed with 1,737 Worker and 229 WebUI tests
+passing. Controlled recovery explicitly returned `ARMED`,
+`runtime_baseline_match`, and `claims_resumed=true`.
+
+| Frozen runtime field | Value |
+| --- | --- |
+| Worker image | `sha256:300a394ebd181f57fa7f7d6e017957cbef86d3ce44eae747b37a092503361afa` |
+| WebUI image | `sha256:4b0e2458b770de20c9fda8af01926a97e8cc5104aff1458c18f79c403abc26a2` |
+| Configuration fingerprint | `sha256:355300b197164801be4616a688d852c1b8b5274fe91e91e40a2a21f12a3c4dbc` |
+| Decision schema / version | `1` / `m2-source-decision-v1` |
+| Gate ID | `m2-gate-20260905T045640981079Z-08147de925` |
+| Baseline | `m2-guardrail-v1:5b4d2a88f2d5c0c5749f6747` |
+| Gate start | `2026-09-05T04:56:40.981079Z` |
+| Initial progress | `0/20`; not a completion or acceptance claim |
+| Selection | `m2-frozen-first-20-v1`; first 20 eligible post-start claims, no backfill |
+
+All superseded runtime Gates, including the interrupted `288de2c08d` handoff
+and the subsequent `9f7201d81d` Gate, retain their invalidation records.
+No query, inventory or report created a Gate. Each replacement followed an
+actual deployed runtime change. The original eight pre-gate attempts and all
+later pre-gate work remain historical evidence, not replacement cohort slots.
+
+### Download history and actual evidence boundary
+
+The audit deduplicated 2,120 `(bangumi_id, episode)` obligations. Overlapping
+stage counts are download 1,670, extraction 635 and matching/import 71; they
+must not be added. The 417 non-success extraction hashes and nine waiting
+hashes are another view, not additional obligations. All 426 inspected
+historical non-success/waiting source paths were missing; no corrupt-media
+claim was inferred from that fact.
+
+The server persisted all 2,120 decisions and initially submitted 887 safe
+replacement targets to the existing durable mechanism, alongside one existing
+download. These 888 are automatic-reassessment candidates, not guaranteed
+successful downloads. The other 1,232 comprise 356 source-backoff records,
+148 release-identity reviews, 325 ambiguous targets, two unindexed targets,
+nine match reviews, 387 unavailable mappings and five old completions not
+reverified. At the 04:40 UTC bounded snapshot, ten replacement targets had
+been consumed: eight verified existing outputs and two no-candidate retries;
+877 targets remained in the durable request. No new Production import was
+credited by those eight idempotent reconciliations.
+
+Representative historical failure `3078:1` (Dark Gathering S01E01) reached a
+real 627,324,826-byte completed download, exact target matching, real zh-cn and
+zh-tw extraction and validated atomic import in an isolated proof directory.
+The real target already had both valid Chinese outputs. Its seven existing
+subtitle files and source checksum were unchanged; Production publication was
+a safe no-op and **new Production imports = 0**. This is stronger than a mock
+but does not prove a new Production publication. The truly missing-output
+sample `304:10` had no eligible untried single-episode candidate; the old failed
+hash was not re-added. External availability remains a bounded source-policy
+blocker, not proof of bad media. A final provider snapshot had no open provider
+circuit; per-job no-candidate/backoff records remain durable.
+
+### Autonomous continuation and recovery closeout
+
+Download request backoff no longer starves normal enqueue, and existing valid
+outputs are verified before source lookup or another download. Partial qB
+pieces, failed-hash exclusions and provider retry policy survive restart.
+The server's own consumed-target records prove download continuation without
+an online Codex session.
+
+Final bounded snapshot at `2026-09-05T04:59:25.827875Z`
+(`autonomous-status-1788584365.json`) retained all 2,120 decisions, with
+**12 targets consumed, eight verified-existing completions, four not yet
+successful, and 875 replacement targets remaining**. Provider circuits were
+closed; the 356 historical source-backoff decisions are not new successes.
+
+Two additional live closeout defects were repaired: a paused SQLite/manifest
+Gate-publication race, and an unclaimed AI recovery canary whose Queue item
+had been removed while its dispatch ledger stayed in flight. Controlled
+handoff now refuses claims without invalidating a new Gate; genuine drift
+still invalidates. The orphan is durably `EXCLUDED / KEEP_NEEDS_REVIEW`, with
+zero claims and no false completion. The next item uses the same single-canary
+lane and dispatch interval. Local quality/bad-input exclusions and bounded
+retries no longer permanently pause unrelated canaries; confirmed permanent
+system errors and real breaker trips still stop the lane.
+
+The server independently dispatched the next AI recovery item at
+`2026-09-05T04:57:37.050963Z`, after the orphan was excluded. Its exact indexed
+Queue row was `queued / m2_recovery` in the final snapshot; 218 other items
+were READY, `preclaim_excluded_count=1`, and claim control was unpaused.
+This proves automatic next-item dispatch, **not a claim or terminal success**:
+the new recovery canary still had zero claims, and no recovery success or
+checkpoint-resume success was credited. No wait for that job was performed.
+
+Evidence root: `/logs/m2-download-recovery-audit-20260905T030809930683Z/`.
+It retains inventory, applied decisions, all five safe-deployment logs,
+`real-source-proof.json`, exact canary/incident snapshots and
+`controlled-recovery-closeout.log`. Fresh final-image fault evidence is
+`/logs/m2-guardrail-fi-20260905T045613693910Z-334ff38d/result.json` and
+`events.jsonl` (7/7 PASS). Recovery identity preservation is in
+`/logs/m2-production-recovery-20260905T045637543053Z-edf65157.json`.
+No M3, translation/QC relaxation, full media rescan, Queue polling or wait for
+the historical backlog / 20-job Gate was performed. New Production import,
+remaining source availability and eventual cohort outcomes remain unverified.
+
+## Initial download recovery candidate evidence (superseded by closeout above)
 
 This remains M2, not M3. Download recovery metrics are separate from the frozen
 cohort and never backfill failed members. Read-only audit did not reset a Gate.
@@ -32,7 +133,7 @@ and safe import on generated isolated media. This is not a Production download
 E2E result. Actual deployment and the representative historical-case disposition
 remain required at closeout.
 
-## Status
+## Historical pre-download recovery status (not the current runtime)
 
 - Milestone state: `M2_GUARDRAILS_ARMED`
 - Circuit-breaker runtime status after controlled recovery: `ARMED` (`runtime_baseline_match`)
