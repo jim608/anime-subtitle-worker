@@ -1,5 +1,23 @@
 # M2 Circuit Breaker Policy
 
+## Verified recovery boundary and next deployment constraint (2026-09-05)
+
+The exact collision/quality-pause recovery completed on Worker `60d6b236...`,
+with fresh running-image 7/7 evidence and ARMED replacement Gate. Its immutable
+incident receipt is consumed history, not authority for later normal updates.
+The next automatic claim safely reached NEEDS_REVIEW with durable evidence;
+quality refusal must not be relabeled completed or treated as a system streak.
+
+A normal ARMED runtime change needs a separately bound planned handoff. The
+safe stack updater preserves a pre-existing durable pause and waits for idle,
+but it does not itself retire an M2 Gate. Do not mutate runtime JSON, clear a
+latch, reuse collision evidence, or feed a changed baseline to an already-ARMED
+manifest. Preserve the active cohort until actual runtime change is proven;
+any supported handoff must bind old Gate and immutable evidence, unchanged
+configuration/schema, absence of intervening claims or unrelated incidents,
+new runtime attestation and fresh isolated 7/7 before a replacement 0/20 and
+claim resume. Documentation-only changes never trigger this workflow.
+
 ## Recovery unblock candidate safety boundary (2026-09-05)
 
 An expected deployment can append a runtime-change trip while the original

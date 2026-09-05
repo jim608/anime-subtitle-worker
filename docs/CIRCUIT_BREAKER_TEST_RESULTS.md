@@ -1,5 +1,32 @@
 # M2 Circuit Breaker Test Results
 
+## Verified second recovery runtime (2026-09-05)
+
+Deployment `20260905T083811Z-380719` runs Worker
+`60d6b2361a54a76730c5a943dfd3fac8b98cca19`: 1,821 Worker and 229 WebUI
+safe-update tests passed. Fresh actual-image evidence in
+`runtime-handoff-v2/running-image-regression.log` is 73 PASS; its separate
+`running-image-fault-suite.log` attests **7/7 PASS**, unchanged Production
+resources and exact deployed source/container. Recovery completed and runtime
+reported ARMED at the new Gate start `2026-09-05T08:46:08.410661Z`.
+Do not sum overlapping suites or call these observation-cohort completions.
+
+`actual-next-claim-0908.json` proves the first safely reviewed recovery was
+followed by a distinct automatic claim and SUBTITLE_DETECTION checkpoint.
+Neither was falsely COMPLETED; quality review did not re-pause the lane.
+The normal Amaburi extraction attempt rejected real E13 hard-QC failures,
+preserved source and prior sidecars, and requested bounded replacement:
+formal publication count remains zero.
+
+The additional parser-boundary candidate passed 341 server-isolated tests in
+`server-parser-boundary-tests.log`: malformed SRT does not hide a valid sibling;
+repeated invalid staged publication preserves prior output/source/receipt;
+SSA/VTT unsupported validation is explicit and cannot bypass staged QC.
+These tests are candidate evidence, not yet deployed-image attestation.
+The exact real E13 final-file RO check additionally completed without parser
+exception and with all source/prior subtitle hashes unchanged; it found no
+verified final subtitle or new sidecar (`amaburi-candidate-file-validation.json`).
+
 ## Recovery unblock candidate evidence (2026-09-05)
 
 First actual deployment `ea0baaf...`: safe-update completed with 1,813 Worker

@@ -21,6 +21,7 @@ from safe_files import atomic_write_text, sha256_file
 RUNTIME_SCHEMA_VERSION = 1
 RUNTIME_CONTRACT = "m2-guardrail-runtime-v1"
 BREAKER_RECOVERY_CONTRACT = "m2-controlled-breaker-recovery-v1"
+PLANNED_CHANGE_CONTRACT = "m2-planned-runtime-change-v1"
 FAULT_RESULT_CONTRACT = "m2-isolated-circuit-breaker-test-v1"
 RUNTIME_STATUSES = frozenset({"ARMED", "DISARMED", "TRIPPED", "DEGRADED"})
 REQUIRED_BREAKERS = (
@@ -991,6 +992,211 @@ def _durable_recovery_snapshot(connection: sqlite3.Connection) -> dict[str, Any]
     }
 
 
+def _planned_change_snapshot(connection: sqlite3.Connection, gate_id: str) -> dict[str, Any]:
+    """Freeze durable work and append-only activity, never alter queue policy."""
+    snapshot = _durable_recovery_snapshot(connection)
+    activity = {}
+    for table, timestamp in (
+        ("ai_delivery_attempts", "updated_at"),
+        ("pipeline_stage_attempts", "updated_at"),
+        ("pipeline_stage_events", "created_at"),
+        ("pipeline_job_transitions", "created_at"),
+        ("ai_stage_events", "created_at"),
+        ("m2_observation_result_events", "created_at"),
+        ("m2_observation_supplemental", "updated_at"),
+    ):
+        activity[table] = list(connection.execute(
+            f"SELECT COUNT(*),COALESCE(MAX({timestamp}),0) FROM {table}"
+        ).fetchone())
+    members = [list(row) for row in connection.execute(
+        "SELECT * FROM m2_observation_gate_jobs WHERE gate_id=? ORDER BY job_id", (gate_id,)
+    )]
+    snapshot["activity"] = activity
+    retained_running = {}
+    for table, status, identity in (
+        ("ai_delivery_attempts", "running", "attempt_id"),
+        ("pipeline_stage_attempts", "RUNNING", "stage_attempt_id"),
+        ("ai_job_state", "running", "path"),
+    ):
+        rows = [list(row) for row in connection.execute(
+            f"SELECT * FROM {table} WHERE status=? ORDER BY {identity}", (status,)
+        )]
+        retained_running[table] = {"count": len(rows), "sha256": "sha256:" + hashlib.sha256(
+            json.dumps(rows, sort_keys=True, separators=(",", ":")).encode()).hexdigest()}
+    snapshot["retained_running"] = retained_running
+    snapshot["members_sha256"] = "sha256:" + hashlib.sha256(
+        json.dumps(members, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    snapshot["member_count"] = len(members)
+    return snapshot
+
+
+def _require_planned_change_idle(connection: sqlite3.Connection, config: Any, now: float) -> None:
+    # Retained historical attempts use the same stale cutoff as recovery;
+    # they are frozen in the receipt, not edited or treated as fresh claims.
+    cutoff = now - max(60, int(getattr(config, "m2_recovery_stale_running_seconds", 21600) or 21600))
+    if connection.execute("SELECT 1 FROM ai_candidate_queue WHERE status='running' LIMIT 1").fetchone():
+        raise RuntimeContractError("planned_change_work_not_idle")
+    for table, status, heartbeat in (
+        ("ai_delivery_attempts", "running", "updated_at"),
+        ("pipeline_stage_attempts", "RUNNING", "heartbeat_at"),
+        ("ai_job_state", "running", "updated_at"),
+    ):
+        if connection.execute(
+            f"SELECT 1 FROM {table} WHERE status=? AND ({heartbeat}>? OR {heartbeat} IS NULL OR {heartbeat}<=0) LIMIT 1",
+            (status, cutoff),
+        ).fetchone():
+            raise RuntimeContractError("planned_change_work_not_idle")
+
+
+def prepare_runtime_change(
+    config: Any, *, expected_old_gate_id: str, expected_new_worker_sha: str,
+    receipt_id: str, source_revision_file: str | Path = "/app/.source-revision",
+    state_path_override: str | Path | None = None, now: float | None = None,
+) -> dict[str, Any]:
+    """Record one planned deployment only after the existing safe-idle pause."""
+    from m2_observation_store import active_gate, validate_active_runtime
+    from m2_production_observation import circuit_breaker_state_path, require_durable_claim_pause
+    from scan_state import ScanStateStore
+
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", str(receipt_id)):
+        raise RuntimeContractError("planned_change_receipt_id_invalid")
+    timestamp = time.time() if now is None else float(now)
+    if not math.isfinite(timestamp) or timestamp <= 0:
+        raise RuntimeContractError("planned_change_timestamp_invalid")
+    wanted = _require_sha(expected_new_worker_sha, "planned_worker")
+    pause = require_durable_claim_pause(config)
+    status = runtime_guardrail_status(config, source_revision_file=source_revision_file,
+                                      state_path_override=state_path_override)
+    if status.get("status") != "ARMED":
+        raise RuntimeContractError("planned_change_runtime_not_armed")
+    prior = status["state"]
+    if (prior["gate"]["gate_id"] != expected_old_gate_id
+        or prior["baseline"]["worker_commit_sha"] == wanted):
+        raise RuntimeContractError("planned_change_gate_or_new_sha_invalid")
+    breaker = _read_json(circuit_breaker_state_path(config)) or {"tripped": False, "status": "ARMED"}
+    if breaker.get("tripped") is not False:
+        raise RuntimeContractError("planned_change_breaker_not_clear")
+    path = Path(str(getattr(config, "log_path", config.work_path))) / f"m2-planned-runtime-change-{receipt_id}.json"
+    store = ScanStateStore.from_config(config)
+    try:
+        connection = store.observation_connection
+        connection.execute("BEGIN IMMEDIATE")
+        _require_planned_change_idle(connection, config, timestamp)
+        validate_active_runtime(connection, prior)
+        gate = active_gate(connection)
+        if not gate or gate["gate_id"] != expected_old_gate_id:
+            raise RuntimeContractError("planned_change_active_gate_mismatch")
+        snapshot = _planned_change_snapshot(connection, expected_old_gate_id)
+        existing = _read_json(path)
+        if path.exists():
+            if (not isinstance(existing, Mapping) or existing.get("contract") != PLANNED_CHANGE_CONTRACT
+                or existing.get("runtime") != prior or existing.get("snapshot") != snapshot
+                or existing.get("expected_new_worker_sha") != wanted or existing.get("breaker") != breaker):
+                raise RuntimeContractError("planned_change_receipt_conflict")
+        else:
+            receipt = {"contract": PLANNED_CHANGE_CONTRACT, "receipt_id": receipt_id,
+                       "prepared_at_epoch": timestamp, "expected_new_worker_sha": wanted,
+                       "runtime": prior, "gate": gate, "breaker": breaker,
+                       "snapshot": snapshot, "durable_claim_pause": pause}
+            atomic_write_text(path, json.dumps(receipt, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
+        connection.commit()
+    except BaseException:
+        store.rollback()
+        raise
+    finally:
+        store.close()
+    return {"status": "PREPARED", "old_gate_id": expected_old_gate_id,
+            "expected_new_worker_sha": wanted, "receipt_path": str(path),
+            "receipt_sha256": "sha256:" + sha256_file(path), "claims_paused": True}
+
+
+def _planned_change_receipt(config: Any, root_cause: Mapping[str, Any]) -> dict[str, Any]:
+    path = Path(str(root_cause.get("planned_change_receipt") or "")).resolve()
+    log_root = Path(str(getattr(config, "log_path", config.work_path))).resolve()
+    if (not path.is_relative_to(log_root) or not path.is_file()
+        or not path.name.startswith("m2-planned-runtime-change-")
+        or not 0 < path.stat().st_size <= 256 * 1024
+        or "sha256:" + sha256_file(path) != root_cause.get("planned_change_receipt_sha256")):
+        raise RuntimeContractError("planned_change_receipt_invalid")
+    receipt = _read_json(path)
+    if (not isinstance(receipt, dict) or receipt.get("contract") != PLANNED_CHANGE_CONTRACT
+        or not isinstance(receipt.get("runtime"), dict) or not isinstance(receipt.get("gate"), dict)
+        or receipt["gate"].get("gate_id") != root_cause.get("expected_old_gate_id")
+        or receipt["runtime"].get("status") != "ARMED" or receipt["gate"].get("status") != "ACTIVE"
+        or not isinstance(receipt.get("breaker"), dict) or receipt["breaker"].get("tripped") is not False):
+        raise RuntimeContractError("planned_change_receipt_gate_mismatch")
+    return receipt
+
+
+def _planned_change_incident(
+    connection: sqlite3.Connection, *, config: Any, evidence: Mapping[str, Any],
+    breaker: Mapping[str, Any], now: float,
+) -> dict[str, Any]:
+    from m2_observation_store import gate_by_id, active_gate, INVALIDATED_RUNTIME
+    from m2_production_observation import require_durable_claim_pause
+
+    root_cause = evidence["root_cause"]
+    receipt = _planned_change_receipt(config, root_cause)
+    require_durable_claim_pause(config)
+    _require_planned_change_idle(connection, config, now)
+    old = receipt["runtime"]["baseline"]
+    if evidence["worker_commit_sha"] != receipt["expected_new_worker_sha"]:
+        raise RuntimeContractError("planned_change_new_sha_mismatch")
+    for key in ("worker_commit_sha", "worker_source_revision", "worker_runtime_code_revision",
+                "worker_container_id", "worker_container_identity", "worker_image_id",
+                "worker_runtime_instance_fingerprint"):
+        if evidence.get(key) == old.get(key):
+            raise RuntimeContractError("planned_change_new_runtime_not_proven")
+    for key in ("webui_commit_sha", "webui_source_revision", "configuration_fingerprint"):
+        if evidence.get(key) != old.get(key):
+            raise RuntimeContractError("planned_change_frozen_policy_changed")
+    if evidence.get("decision") != {
+        "schema_version": old["decision_schema_version"], "version": old["decision_version"],
+        "contract": old["decision_contract"],
+    }:
+        raise RuntimeContractError("planned_change_frozen_policy_changed")
+    prepared = float(receipt["prepared_at_epoch"])
+    fault = evidence["fault_results"]
+    if not prepared < float(fault.get("container_started_at_epoch") or 0) <= float(fault.get("started_at_epoch") or 0) <= float(fault.get("finished_at_epoch") or 0) <= now:
+        raise RuntimeContractError("planned_change_fault_evidence_not_fresh")
+    if _planned_change_snapshot(connection, receipt["gate"]["gate_id"]) != receipt["snapshot"]:
+        raise RuntimeContractError("planned_change_new_work_or_evidence_changed")
+    gate = gate_by_id(connection, receipt["gate"]["gate_id"])
+    if not gate or active_gate(connection) is not None or gate.get("status") != INVALIDATED_RUNTIME:
+        raise RuntimeContractError("planned_change_old_gate_not_invalidated")
+    mutable = {"status", "invalidated_at", "invalidation_reason", "invalidation_evidence_json", "updated_at"}
+    if any(gate.get(key) != value for key, value in receipt["gate"].items() if key not in mutable):
+        raise RuntimeContractError("planned_change_old_gate_evidence_changed")
+    latest = breaker.get("latest_trip")
+    previous_reasons = receipt["breaker"].get("reasons") or []
+    if (not isinstance(latest, Mapping) or latest.get("reason_code") != "runtime_change"
+        or latest.get("evidence") != {"stage": "runtime_validation", "error_code": "live_worker_container_identity_mismatch"}
+        or breaker.get("reasons") != [*previous_reasons, latest]
+        or latest.get("observed_at") != breaker.get("updated_at")):
+        raise RuntimeContractError("planned_change_unexpected_breaker")
+    try:
+        invalidation = json.loads(gate["invalidation_evidence_json"])
+        expected, actual = invalidation["expected"], invalidation["actual"]
+        if (not prepared < float(fault["container_started_at_epoch"]) <= float(gate["invalidated_at"]) <= float(latest["observed_at"]) <= now
+            or invalidation.get("reason_code") != "live_worker_container_identity_mismatch"
+            or actual.get("reason_code") != "live_worker_container_identity_mismatch"
+            or actual.get("container_identity") != evidence["worker_container_identity"]
+            or actual.get("runtime_instance_fingerprint") != evidence["worker_runtime_instance_fingerprint"]
+            or any(actual.get(key) != evidence.get(key) for key in ("worker_source_revision", "worker_runtime_code_revision", "configuration_fingerprint"))
+            or any(expected.get(key) != receipt["gate"].get(key) for key in (
+                "baseline_version", "worker_sha", "webui_sha", "container_image_id", "worker_container_id",
+                "configuration_fingerprint", "decision_schema_version", "eligibility_policy_version"))):
+            raise ValueError("mismatched deployment evidence")
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeContractError("planned_change_runtime_evidence_mismatch") from exc
+    return {"planned_snapshot_sha256": "sha256:" + hashlib.sha256(
+                json.dumps(receipt["snapshot"], sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+            "planned_change_receipt_sha256": root_cause["planned_change_receipt_sha256"],
+            "prepared_at_epoch": prepared, "old_gate_id": gate["gate_id"],
+            "new_work_observed": False, "member_count": receipt["snapshot"]["member_count"]}
+
+
 def _breaker_incident_sources(
     connection: sqlite3.Connection,
     *,
@@ -1492,12 +1698,17 @@ def _prepare_pending_recovery_resume(
     affected_stage = _safe_code(root_cause.get("affected_stage"), "stage_missing")
     failure_code = _safe_code(root_cause.get("failure_code"), "failure_code_missing")
     expected_old_gate = str(root_cause.get("expected_old_gate_id") or "")
-    if expected_reason != "repeated_identical_stage_failure" or not expected_old_gate:
+    planned_mode = root_cause.get("mode") == "planned_runtime_change"
+    if expected_reason != ("runtime_change" if planned_mode else "repeated_identical_stage_failure") or not expected_old_gate:
         raise RuntimeContractError("pending_recovery_root_cause_mismatch")
     from m2_production_recovery import breaker_streak_eligible, classify_failure
 
     collision_mode = root_cause.get("mode") == "generic_failure_signature_collision"
-    if collision_mode:
+    if planned_mode:
+        receipt = _planned_change_receipt(config, root_cause)
+        if worker_commit != receipt.get("expected_new_worker_sha"):
+            raise RuntimeContractError("planned_change_new_sha_mismatch")
+    elif collision_mode:
         _validate_collision_regression(config, evidence, root_cause, now)
     elif root_cause.get("mode") or classify_failure(affected_stage, failure_code) != "QUALITY_BLOCKED" or breaker_streak_eligible(
         {
@@ -1584,6 +1795,13 @@ def _prepare_pending_recovery_resume(
         ).hexdigest()
     ):
         raise RuntimeContractError("pending_collision_evidence_mismatch")
+    if planned_mode and (
+        recovery_log.get("recovery_mode") != "planned_runtime_change"
+        or recovery_log.get("planned_change_receipt_sha256") != root_cause.get("planned_change_receipt_sha256")
+        or not isinstance(recovery_log.get("completion_runtime"), Mapping)
+        or any(evidence.get(key) != value for key, value in recovery_log["completion_runtime"].items())
+    ):
+        raise RuntimeContractError("pending_planned_change_evidence_mismatch")
 
     from m2_observation_store import INVALIDATED_RUNTIME, active_gate, gate_by_id
     from scan_state import ScanStateStore
@@ -1596,10 +1814,19 @@ def _prepare_pending_recovery_resume(
         current_active = active_gate(store.observation_connection)
         if prior_runtime.get("status") == "DISARMED" and current_active is not None:
             raise RuntimeContractError("pending_recovery_unexpected_active_gate")
+        if planned_mode and prior_runtime.get("status") == "DISARMED":
+            _require_planned_change_idle(store.observation_connection, config, now)
+            if _planned_change_snapshot(store.observation_connection, expected_old_gate) != receipt["snapshot"]:
+                raise RuntimeContractError("planned_change_new_work_or_evidence_changed")
         if prior_runtime.get("status") == "ARMED":
             current_gate_id = str((prior_runtime.get("gate") or {}).get("gate_id") or "")
             if not isinstance(current_active, Mapping) or current_active.get("gate_id") != current_gate_id:
                 raise RuntimeContractError("pending_recovery_active_gate_mismatch")
+            if planned_mode and runtime_guardrail_status(
+                config, source_revision_file=source_revision_file,
+                state_path_override=state_path_override,
+            ).get("status") != "ARMED":
+                raise RuntimeContractError("pending_planned_change_runtime_mismatch")
     finally:
         store.close()
 
@@ -1758,7 +1985,8 @@ def recover_runtime_local(
     )
     affected_stage = _safe_code(root_cause.get("affected_stage"), "stage_missing")
     failure_code = _safe_code(root_cause.get("failure_code"), "failure_code_missing")
-    if expected_reason != "repeated_identical_stage_failure":
+    planned_mode = root_cause.get("mode") == "planned_runtime_change"
+    if expected_reason != ("runtime_change" if planned_mode else "repeated_identical_stage_failure"):
         raise RuntimeContractError("unsupported_breaker_recovery_reason")
     from m2_production_recovery import (
         breaker_streak_eligible,
@@ -1770,7 +1998,11 @@ def recover_runtime_local(
 
     collision_mode = root_cause.get("mode") == "generic_failure_signature_collision"
     category = classify_failure(affected_stage, failure_code)
-    if collision_mode:
+    if planned_mode:
+        if affected_stage != "runtime_validation" or failure_code != "live_worker_container_identity_mismatch":
+            raise RuntimeContractError("planned_change_signature_invalid")
+        category = "PLANNED_RUNTIME_CHANGE"
+    elif collision_mode:
         if affected_stage != "worker" or failure_code != "worker_unknown":
             raise RuntimeContractError("unsupported_collision_recovery_signature")
         _validate_collision_regression(config, evidence, root_cause, timestamp)
@@ -1868,7 +2100,9 @@ def recover_runtime_local(
             raise RuntimeContractError("running_work_has_not_reached_safe_boundary")
         before = _durable_recovery_snapshot(connection)
         threshold = int(getattr(config, "m2_server_canary_identical_failure_threshold", 3) or 3)
-        incident = _generic_collision_incident(
+        incident = _planned_change_incident(
+            connection, config=config, evidence=evidence, breaker=breaker, now=timestamp,
+        ) if planned_mode else _generic_collision_incident(
             connection, root_cause=root_cause, breaker=breaker, threshold=threshold, config=config,
         ) if collision_mode else _breaker_incident_sources(
             connection,
@@ -1903,8 +2137,9 @@ def recover_runtime_local(
                 or (expected_old_gate and invalidated.get("gate_id") != expected_old_gate)
             ):
                 raise RuntimeContractError("active_gate_missing_for_recovery")
-        recovery = {"scope": "exact_incident_only", "historical_reconciliation_skipped": True,
-                    "requeued": 0, "job_states_changed": 0} if collision_mode else reconcile_historical_jobs(
+        recovery = {"scope": "planned_runtime_change" if planned_mode else "exact_incident_only",
+                    "historical_reconciliation_skipped": True,
+                    "requeued": 0, "job_states_changed": 0} if (collision_mode or planned_mode) else reconcile_historical_jobs(
             connection,
             current_worker_version=worker_commit,
             current_analyzer_version=str(
@@ -1944,7 +2179,9 @@ def recover_runtime_local(
         ):
             if before[key] != after[key]:
                 raise RuntimeContractError(f"recovery_{key}_changed")
-        source_after = _generic_collision_incident(
+        source_after = _planned_change_incident(
+            connection, config=config, evidence=evidence, breaker=breaker, now=timestamp,
+        ) if planned_mode else _generic_collision_incident(
             connection, root_cause=root_cause, breaker=breaker, threshold=threshold, config=config,
             validate_counters=False,
         ) if collision_mode else _breaker_incident_sources(
@@ -1957,7 +2194,8 @@ def recover_runtime_local(
                 or 3
             ),
         )
-        if source_after["source_identity_sha256"] != incident["source_identity_sha256"]:
+        identity_key = "planned_snapshot_sha256" if planned_mode else "source_identity_sha256"
+        if source_after[identity_key] != incident[identity_key]:
             raise RuntimeContractError("recovery_source_identity_changed")
         recovery_evidence = {
             "contract": BREAKER_RECOVERY_CONTRACT,
@@ -1994,6 +2232,19 @@ def recover_runtime_local(
                 "regression_results": dict(root_cause["regression_results"]),
                 "remaining_language_failures_unresolved": True,
             })
+        if planned_mode:
+            recovery_evidence.update({
+                "recovery_mode": "planned_runtime_change",
+                "source_identity_preserved": None,
+                "source_integrity_verification": "not_reprobed_no_media_mutation_operations",
+                "planned_change_receipt_sha256": root_cause["planned_change_receipt_sha256"],
+                "completion_runtime": {key: evidence[key] for key in (
+                    "worker_commit_sha", "worker_source_revision", "worker_runtime_code_revision",
+                    "worker_container_id", "worker_container_identity", "worker_runtime_instance_fingerprint",
+                    "worker_image_id", "webui_commit_sha", "webui_source_revision",
+                    "configuration_fingerprint", "decision",
+                )},
+            })
         record_breaker_recovery(
             connection,
             recovery_record_id=recovery_record_id,
@@ -2014,6 +2265,8 @@ def recover_runtime_local(
         log_path,
         json.dumps(recovery_evidence, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
     )
+    if planned_mode and _read_json(breaker_path) != breaker:
+        raise RuntimeContractError("planned_change_breaker_changed_before_retirement")
     disarmed_state = dict(prior_runtime)
     disarmed_state.update(
         {
@@ -2044,6 +2297,8 @@ def recover_runtime_local(
         breaker = {**breaker, "reasons": [*list(breaker.get("reasons") or []), occurrence],
                    "recovered_incident": occurrence,
                    "latest_trip": breaker.get("latest_trip") or occurrence}
+    if planned_mode and _read_json(breaker_path) != breaker:
+        raise RuntimeContractError("planned_change_breaker_changed_before_archive")
     atomic_write_text(
         archive_path,
         json.dumps(breaker, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
@@ -2068,6 +2323,8 @@ def recover_runtime_local(
             "recovery_record": breaker_recovery_record,
         }
     )
+    if planned_mode and _read_json(breaker_path) != breaker:
+        raise RuntimeContractError("planned_change_breaker_changed_before_clear")
     atomic_write_text(
         breaker_path,
         json.dumps(cleared_breaker, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
@@ -2310,7 +2567,9 @@ def recover_runtime_on_host(
         runtime_state_path_override=runtime_state_path_override,
         runner=run,
     )
-    dispatch = _run_json(
+    dispatch = {"dispatched": False, "reason_code": "planned_runtime_change_preserves_recovery_lane"} if (
+        (root_cause_evidence or {}).get("mode") == "planned_runtime_change"
+    ) else _run_json(
         [
             docker_binary,
             "exec",
@@ -3006,6 +3265,16 @@ def _parser() -> argparse.ArgumentParser:
     recover.add_argument("--worker-source-revision-file", default="/app/.source-revision")
     recover.add_argument("--webui-source-revision-file", default="/app/.source-revision")
     recover.add_argument("--state-path", default="")
+    recover.add_argument("--planned-change-receipt", default="")
+    recover.add_argument("--planned-change-receipt-sha256", default="")
+
+    prepare = subparsers.add_parser("prepare-runtime-change", help="Bind a paused, idle ARMED Gate to one necessary deployment")
+    prepare.add_argument("--config", required=True)
+    prepare.add_argument("--source-revision-file", default="/app/.source-revision")
+    prepare.add_argument("--state-path", default="")
+    prepare.add_argument("--expected-old-gate-id", required=True)
+    prepare.add_argument("--expected-new-worker-sha", required=True)
+    prepare.add_argument("--receipt-id", required=True)
 
     probe = subparsers.add_parser("probe", help=argparse.SUPPRESS)
     probe.add_argument("--config", required=True)
@@ -3048,6 +3317,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 runtime_state_path_override=args.state_path,
             )
         elif args.command == "recover":
+            planned = None
+            if args.planned_change_receipt or args.planned_change_receipt_sha256:
+                if not args.planned_change_receipt or not args.planned_change_receipt_sha256:
+                    raise RuntimeContractError("planned_change_receipt_invalid")
+                planned = {"mode": "planned_runtime_change",
+                           "planned_change_receipt": args.planned_change_receipt,
+                           "planned_change_receipt_sha256": args.planned_change_receipt_sha256}
             result = recover_runtime_on_host(
                 docker_binary=args.docker,
                 worker_container=args.worker_container,
@@ -3065,6 +3341,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 worker_source_revision_file=args.worker_source_revision_file,
                 webui_source_revision_file=args.webui_source_revision_file,
                 runtime_state_path_override=args.state_path,
+                root_cause_evidence=planned,
+            )
+        elif args.command == "prepare-runtime-change":
+            from config import load_config
+
+            result = prepare_runtime_change(
+                load_config(args.config), expected_old_gate_id=args.expected_old_gate_id,
+                expected_new_worker_sha=args.expected_new_worker_sha, receipt_id=args.receipt_id,
+                source_revision_file=args.source_revision_file, state_path_override=args.state_path or None,
             )
         elif args.command == "probe":
             result = probe_local_runtime(

@@ -254,6 +254,7 @@ def _validated_import_candidates(
     from source_analyzer import AnalyzerThresholds, analyze_subtitle_candidate
     from source_inventory import _probe_media, _subtitle_metrics
     from subtitle_quality import analyze_subtitle_file
+    from srt_utils import SrtFormatError
 
     if not candidates:
         return []
@@ -289,24 +290,37 @@ def _validated_import_candidates(
             media_duration_seconds=duration, thresholds=policy,
         )
         parse_pass = metrics.event_count > 0 and metrics.valid_timing_count == metrics.event_count
-        quality = analyze_subtitle_file(
-            candidate.source_path, config,
-            role="japanese" if candidate.language == "ja" else "unknown",
-        )
-        hard_qc_pass = not quality.has_failures and quality.dialogues > 0
+        parse_error = ""
+        quality_report = None
+        unsupported_validation = candidate.source_path.suffix.casefold() not in {".ass", ".srt"}
+        hard_qc_pass = False
+        if not unsupported_validation:
+            try:
+                quality = analyze_subtitle_file(
+                    candidate.source_path, config,
+                    role="japanese" if candidate.language == "ja" else "unknown",
+                )
+                hard_qc_pass = not quality.has_failures and quality.dialogues > 0
+                quality_report = quality.to_dict()
+            except SrtFormatError as exc:
+                # A malformed candidate is unusable, not a failure of every
+                # sibling candidate or the target's availability check.
+                parse_error = f"{type(exc).__name__}: {exc}"[:500]
+                parse_pass = False
         passed = parse_pass and analysis.eligible and hard_qc_pass
         if diagnostics is not None:
             diagnostics.append({
                 "source": "import_validation", "status": "validated" if passed else "validation_failed",
                 "path": str(candidate.source_path), "target": str(target_video),
                 "output_parse": "PASS" if parse_pass else "FAIL",
-                "hard_qc": "PASS" if hard_qc_pass else "FAIL",
-                "hard_qc_report": quality.to_dict(),
+                "hard_qc": "NOT_EVALUATED" if unsupported_validation else "PASS" if hard_qc_pass else "FAIL",
+                "hard_qc_report": quality_report,
+                "hard_qc_error": "unsupported_validation" if unsupported_validation else parse_error,
                 "source_analysis": analysis.to_dict(),
                 "detail": ",".join([
                     *analysis.rejection_reasons,
-                    *([] if parse_pass else ["invalid_timing"]),
-                    *([] if hard_qc_pass else ["hard_qc_failed"]),
+                    *([] if parse_pass else ["invalid_subtitle_parse" if parse_error else "invalid_timing"]),
+                    *(["unsupported_validation"] if unsupported_validation else [] if hard_qc_pass else ["hard_qc_failed"]),
                 ]),
             })
         if passed:
@@ -365,6 +379,7 @@ def _publish_official_subtitle_set(
     if not publications:
         return
     from subtitle_quality import analyze_subtitle_file
+    from srt_utils import SrtFormatError
 
     effective: list[tuple[Path, Path, str, str]] = []
     seen_outputs: set[str] = set()
@@ -387,9 +402,16 @@ def _publish_official_subtitle_set(
         # Check the actual staged bytes before backups, mutation, or completion
         # receipts. ASS normalization is byte-copy, not a QC repair stage;
         # parse/coverage/language evidence alone cannot authorize publication.
-        quality = analyze_subtitle_file(
-            source, config, role="japanese" if expected_language == "ja" else "unknown"
-        )
+        if source.suffix.casefold() not in {".ass", ".srt"}:
+            raise SubtitleExtractError(f"Official subtitle staged validation unsupported: source={source}")
+        try:
+            quality = analyze_subtitle_file(
+                source, config, role="japanese" if expected_language == "ja" else "unknown"
+            )
+        except SrtFormatError as exc:
+            raise SubtitleExtractError(
+                f"Official subtitle staged parse failed: source={source} error={str(exc)[:500]}"
+            ) from exc
         if quality.has_failures or quality.dialogues <= 0:
             failures = [issue.code for issue in quality.issues if issue.severity == "fail"]
             raise SubtitleExtractError(

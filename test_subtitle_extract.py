@@ -26,6 +26,7 @@ from subtitle_extract import (
     extract_available_subtitles,
     normalize_sidecar_subtitles,
     normalize_sidecar_subtitles_for_output,
+    verified_official_subtitle_languages,
     remove_ai_subtitle_outputs,
     remove_ai_srt_outputs,
 )
@@ -34,6 +35,81 @@ from subtitle_paths import paths_for_video
 
 
 class SubtitleExtractTest(unittest.TestCase):
+    def test_malformed_srt_candidate_does_not_hide_valid_sibling_or_modify_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            video = root / "Episode.mkv"
+            video.write_bytes(b"unchanged-video")
+            malformed = root / "Episode.bad.zh-TW.srt"
+            malformed.write_text(_malformed_guard_srt(), encoding="utf-8")
+            valid = root / "Episode.good.zh-TW.ass"
+            valid.write_text(_guard_ass(), encoding="utf-8")
+            before = {path: path.read_bytes() for path in (video, malformed, valid)}
+            candidates = [
+                _SubtitleCandidate(path, "zh-tw", -1, classify_sidecar_subtitle(path), (0, 0), path.stem)
+                for path in (malformed, valid)
+            ]
+            diagnostics = []
+            with patch("source_inventory._probe_media", return_value={"format": {"duration": "1000"}}):
+                accepted = _validated_import_candidates(candidates, video, SimpleNamespace(), diagnostics, None)
+                self.assertEqual([item.source_path for item in accepted], [valid])
+                self.assertEqual(verified_official_subtitle_languages(video, SimpleNamespace()), {"zh-tw"})
+            self.assertEqual(diagnostics[0]["output_parse"], "FAIL")
+            self.assertEqual(diagnostics[0]["hard_qc"], "FAIL")
+            self.assertIsNone(diagnostics[0]["hard_qc_report"])
+            self.assertIn("SrtFormatError", diagnostics[0]["hard_qc_error"])
+            self.assertIn("invalid_subtitle_parse", diagnostics[0]["detail"])
+            self.assertEqual(diagnostics[1]["hard_qc"], "PASS")
+            self.assertEqual({path: path.read_bytes() for path in before}, before)
+
+    def test_publisher_malformed_srt_rejects_before_prior_output_or_receipt_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            video = root / "Episode.mkv"
+            video.write_bytes(b"unchanged-video")
+            staged = root / "staged.srt"
+            staged.write_text(_malformed_guard_srt(), encoding="utf-8")
+            output = root / "Episode.zh-TW.ass"
+            output.write_text(_guard_ass(), encoding="utf-8")
+            before = {path: path.read_bytes() for path in (video, staged, output)}
+            config = SimpleNamespace(work_path=root / "work")
+            for _ in range(2):
+                with self.assertRaisesRegex(SubtitleExtractError, "staged parse failed"):
+                    _publish_official_subtitle_set(video, [(staged, output, "zh-tw")], config)
+                self.assertFalse(config.work_path.exists())
+                self.assertEqual({path: path.read_bytes() for path in before}, before)
+
+    def test_unsupported_raw_qc_format_is_not_mislabeled_bad_content_or_hides_valid_candidate(self) -> None:
+        for suffix in (".ssa", ".vtt"):
+            with self.subTest(suffix=suffix), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                video = root / "Episode.mkv"
+                video.write_bytes(b"unchanged-video")
+                unsupported = root / f"Episode.zh-TW{suffix}"
+                unsupported.write_text(_guard_ass() if suffix == ".ssa" else _guard_vtt(), encoding="utf-8")
+                valid = root / "Episode.zh-TW.ass"
+                valid.write_text(_guard_ass(), encoding="utf-8")
+                candidates = [
+                    _SubtitleCandidate(path, "zh-tw", -1, classify_sidecar_subtitle(path), (0, 0), path.stem)
+                    for path in (unsupported, valid)
+                ]
+                before = unsupported.read_bytes()
+                diagnostics = []
+                with patch("source_inventory._probe_media", return_value={"format": {"duration": "1000"}}):
+                    accepted = _validated_import_candidates(candidates, video, SimpleNamespace(), diagnostics, None)
+                self.assertEqual([item.source_path for item in accepted], [valid])
+                self.assertEqual(diagnostics[0]["output_parse"], "PASS")
+                self.assertEqual(diagnostics[0]["hard_qc"], "NOT_EVALUATED")
+                self.assertEqual(diagnostics[0]["hard_qc_error"], "unsupported_validation")
+                self.assertNotIn("hard_qc_failed", diagnostics[0]["detail"])
+                config = SimpleNamespace(work_path=root / "work")
+                valid_before = valid.read_bytes()
+                with self.assertRaisesRegex(SubtitleExtractError, "staged validation unsupported"):
+                    _publish_official_subtitle_set(video, [(unsupported, valid, "zh-tw")], config)
+                self.assertEqual(unsupported.read_bytes(), before)
+                self.assertEqual(valid.read_bytes(), valid_before)
+                self.assertFalse(config.work_path.exists())
+
     def test_import_coverage_pass_cannot_override_existing_hard_qc_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1136,6 +1212,24 @@ def _guard_ass(*, overlap: bool = False) -> str:
 
     return "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n" + "".join(
         f"Dialogue: 0,{stamp(index * 30)},{stamp(index * 30 + (40 if overlap else 3))},Default,,0,0,0,,"
+        f"這裡會選擇開啟網路連線並顯示訊息，第{index + 1}段。\n"
+        for index in range(30)
+    )
+
+
+def _malformed_guard_srt() -> str:
+    return (
+        "1\n00:00:00,000 --> 00:00:03,000\n這裡會選擇開啟網路連線並顯示訊息。\n\n"
+        "317\n00:01:49,880 --> 00:01:49,880\n"
+    )
+
+
+def _guard_vtt() -> str:
+    def stamp(seconds: int) -> str:
+        return f"{seconds // 3600:02}:{seconds // 60 % 60:02}:{seconds % 60:02}.000"
+
+    return "WEBVTT\n\n" + "\n".join(
+        f"{stamp(index * 30)} --> {stamp(index * 30 + 3)}\n"
         f"這裡會選擇開啟網路連線並顯示訊息，第{index + 1}段。\n"
         for index in range(30)
     )

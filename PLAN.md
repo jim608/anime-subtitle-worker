@@ -1,5 +1,27 @@
 # Incremental Delivery Plan
 
+## M2 Recovery bounded closeout update (2026-09-05)
+
+- [x] Actually deploy `60d6b2361a54a76730c5a943dfd3fac8b98cca19` using safe-update;
+  verify 1,821 Worker / 229 WebUI tests, 73 running-image tests and fresh 7/7 FI.
+- [x] Complete event-bound recovery, preserve old invalidated cohort, arm
+  `m2-gate-20260905T084608410661Z-d618a17882` at initial 0/20 and resume safely.
+- [x] Prove prior recovery safely reviewed, then distinct next automatic claim
+  at 09:00:41 UTC, actual stage/heartbeat/checkpoint (not queued-only evidence).
+- [x] Observe existing Amaburi partial download complete and normal extraction
+  run; unchanged hard QC rejects unusable subtitles with bounded replacement.
+- [x] Preserve source/prior sidecars; separately report 0 new formal subtitles.
+- [x] Resolve 83 trustworthy local target bindings; retain explicit 788 evidence
+  gaps and separate 356 source-backoff obligations without mass fallback.
+- [ ] Deploy the separately tested malformed-SRT candidate boundary correction
+  only after an evidence-bound normal ARMED runtime/Gate handoff is available.
+- [ ] Obtain successful usable extraction/formal output or actual selected JA
+  fallback completion; diagnostics and reviewed claims do not prove delivery.
+- [ ] Complete frozen 20-job observation server-side (not awaited this session).
+
+Evidence: `docs/M2_PRODUCTION_OBSERVATION.md` and server
+`/logs/m2-recovery-unblock-20260905T064508843990Z/`. M3 remains out of scope.
+
 ## M0 — Baseline and low-I/O ingestion
 
 - [x] Audit current Watcher, task creation, stages, temporary/final outputs, error paths, Docker and configuration.

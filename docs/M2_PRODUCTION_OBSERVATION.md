@@ -1,5 +1,84 @@
 # M2 Production Observation
 
+## Verified recovery deployment and bounded cases (2026-09-05 09:07 UTC)
+
+The second safe deployment, `20260905T083811Z-380719`, actually runs Worker
+`60d6b2361a54a76730c5a943dfd3fac8b98cca19` and unchanged WebUI
+`7bd36c30fb07e393eba71760a164246d267c5b16`. Worker image is
+`sha256:a28118c6454d5bd8f59eb8a445aa35a35dea816385055f93660a7e566e50565e`.
+Safe-update passed 1,821 Worker / 229 WebUI tests; the running image passed
+73 focused tests and fresh 7/7 isolated breaker tests. The guarded recovery
+completed at `2026-09-05T08:46:06Z`, then runtime explicitly reported
+`ARMED/runtime_baseline_match` and resumed claims. Immutable receipts are in
+`runtime-handoff-v2/` under the evidence root below.
+
+The old `m2-gate-20260905T045640981079Z-08147de925` remains invalidated with
+its members preserved. The replacement started at
+`2026-09-05T08:46:08.410661Z`, ID
+`m2-gate-20260905T084608410661Z-d618a17882`, baseline
+`m2-guardrail-v1:d9b0ba4c8c41da78cf61f964`, initial **0/20**. Configuration
+fingerprint remains `sha256:355300b197164801be4616a688d852c1b8b5274fe91e91e40a2a21f12a3c4dbc`;
+Decision Schema 1 / `m2-source-decision-v1` is unchanged. Historical recovery
+counts do not backfill this frozen cohort; this is not a Gate-pass claim.
+
+Bounded production evidence (no manual claim, priority change or marker reset):
+
+- Recovery `m2rec_1629a2548a08033c20c32206c572302ea0db81c6dafaacbc9f5a4e50100dea34`
+  claimed at `08:46:35.962861Z`, performed SUBTITLE_DETECTION, persisted decision
+  and checkpoint, then safely settled NEEDS_REVIEW / QUALITY_BLOCKED at
+  `08:46:46.072946Z`. It did not falsely complete or permanently pause the lane.
+- The next recovery `m2rec_1686d70effd6e814eb735661f119d621c970f8d0b3d5636830ea4714df7f69b3`
+  was automatically dispatched at `08:51:19.752685Z` and actually claimed at
+  `09:00:41.743083Z`. SUBTITLE_DETECTION finished NEEDS_REVIEW at
+  `09:00:54.722207Z` with heartbeat and checkpoint
+  `2d2257be5dfa140016de1c1cdebc37a139095b538995ad57aa3df0d78429ad1e`;
+  recovery settled safely at `09:01:01.370461Z`. This proves automatic next
+  claim, not AI fallback completion. See `actual-next-claim-0908.json`.
+- The existing Amaburi download reached completion by normal qB continuation,
+  retaining partial data. Its existing extract job started at
+  `08:45:57.550386Z` and finished at `08:46:00.051702Z`, attempts=1. Both
+  traditional/simplified E13 sidecars passed parse/identity but failed unchanged
+  hard QC (empty/short cues, overlaps and hallucination-text findings). The job
+  recorded `hard_qc_failed` and entered the existing bounded replacement path;
+  it did not block unrelated work. E12 likewise failed existing hard QC.
+  Obligation `m2dl_4cd4c0387bcc606d1e7b` has **0 new formal subtitles**;
+  source video and all pre-existing target sidecar checksums are unchanged.
+  `amaburi-final-evidence-v3.json` preserves the evidence, including a separate
+  pre-existing malformed SRT revalidation exception. An extraction attempt or
+  completed torrent is not a usable subtitle or successful publication.
+
+Current source recovery accounting: 83 deterministic local target bindings
+(59 formerly missing mappings + 24 formerly ambiguous targets), not 83 sources
+or deliveries. Of the original 1,227, 356 remain source-backoff cases and 788
+still need trustworthy evidence: mapping unavailable 328, target ambiguous 301,
+release identity 148, match review 9, target not indexed 2. Exact trusted
+metadata/source mapping or existing review resolution can trigger matching;
+terminal cached misses do not have a generic timed metadata-refresh guarantee.
+Source-backoff jobs retain existing deadlines, source budgets and alternatives.
+
+All four No-Rin diagnostics selected trusted JA-audio fallback, but the fixed
+E2 normal scan entry remains queued with attempts=0: actual fallback starts=0,
+fallback completions=0 in this bounded validation. Format-compatible candidates
+were 2/1/1/1; all five retain historical failed/seen URL/hash evidence with
+`did not start`, not a proven corrupt-content finding. No blanket failed/seen
+reset, source redownload, manual priority override or mass Whisper routing.
+
+A narrowly reproduced candidate-parser exception fix passed 341 server-isolated
+tests (`server-parser-boundary-tests.log`) but is not yet in this runtime SHA.
+It classifies malformed SRT per candidate without masking valid siblings and
+refuses invalid staged publication without touching prior outputs. Unsupported
+raw SSA/VTT validation remains explicit, never a fabricated QC PASS. A further
+runtime deployment requires a safely attested planned Gate handoff first;
+queries and documentation alone do not retire or recreate this Gate.
+
+The same candidate also revalidated the exact real E13 final files in a
+network-isolated read-only mount: `amaburi-candidate-file-validation.json`.
+Revalidation completed without exception, verified languages remained empty,
+new sidecars=0, formal publications=0, and source/all prior sidecar checksums
+matched. This is real-file candidate safety evidence, not deployed attestation
+or a successful subtitle delivery. The earlier RO database probe failure is
+retained separately; no database access mode was weakened to bypass it.
+
 ## Recovery unblock validation in progress (2026-09-05)
 
 The first safe deployment of `ea0baafac3baa703e3f4186632051765bc1af6bb`
