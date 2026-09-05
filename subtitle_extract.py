@@ -65,6 +65,8 @@ class _SubtitleCandidate:
     stream_index: int
     classification: SubtitleClassification
     priority: tuple[int, int]
+    title: str = ""
+    forced: bool = False
 
 
 TEXT_SUBTITLE_CODECS = {"ass", "ssa", "subrip", "srt", "webvtt", "mov_text"}
@@ -126,6 +128,7 @@ def extract_available_subtitles(
     allowed_languages: set[str] | None = None,
     cancel_event: Any | None = None,
     deadline_monotonic: float | None = None,
+    validate_for_import: bool = False,
 ) -> list[ExtractedSubtitle]:
     source_video = Path(video_path)
     output_video = Path(output_video_path) if output_video_path is not None else source_video
@@ -205,11 +208,17 @@ def extract_available_subtitles(
                     int(stream["index"]),
                     classification,
                     _stream_priority(stream),
+                    str((stream.get("tags") or {}).get("title") or ""),
+                    bool((stream.get("disposition") or {}).get("forced")),
                 )
             )
 
         _raise_if_extract_cancelled(cancel_event, deadline_monotonic)
 
+        if validate_for_import:
+            candidates = _validated_import_candidates(
+                candidates, output_video, config, diagnostics, deadline_monotonic,
+            )
         selected = _select_best_subtitle_candidates(candidates)
         if allowed_languages is not None:
             selected = [candidate for candidate in selected if candidate.language in allowed_languages]
@@ -232,6 +241,76 @@ def extract_available_subtitles(
         remove_ai_subtitle_outputs(output_video, config)
 
     return extracted
+
+
+def _validated_import_candidates(
+    candidates: list[_SubtitleCandidate],
+    target_video: Path,
+    config: AppConfig,
+    diagnostics: list[dict[str, Any]] | None,
+    deadline_monotonic: float | None,
+) -> list[_SubtitleCandidate]:
+    """Apply the existing source policy before any external subtitle is published."""
+    from source_analyzer import AnalyzerThresholds, analyze_subtitle_candidate
+    from source_inventory import _probe_media, _subtitle_metrics
+
+    if not candidates:
+        return []
+    try:
+        probe = _probe_media(
+            target_video, ffprobe_path=None,
+            timeout_seconds=_remaining_extract_timeout(
+                _subtitle_extract_timeout_seconds(config), deadline_monotonic,
+            ),
+        )
+        duration = float(probe.get("format", {}).get("duration") or 0)
+        if duration <= 0:
+            raise ValueError("target duration unavailable")
+    except Exception as exc:
+        raise SubtitleExtractError(f"Import target ffprobe validation failed: {exc}") from exc
+
+    policy_factory = getattr(config, "source_analyzer_thresholds", None)
+    policy = policy_factory() if callable(policy_factory) else AnalyzerThresholds()
+    accepted: list[_SubtitleCandidate] = []
+    for candidate in candidates:
+        _raise_if_extract_deadline_reached(deadline_monotonic)
+        metrics = _subtitle_metrics(candidate.source_path)
+        analysis = analyze_subtitle_candidate(
+            {
+                **vars(metrics),
+                "track_index": candidate.stream_index,
+                "codec": candidate.source_path.suffix.lstrip("."),
+                "source_reference": str(candidate.source_path),
+                "container_language_tag": candidate.language,
+                "title": candidate.title or candidate.source_path.stem,
+                "forced": candidate.forced,
+            },
+            media_duration_seconds=duration, thresholds=policy,
+        )
+        parse_pass = metrics.event_count > 0 and metrics.valid_timing_count == metrics.event_count
+        passed = parse_pass and analysis.eligible
+        if diagnostics is not None:
+            diagnostics.append({
+                "source": "import_validation", "status": "validated" if passed else "validation_failed",
+                "path": str(candidate.source_path), "target": str(target_video),
+                "output_parse": "PASS" if parse_pass else "FAIL",
+                "source_analysis": analysis.to_dict(),
+                "detail": ",".join(analysis.rejection_reasons) or ("" if parse_pass else "invalid_timing"),
+            })
+        if passed:
+            accepted.append(candidate)
+    return accepted
+
+
+def verified_official_subtitle_languages(video: Path, config: AppConfig) -> set[str]:
+    candidates = []
+    for path in video.parent.glob(f"{video.stem}.*"):
+        if not path.is_file() or path.suffix.casefold() not in SIDECAR_SUBTITLE_EXTENSIONS:
+            continue
+        classification = classify_sidecar_subtitle(path)
+        if classification.language in {"zh-tw", "zh-cn"}:
+            candidates.append(_SubtitleCandidate(path, classification.language, -1, classification, (0, 0)))
+    return {candidate.language for candidate in _validated_import_candidates(candidates, video, config, None, None)}
 
 
 def _raise_if_extract_cancelled(cancel_event: Any | None, deadline_monotonic: float | None) -> None:
@@ -465,6 +544,7 @@ def normalize_sidecar_subtitles_for_output(
     allowed_languages: set[str] | None = None,
     extra_sidecar_paths: list[str | Path] | None = None,
     deadline_monotonic: float | None = None,
+    validate_for_import: bool = False,
 ) -> list[ExtractedSubtitle]:
     video = Path(video_path)
     output_video = Path(output_video_path) if output_video_path is not None else video
@@ -496,9 +576,14 @@ def normalize_sidecar_subtitles_for_output(
                 -1,
                 classification,
                 _sidecar_priority(classification.language),
+                subtitle.stem,
             )
         )
 
+    if validate_for_import:
+        candidates = _validated_import_candidates(
+            candidates, output_video, config, diagnostics, deadline_monotonic,
+        )
     selected = _select_best_subtitle_candidates(candidates)
     if allowed_languages is not None:
         selected = [candidate for candidate in selected if candidate.language in allowed_languages]
@@ -522,6 +607,17 @@ def normalize_sidecar_subtitles_for_output(
                 )
             publications.append((staged, output, candidate.language))
             staged_by_output[output] = staged
+        if validate_for_import and publications:
+            staged_candidates = [
+                _SubtitleCandidate(staged, language, -1, candidate.classification, candidate.priority, candidate.title, candidate.forced)
+                for candidate in selected
+                for staged, output, language in publications
+                if output == _subtitle_output_path(output_video, candidate.language)
+            ]
+            if len(_validated_import_candidates(
+                staged_candidates, output_video, config, diagnostics, deadline_monotonic,
+            )) != len(staged_candidates):
+                return []
         _publish_official_subtitle_set(output_video, publications, config)
 
         for candidate in selected:

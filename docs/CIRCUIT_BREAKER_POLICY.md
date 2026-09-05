@@ -1,5 +1,20 @@
 # M2 Circuit Breaker Policy
 
+## M2 download recovery boundary (2026-09-05)
+
+Download repair leaves breaker thresholds, Decision Schema, AI QC, hallucination
+validation and model routing unchanged. External subtitle import applies the
+existing Source Analyzer policy plus full timestamp parsing before atomic
+publication or AI subtitle retirement. Rejected candidates are
+`subtitle_validation_failed`, never COMPLETED, and use existing failed-hash,
+seen-source and retry/backoff policies.
+
+qB queued/checking/moving/paused states remain normal after partial download.
+Stalled partial torrents and pieces remain available for qB resume while a
+different allowed source may be considered. Timeout cleanup never deletes
+downloaded files. Untrusted project torrents are not reassigned. Only an actual
+runtime change invalidates the frozen Gate; history cannot fill cohort slots.
+
 ## Purpose and scope
 
 The M2 circuit breaker is a fail-closed admission guard. It protects source

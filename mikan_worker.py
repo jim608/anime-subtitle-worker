@@ -908,6 +908,7 @@ class MikanWorker:
         merged = _unique_replacement_targets(merged)
         request_count = int(existing.get("request_count", 0) or 0) + 1
         payload = {
+            **existing,
             "action": "enqueue_replacements_after_extract_failure",
             "requested_at": _utc_now().isoformat(),
             "request_count": request_count,
@@ -1041,6 +1042,8 @@ class MikanWorker:
         if not request_path.exists():
             return None
         request = _load_request_file(request_path)
+        if float(request.get("next_retry_at") or 0) > time.time():
+            return {"deferred": True, "request_path": str(request_path), "reason": "source_backoff"}
         raw_targets = request.get("targets")
         targets: list[MikanReplacementTarget] = []
         if isinstance(raw_targets, list):
@@ -1056,6 +1059,11 @@ class MikanWorker:
             request_path.unlink(missing_ok=True)
             return {"deferred": False, "request": request, "queued": 0, "targets": []}
 
+        # Drain one series per watch interval; the remainder stays in the
+        # existing durable replacement request across restarts.
+        selected_bangumi = targets[0].bangumi_id
+        batch = [target for target in targets if target.bangumi_id == selected_bangumi]
+
         lock = self._acquire_queue_lock(
             "consume_replacement_enqueue_request",
             required=False,
@@ -1067,17 +1075,33 @@ class MikanWorker:
         try:
             qbit = self._qbit()
             queued = self._enqueue_replacements_after_extract_failure_unlocked(
-                targets,
+                batch,
                 qbit,
                 queue_lock_held=True,
             )
         except (QBitError, requests.RequestException, MikanSourceError) as exc:
+            latest = _load_request_file(request_path)
+            attempts = int(latest.get("retry_attempts") or 0) + 1
+            delay = min(
+                int(getattr(self.config, "mikan_no_candidate_retry_max_seconds", 86400) or 86400),
+                max(1, int(getattr(self.config, "mikan_watch_interval_seconds", 300) or 300)) * 2 ** min(attempts - 1, 8),
+            )
+            _save_json_atomic(request_path, {**latest, "retry_attempts": attempts,
+                "next_retry_at": time.time() + delay, "last_error": str(exc)[:500]})
             self.logger.warning("Deferred Mikan replacement enqueue will retry: targets=%s error=%s", _format_replacement_targets(targets), exc)
             return {"deferred": True, "request_path": str(request_path), "targets": request.get("targets", [])}
         finally:
             lock.release()
 
-        request_path.unlink(missing_ok=True)
+        latest = _load_request_file(request_path)
+        done = {(target.bangumi_id, target.episode) for target in batch}
+        remaining = [target for target in latest.get("targets", [])
+                     if (int(target["bangumi_id"]), int(target["episode"])) not in done]
+        if remaining:
+            _save_json_atomic(request_path, {**latest, "targets": remaining, "retry_attempts": 0,
+                "next_retry_at": time.time() + max(1, int(getattr(self.config, "mikan_watch_interval_seconds", 300) or 300))})
+        else:
+            request_path.unlink(missing_ok=True)
         self.logger.warning(
             "Deferred Mikan replacement enqueue complete. targets=%s queued=%s",
             _format_replacement_targets(targets),
@@ -3622,7 +3646,7 @@ class MikanWorker:
                 retryable=True,
                 defer_seconds=_mikan_extract_timeout_retry_seconds(self.config),
             )
-        if _target_has_required_chinese_subtitles(target_video):
+        if _target_has_required_chinese_subtitles(target_video, verify_config=self.config):
             return MikanExtractResult(1)
 
         target_lock = VideoLock(target_video)
@@ -3637,7 +3661,7 @@ class MikanWorker:
         try:
             # AI may have finished and an official sidecar may have appeared
             # between target resolution and lock acquisition.
-            if _target_has_required_chinese_subtitles(target_video):
+            if _target_has_required_chinese_subtitles(target_video, verify_config=self.config):
                 return MikanExtractResult(1)
 
             current_diagnostics: list[dict[str, Any]] = []
@@ -3656,6 +3680,7 @@ class MikanWorker:
                         output_video_path=target_video,
                         diagnostics=current_diagnostics,
                         allowed_languages={"zh-tw", "zh-cn"},
+                        validate_for_import=True,
                         **cancellation_kwargs,
                     )
                 except SubtitleExtractCancelled as exc:
@@ -3709,6 +3734,7 @@ class MikanWorker:
                         diagnostics=current_diagnostics,
                         allowed_languages={"zh-tw", "zh-cn"},
                         extra_sidecar_paths=extra_sidecars,
+                        validate_for_import=True,
                         **normalization_kwargs,
                     )
                 except SubtitleExtractCancelled as exc:
@@ -3749,7 +3775,7 @@ class MikanWorker:
                     source_video,
                     subtitle.path,
                 )
-            return MikanExtractResult(1)
+            return MikanExtractResult(1, subtitle_diagnostics=current_diagnostics)
         finally:
             target_lock.release()
 
@@ -4548,7 +4574,8 @@ class MikanWorker:
                 self._qbit_unhealthy_since.pop(torrent_key, None)
 
         def matured_unhealthy_reason(torrent: QBitTorrent) -> str:
-            if _is_completed(torrent):
+            if _is_completed(torrent) or _torrent_waiting_for_download_slot(torrent):
+                self._qbit_unhealthy_since.pop(torrent.hash or torrent.name, None)
                 return ""
             if torrent.dlspeed <= 0:
                 reason = "zero speed"
@@ -4569,6 +4596,11 @@ class MikanWorker:
             return reason
 
         deleted_hashes: set[str] = set()
+        retained_hashes = {
+            str(info_hash).casefold()
+            for entry in items.values() if isinstance(entry, dict)
+            for info_hash in entry.get("retained_partial_hashes", [])
+        }
         active_pending_hashes: set[str] = set()
         for entry in items.values():
             if not isinstance(entry, dict) or not _pending_has_active_release(entry):
@@ -4584,6 +4616,13 @@ class MikanWorker:
             matching_torrents = _torrents_for_pending(entry, torrents)
             completed = any(_is_completed(torrent) for torrent in matching_torrents)
             if completed:
+                continue
+
+            # qB backpressure, rechecking, moving, and operator pauses remain
+            # healthy even after pieces have already been downloaded.
+            if matching_torrents and all(_torrent_waiting_for_download_slot(torrent) for torrent in matching_torrents):
+                for torrent in matching_torrents:
+                    self._qbit_unhealthy_since.pop(torrent.hash or torrent.name, None)
                 continue
 
             started = any(_torrent_has_started(torrent) for torrent in matching_torrents)
@@ -4636,7 +4675,15 @@ class MikanWorker:
                     reason = "stalled"
 
             hashes = list(dict.fromkeys(torrent.hash for torrent in matching_torrents if torrent.hash))
-            hashes_to_delete = [info_hash for info_hash in hashes if info_hash not in deleted_hashes]
+            partial_hashes = {
+                torrent.hash.casefold() for torrent in matching_torrents
+                if torrent.hash and _torrent_has_started(torrent)
+            }
+            retained_hashes.update(partial_hashes)
+            hashes_to_delete = [
+                info_hash for info_hash in hashes
+                if info_hash not in deleted_hashes and info_hash.casefold() not in retained_hashes
+            ]
             if hashes_to_delete:
                 queue_lock: VideoLock | None = None
                 if not queue_lock_held:
@@ -4651,7 +4698,8 @@ class MikanWorker:
                 try:
                     qbit.delete_torrents(
                         hashes_to_delete,
-                        delete_files=bool(getattr(self.config, "mikan_delete_stalled_torrents", True)),
+                        # Timeout is not proof that downloaded pieces are bad.
+                        delete_files=False,
                     )
                     deleted_hashes.update(hashes_to_delete)
                 finally:
@@ -4674,6 +4722,7 @@ class MikanWorker:
                         "failed_info_hash": failed_info_hash,
                         "reason": reason,
                         "timed_out_at": now.isoformat(),
+                        "retained_partial_hashes": sorted(partial_hashes),
                     }
                 )
         if expired:
@@ -4694,7 +4743,8 @@ class MikanWorker:
         active_preserve_warning_keys: set[str] = set()
         if progress_already_synced:
             for torrent in torrents:
-                if not torrent.hash or torrent.hash in active_pending_hashes or torrent.hash in deleted_hashes:
+                if (not torrent.hash or torrent.hash in active_pending_hashes
+                        or torrent.hash in deleted_hashes or torrent.hash.casefold() in retained_hashes):
                     continue
                 reason = matured_unhealthy_reason(torrent)
                 if reason:
@@ -4733,7 +4783,8 @@ class MikanWorker:
 
         if orphan_candidates:
             orphan_hashes = list(
-                dict.fromkeys(torrent.hash for torrent, _reason, _resolution in orphan_candidates if torrent.hash)
+                dict.fromkeys(torrent.hash for torrent, _reason, _resolution in orphan_candidates
+                              if torrent.hash and not _torrent_has_started(torrent))
             )
             queue_lock: VideoLock | None = None
             if not queue_lock_held:
@@ -4745,10 +4796,8 @@ class MikanWorker:
                 )
             if queue_lock_held or queue_lock is not None:
                 try:
-                    qbit.delete_torrents(
-                        orphan_hashes,
-                        delete_files=bool(getattr(self.config, "mikan_delete_stalled_torrents", True)),
-                    )
+                    if orphan_hashes:
+                        qbit.delete_torrents(orphan_hashes, delete_files=False)
                     deleted_hashes.update(orphan_hashes)
                     for torrent, reason, resolution in orphan_candidates:
                         targets = list(resolution.targets)
@@ -4762,7 +4811,7 @@ class MikanWorker:
                         )
                         self._qbit_unhealthy_since.pop(torrent.hash or torrent.name, None)
                         self.logger.warning(
-                            "Mikan untracked qBittorrent torrent removed after %ss unhealthy. reason=%s eta=%s speed=%s targets=%s torrent=%s",
+                            "Mikan untracked qBittorrent source expired (partial data retained) after %ss unhealthy. reason=%s eta=%s speed=%s targets=%s torrent=%s",
                             unhealthy_timeout_seconds,
                             reason,
                             torrent.eta,
@@ -4811,6 +4860,9 @@ class MikanWorker:
                 if item["failed_info_hash"] and item["failed_info_hash"] not in failed_info_hashes:
                     failed_info_hashes.append(item["failed_info_hash"])
                 entry["failed_info_hashes"] = failed_info_hashes
+                entry["retained_partial_hashes"] = sorted(set(
+                    entry.get("retained_partial_hashes", [])
+                ) | set(item["retained_partial_hashes"]))
                 _archive_active_release(entry, "last_failed")
                 _clear_active_pending_release(entry)
                 entry["timed_out_at"] = item["timed_out_at"]
@@ -4826,6 +4878,11 @@ class MikanWorker:
                     if failed_info_hash and failed_info_hash not in failed_info_hashes:
                         failed_info_hashes.append(failed_info_hash)
                     entry["failed_info_hashes"] = failed_info_hashes
+
+                    if _torrent_has_started(torrent):
+                        entry["retained_partial_hashes"] = sorted(set(
+                            entry.get("retained_partial_hashes", [])
+                        ) | {failed_info_hash})
 
                     deferred_title = str(entry.get("deferred_title") or "")
                     if deferred_title and _torrents_for_pending({"title": deferred_title}, [torrent]):
@@ -5494,7 +5551,13 @@ def _has_official_chinese_subtitle(video: Path) -> bool:
     return _target_has_required_chinese_subtitles(video)
 
 
-def _target_has_required_chinese_subtitles(video: Path) -> bool:
+def _target_has_required_chinese_subtitles(video: Path, *, verify_config: AppConfig | None = None) -> bool:
+    if verify_config is not None:
+        from subtitle_extract import verified_official_subtitle_languages
+        try:
+            return {"zh-tw", "zh-cn"}.issubset(verified_official_subtitle_languages(video, verify_config))
+        except (SubtitleExtractError, OSError, ValueError):
+            return False
     languages: set[str] = set()
     for subtitle in video.parent.glob(f"{video.stem}.*"):
         # The broad stem glob also matches the video itself and managed
@@ -5751,6 +5814,9 @@ def _mikan_diagnostic_reason(
 ) -> tuple[str, str]:
     embedded = [item for item in diagnostics if item.get("source") == "embedded"]
     sidecars = [item for item in diagnostics if item.get("source") == "sidecar"]
+    rejected = [item for item in diagnostics if item.get("status") == "validation_failed"]
+    if rejected:
+        return "subtitle_validation_failed", "; ".join(str(item.get("detail") or "invalid subtitle") for item in rejected)[:1000]
     if any(item.get("status") == "extract_failed" for item in diagnostics):
         detail = _first_diagnostic_detail(diagnostics) or f"ffmpeg failed while extracting subtitles from {source_video}"
         return "ffmpeg_extract_failed", detail
@@ -8230,6 +8296,7 @@ def _mikan_extract_failure_bucket(reason: str) -> str:
         "subtitle_language_not_supported",
         "sidecar_language_not_supported",
         "no_usable_subtitles",
+        "subtitle_validation_failed",
     }:
         return "no_usable_chinese"
     if normalized in {"no_text_subtitle_streams", "image_subtitles_only"}:
@@ -11198,7 +11265,7 @@ def _completed_torrent_outputs_complete(
         if target_video is None:
             continue
         found_target = True
-        if not _target_has_required_chinese_subtitles(target_video):
+        if not _target_has_required_chinese_subtitles(target_video, verify_config=config):
             return False
     return found_target
 

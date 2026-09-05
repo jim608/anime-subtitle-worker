@@ -53,6 +53,14 @@ RSS = """<?xml version="1.0" encoding="utf-8"?>
 
 
 class MikanSourceTest(unittest.TestCase):
+    def test_explicit_four_digit_episode_is_never_truncated(self) -> None:
+        self.assertEqual(extract_episode_number("[Group] One Piece S01E1176 [SC_TC]"), 1176)
+        self.assertEqual(extract_episode_numbers("[Group] One Piece S01E1176-S01E1178 [SC_TC]"), (1176, 1177, 1178))
+        self.assertEqual(release_series_identity("[Group] One Piece S01E1176 [SC_TC]"), "one piece")
+        self.assertEqual(release_season_number("[Group] One Piece S01E1176 [SC_TC]"), 1)
+        self.assertNotEqual(extract_episode_number("[Group] One Piece S01E117600 [SC_TC]"), 11760)
+        self.assertIsNone(extract_episode_number("[Group] Show [1080p][2026]"))
+
     def test_release_identity_records_explicit_season_evidence(self) -> None:
         release = MikanRelease(
             bangumi_id=123,

@@ -28,6 +28,11 @@ M2 translation quality, Translation Memory, full QC redesign and WebUI work are 
 
 ## M2 — Deterministic source analysis and durable decisions
 
+- [x] Audit download/extraction/import history separately from AI recovery; verify qB authentication and actual mount parity with bounded server evidence.
+- [x] Repair four-digit episode parsing, partial queuedDL timeout handling, piece preservation, pre-publication subtitle validation and durable bounded replacement/backoff; pass 283 server candidate tests.
+- [ ] Safely deploy the M2 download extension, attest runtime and preserve/invalidate/re-arm the Gate only for the actual version change.
+- [ ] Apply deduplicated historical decisions to the existing replacement mechanism and record one real historical-case E2E result or explicit external blocker, without waiting for the backlog/Gate.
+
 - [x] Inventory supported subtitle sidecars, embedded subtitle streams and audio streams without modifying source media.
 - [x] Normalize language metadata and combine it with subtitle content, script and quality evidence.
 - [x] Score completeness, timing, empty-content, forced, signs-only, songs-only and commentary risks.

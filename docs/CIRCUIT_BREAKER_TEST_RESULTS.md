@@ -1,5 +1,17 @@
 # M2 Circuit Breaker Test Results
 
+## M2 download recovery candidate, 2026-09-05
+
+Full log: `/logs/m2-download-recovery-audit-20260905T030809930683Z/isolated-tests.log`.
+283 focused cases passed against the candidate snapshot in the server container.
+Coverage includes partial queuedDL/restart, API-error durable backoff, path
+mapping, no usable subtitles, extraction cancellation, atomic import/replay,
+and duplicate-download prevention. Generated real ffmpeg media exercised
+extraction and validated publication with unchanged source checksums.
+Fixtures used isolated temporary directories, never Production source/output.
+This is not evidence of a real historical Production download. Fresh 7/7
+post-deployment breaker evidence is still required before re-arming.
+
 ## Result boundary
 
 Recorded on 2026-09-04.

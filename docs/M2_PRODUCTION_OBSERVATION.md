@@ -1,5 +1,37 @@
 # M2 Production Observation
 
+## M2 download recovery extension (2026-09-05, deployment pending)
+
+This remains M2, not M3. Download recovery metrics are separate from the frozen
+cohort and never backfill failed members. Read-only audit did not reset a Gate.
+Deployment requires actual runtime attestation, old-Gate invalidation and an
+empty replacement Gate before claim resume.
+
+Evidence: `/logs/m2-download-recovery-audit-20260905T030809930683Z/` contains
+the inventory, exact-path checks, provider lookup, reconciliation decisions and
+full isolated test log. There are 2,120 distinct `(bangumi_id, episode)` historical
+obligations. Overlapping stage counts: download 1,670, extraction 635, match/import
+71 (do not add them). There are 417 historical non-success extraction hashes
+and nine waiting-download hashes. The older 1,169 AI-recovery rows are separate.
+
+qB login and v5.2.3 were verified. qB `/anime` and Worker
+`/qbit_subtitle_extractor` mount the same `/mnt/user/qbit_subtitle_extractor`.
+All 426 inspected historical non-success/waiting content paths were absent;
+this is not proof of corrupt media. Two current managed stalled torrents lack
+trusted mapping and remain untouched, including existing partial pieces.
+
+Verified defects: explicit four-digit episodes were truncated; partially
+downloaded `queuedDL` could expire; timeout replacement could delete pieces;
+external subtitle publication lacked full parse/completeness validation;
+deferred failures could retry every second. Fixes retain existing queues,
+leases, deduplication, provider policy and analyzer thresholds. Archives are not
+unpacked and cannot be mistaken for usable subtitle files.
+
+The server candidate passed 283 focused tests, including real ffmpeg extraction
+and safe import on generated isolated media. This is not a Production download
+E2E result. Actual deployment and the representative historical-case disposition
+remain required at closeout.
+
 ## Status
 
 - Milestone state: `M2_GUARDRAILS_ARMED`

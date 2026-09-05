@@ -6815,6 +6815,10 @@ def _background_mikan_enqueue_loop(config, logger, shutdown_event: threading.Eve
                 worker.consume_deferred_requests()
         except Exception as exc:
             logger.exception("Unhandled background Mikan enqueue error: %s", exc)
+            # Source/login outages must not turn the one-second command drain
+            # into an unbounded request loop; extraction and AI run separately.
+            if shutdown_event.wait(max(1, int(config.mikan_watch_interval_seconds))):
+                break
         if shutdown_event.wait(1):
             break
 

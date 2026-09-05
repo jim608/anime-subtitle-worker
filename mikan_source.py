@@ -17,8 +17,8 @@ import requests
 EPISODE_RE = re.compile(
     r"(?:第\s*(\d{1,3})\s*(?:話|话)|[\[\s\-_\(（](\d{1,3})[\]\s\-_\)）])"
 )
-SXXEYY_RE = re.compile(r"[Ss]\d{1,3}[Ee](\d{1,3})")
-SXXEYY_RANGE_RE = re.compile(r"[Ss]\d{1,3}[Ee](\d{1,3})\s*(?:-|~|～|–|—|至|到)\s*(?:[Ss]\d{1,3}[Ee])?(\d{1,3})")
+SXXEYY_RE = re.compile(r"[Ss]\d{1,3}[Ee](\d{1,5})(?!\d)")
+SXXEYY_RANGE_RE = re.compile(r"[Ss]\d{1,3}[Ee](\d{1,5})(?!\d)\s*(?:-|~|～|–|—|至|到)\s*(?:[Ss]\d{1,3}[Ee])?(\d{1,5})(?!\d)")
 TRAILING_RELEASE_EPISODE_RANGE_RE = re.compile(r"\s-\s*(\d{1,3})\s*(?:-|~|～|–|—|至|到)\s*(\d{1,3})(?=\s*(?:\[|$))")
 BRACKET_EPISODE_RANGE_RE = re.compile(r"[\[\(]\s*(\d{1,3})\s*(?:-|~|～|–|—|至|到)\s*(\d{1,3})\s*[\]\)]")
 TRAILING_RELEASE_EPISODE_RE = re.compile(r"\s-\s*(\d{1,3})(?=\s*(?:\[|$))")
@@ -129,7 +129,7 @@ def release_season_number(value: str) -> int | None:
 
     text = unicodedata.normalize("NFKC", str(value or ""))
     patterns = (
-        r"(?i)\bS(?:eason)?\s*0*(\d{1,2})\s*E\d{1,3}\b",
+        r"(?i)\bS(?:eason)?\s*0*(\d{1,2})\s*E\d{1,5}\b",
         r"(?i)\bS\s*0*(\d{1,2})\s*[-_. ]+\s*\d{1,3}\b",
         r"(?i)\bSeason\s*0*(\d{1,2})\s*[-_. ]+\s*\d{1,3}\b",
         r"(?i)\b0*(\d{1,2})(?:st|nd|rd|th)\s+Season\b",
@@ -157,7 +157,7 @@ def release_series_identity(value: str) -> str:
         text = text[leading_group.end():]
 
     boundaries = (
-        r"(?i)\bS(?:eason)?\s*\d{1,2}\s*E\d{1,3}\b",
+        r"(?i)\bS(?:eason)?\s*\d{1,2}\s*E\d{1,5}\b",
         r"(?i)\s+-\s+\d{1,3}(?:\s*[vV]\d+)?(?=\s*(?:\[|\(|$))",
         r"(?i)[\[(]\s*\d{1,3}(?:\s*[vV]\d+)?\s*[\])]",
         r"(?i)(?:^|[\s._-])EP?\s*\d{1,3}\b",
@@ -624,7 +624,7 @@ def _safe_episode_number(raw: str | None) -> int | None:
         value = int(raw)
     except ValueError:
         return None
-    if 0 < value < 1000:
+    if 0 < value < 100000:
         return value
     return None
 

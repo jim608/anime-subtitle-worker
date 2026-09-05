@@ -17,6 +17,7 @@ import time
 import unittest
 
 import requests
+from test_mikan_import_validation import dialogue_ass, dialogue_srt
 
 from control_state import enqueue_command, get_review_item, upsert_review_item
 from lock import VideoLock
@@ -3937,7 +3938,7 @@ class MikanWorkerPendingTest(unittest.TestCase):
             expired = worker._expire_stalled_pending(qbit, pending)
 
             self.assertEqual(expired, 1)
-            qbit.delete_torrents.assert_called_once_with(["hash1"], delete_files=True)
+            qbit.delete_torrents.assert_called_once_with(["hash1"], delete_files=False)
             entry = pending["items"]["123:1"]
             self.assertEqual(entry["failed_urls"], [release.torrent_url])
             self.assertNotIn("torrent_url", entry)
@@ -3980,6 +3981,34 @@ class MikanWorkerPendingTest(unittest.TestCase):
             expired = worker._expire_stalled_pending(qbit, pending)
 
             self.assertEqual(expired, 0)
+            qbit.delete_torrents.assert_not_called()
+            self.assertEqual(pending["items"]["123:1"]["torrent_url"], release.torrent_url)
+
+    def test_expire_stalled_pending_preserves_partial_qbit_queue_across_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = SimpleNamespace(
+                mikan_seen_path="mikan_seen.json", mikan_pending_path="mikan_pending.json",
+                work_path=Path(temp_dir), qbit_tags=["mikansub"], qbit_category="llm-sub",
+                mikan_download_start_timeout_seconds=60,
+                mikan_download_stall_timeout_seconds=60,
+                mikan_delete_stalled_torrents=True,
+            )
+            worker = MikanWorker(config, _logger())
+            pending = {"items": {}}
+            release = _release("https://mikan/partial-queued.torrent")
+            _mark_pending(pending, release)
+            old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+            pending["items"]["123:1"].update(queued_at=old, last_progress_at=old,
+                                          last_progress=0.7, last_downloaded=700)
+            torrent = QBitTorrent(hash="partial-queued", name=release.title,
+                progress=0.7, state="queuedDL", dlspeed=0, downloaded=700,
+                added_on=None, content_path=None, save_path=None,
+                category="llm-sub", tags="mikansub")
+            qbit = Mock()
+            qbit.list_torrents.return_value = [torrent]
+            self.assertEqual(worker._expire_stalled_pending(qbit, pending), 0)
+            restarted = MikanWorker(config, _logger())
+            self.assertEqual(restarted._expire_stalled_pending(qbit, pending), 0)
             qbit.delete_torrents.assert_not_called()
             self.assertEqual(pending["items"]["123:1"]["torrent_url"], release.torrent_url)
 
@@ -4029,7 +4058,32 @@ class MikanWorkerPendingTest(unittest.TestCase):
             expired = worker._expire_stalled_pending(qbit, pending)
 
             self.assertEqual(expired, 1)
-            qbit.delete_torrents.assert_called_once_with(["hash-metadata"], delete_files=True)
+            qbit.delete_torrents.assert_called_once_with(["hash-metadata"], delete_files=False)
+
+    def test_replacement_request_backoff_and_bounded_restart_drain(self) -> None:
+        from qbit_client import QBitError
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config = _mikan_enqueue_config(Path(temp_dir))
+            config.mikan_watch_interval_seconds = 300
+            worker = MikanWorker(config, _logger())
+            worker.request_replacement_enqueue([MikanReplacementTarget(123, 1), MikanReplacementTarget(456, 2)])
+            worker._qbit = Mock(side_effect=QBitError("qB login expired HTTP 403"))
+            with patch("mikan_worker.time.time", return_value=1000):
+                result = worker.consume_replacement_enqueue_request()
+            self.assertTrue(result["deferred"])
+            restarted = MikanWorker(config, _logger())
+            restarted._qbit = Mock()
+            restarted._enqueue_replacements_after_extract_failure_unlocked = Mock(return_value=0)
+            with patch("mikan_worker.time.time", return_value=1001):
+                self.assertEqual(restarted.consume_replacement_enqueue_request()["reason"], "source_backoff")
+            restarted._qbit.assert_not_called()
+            with patch("mikan_worker.time.time", return_value=1301):
+                restarted.consume_replacement_enqueue_request()
+            self.assertEqual(restarted._enqueue_replacements_after_extract_failure_unlocked.call_args.args[0], [MikanReplacementTarget(123, 1)])
+            with patch("mikan_worker.time.time", return_value=1602):
+                restarted.consume_replacement_enqueue_request()
+            self.assertEqual(restarted._enqueue_replacements_after_extract_failure_unlocked.call_args.args[0], [MikanReplacementTarget(456, 2)])
+            self.assertIsNone(restarted.consume_replacement_enqueue_request())
 
     def test_expire_stalled_pending_deletes_started_zero_speed_torrent(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -4066,7 +4120,7 @@ class MikanWorkerPendingTest(unittest.TestCase):
             expired = worker._expire_stalled_pending(qbit, pending)
 
             self.assertEqual(expired, 1)
-            qbit.delete_torrents.assert_called_once_with(["hash1"], delete_files=True)
+            qbit.delete_torrents.assert_not_called()
             self.assertNotIn("torrent_url", pending["items"]["123:1"])
 
     def test_expire_stalled_pending_switches_started_torrent_without_recent_progress(self) -> None:
@@ -4109,11 +4163,17 @@ class MikanWorkerPendingTest(unittest.TestCase):
             expired = worker._expire_stalled_pending(qbit, pending)
 
             self.assertEqual(expired, 1)
-            qbit.delete_torrents.assert_called_once_with(["hash1"], delete_files=True)
+            qbit.delete_torrents.assert_not_called()
             entry = pending["items"]["123:1"]
             self.assertEqual(entry["failed_urls"], [release.torrent_url])
             self.assertNotIn("torrent_url", entry)
             self.assertNotIn("last_progress_at", entry)
+            self.assertEqual(entry["retained_partial_hashes"], ["hash1"])
+            restarted = MikanWorker(config, _logger())
+            self.assertEqual(restarted._expire_stalled_pending_targets(
+                qbit, torrents_override=[torrent], progress_already_synced=True,
+            ), [])
+            qbit.delete_torrents.assert_not_called()
 
     def test_enqueue_latest_releases_replaces_stalled_before_library_scan(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -4169,7 +4229,7 @@ class MikanWorkerPendingTest(unittest.TestCase):
 
             self.assertEqual(queued, 1)
             fetch.assert_called()
-            qbit.delete_torrents.assert_called_once_with(["hash1"], delete_files=True)
+            qbit.delete_torrents.assert_not_called()
             qbit.add_url.assert_called_once()
             pending_after = json.loads((root / "mikan_pending.json").read_text(encoding="utf-8"))
             entry = pending_after["items"]["123:1"]
@@ -5040,7 +5100,7 @@ class MikanWorkerPendingTest(unittest.TestCase):
 
             worker.poll_download_progress(state_required=True)
 
-            qbit.delete_torrents.assert_called_once_with([torrent.hash], delete_files=True)
+            qbit.delete_torrents.assert_not_called()
             worker.request_replacement_enqueue.assert_called_once()
             saved = json.loads((root / "mikan_pending.json").read_text(encoding="utf-8"))
             entry = saved["items"]["123:1"]
@@ -5134,7 +5194,7 @@ class MikanWorkerPendingTest(unittest.TestCase):
                 ],
             )
 
-            qbit.delete_torrents.assert_called_once_with([torrent.hash], delete_files=True)
+            qbit.delete_torrents.assert_not_called()
             self.assertEqual(targets, [MikanReplacementTarget(123, 1)])
             saved = json.loads((root / "mikan_pending.json").read_text(encoding="utf-8"))
             self.assertIn(torrent.hash, saved["items"]["123:1"]["failed_info_hashes"])
@@ -5320,7 +5380,7 @@ class MikanWorkerPendingTest(unittest.TestCase):
                 ],
             )
 
-            qbit.delete_torrents.assert_called_once_with([torrent.hash], delete_files=True)
+            qbit.delete_torrents.assert_not_called()
 
     def test_poll_download_progress_requeues_incomplete_processed_success_job(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -5495,11 +5555,11 @@ class MikanWorkerPendingTest(unittest.TestCase):
             target_video = library_dir / "Release Show - S01E08.mkv"
             target_video.write_bytes(b"library video")
             (source_dir / "Release Show - 08.zh-Hans.srt").write_text(
-                "1\n00:00:01,000 --> 00:00:02,000\n明天选班长\n",
+                dialogue_srt("这里的学校让我们一起选择明天的课程"),
                 encoding="utf-8",
             )
             (source_dir / "Release Show - 08.zh-Hant.srt").write_text(
-                "1\n00:00:01,000 --> 00:00:02,000\n明天選班長\n",
+                dialogue_srt("這裡的學校讓我們一起選擇明天的課程"),
                 encoding="utf-8",
             )
             config = _mikan_process_config(root, download_root)
@@ -5541,13 +5601,15 @@ class MikanWorkerPendingTest(unittest.TestCase):
 
             def convert(_source: Path, output: Path, **_kwargs: object) -> None:
                 text = (
-                    "Dialogue: 0,0:00:00.00,0:00:01.00,,,明天选班长"
+                    dialogue_ass("这里的学校让我们一起选择明天的课程")
                     if "hans" in _source.name.casefold()
-                    else "Dialogue: 0,0:00:00.00,0:00:01.00,,,明天選班長"
+                    else dialogue_ass("這裡的學校讓我們一起選擇明天的課程")
                 )
                 output.write_text(text, encoding="utf-8")
 
-            with patch("subtitle_extract._copy_or_convert_sidecar", side_effect=convert):
+            with patch("subtitle_extract._copy_or_convert_sidecar", side_effect=convert), patch(
+                "source_inventory._probe_media", return_value={"format": {"duration": "100"}}
+            ):
                 processed = worker._process_completed_downloads_unlocked()
 
             self.assertEqual(processed, 1)
@@ -5578,15 +5640,11 @@ class MikanWorkerPendingTest(unittest.TestCase):
             target_video = library_dir / "Pack Show - S01E01.mkv"
             target_video.write_bytes(b"library video")
             (subs_dir / "[DBD-Raws][Pack Show][01][GB].ass").write_text(
-                "Dialogue: 0,0:00:00.00,0:00:01.00,,,{text}\n".format(
-                    text="\u660e\u5929\u9009\u73ed\u957f"
-                ),
+                dialogue_ass("这里的学校让我们一起选择明天的课程"),
                 encoding="utf-8",
             )
             (subs_dir / "[DBD-Raws][Pack Show][01][BIG5].ass").write_text(
-                "Dialogue: 0,0:00:00.00,0:00:01.00,,,{text}\n".format(
-                    text="\u660e\u5929\u9078\u73ed\u9577"
-                ),
+                dialogue_ass("這裡的學校讓我們一起選擇明天的課程"),
                 encoding="utf-8",
             )
             config = _mikan_process_config(root, download_root)
@@ -5626,7 +5684,8 @@ class MikanWorkerPendingTest(unittest.TestCase):
             )
             (root / "mikan_pending.json").write_text(json.dumps(pending), encoding="utf-8")
 
-            processed = worker._process_completed_downloads_unlocked()
+            with patch("source_inventory._probe_media", return_value={"format": {"duration": "100"}}):
+                processed = worker._process_completed_downloads_unlocked()
 
             self.assertEqual(processed, 1)
             self.assertTrue((library_dir / "Pack Show - S01E01.zh.ass").exists())
@@ -5813,7 +5872,7 @@ class MikanWorkerPendingTest(unittest.TestCase):
             (root / "mikan_pending.json").write_text(json.dumps(pending), encoding="utf-8")
             seen_sources: list[Path] = []
 
-            def extract(source: Path, _config, *, output_video_path: Path, diagnostics: list[dict], allowed_languages: set[str]) -> list[SimpleNamespace]:
+            def extract(source: Path, _config, *, output_video_path: Path, diagnostics: list[dict], allowed_languages: set[str], validate_for_import: bool) -> list[SimpleNamespace]:
                 self.assertEqual(allowed_languages, {"zh-tw", "zh-cn"})
                 seen_sources.append(Path(source))
                 self.assertEqual(Path(source).name, "Collection Show - 10.mkv")
@@ -5877,7 +5936,7 @@ class MikanWorkerPendingTest(unittest.TestCase):
             (root / "mikan_pending.json").write_text(json.dumps(pending), encoding="utf-8")
             seen_sources: list[Path] = []
 
-            def extract(source: Path, _config, *, output_video_path: Path, diagnostics: list[dict], allowed_languages: set[str]) -> list[SimpleNamespace]:
+            def extract(source: Path, _config, *, output_video_path: Path, diagnostics: list[dict], allowed_languages: set[str], validate_for_import: bool) -> list[SimpleNamespace]:
                 self.assertEqual(allowed_languages, {"zh-tw", "zh-cn"})
                 seen_sources.append(Path(source))
                 self.assertEqual(Path(source).name, "Collection Show - 01.mkv")
@@ -6019,7 +6078,7 @@ class MikanWorkerPendingTest(unittest.TestCase):
             )
             seen_targets: list[Path] = []
 
-            def extract(source: Path, _config, *, output_video_path: Path, diagnostics: list[dict], allowed_languages: set[str]) -> list[SimpleNamespace]:
+            def extract(source: Path, _config, *, output_video_path: Path, diagnostics: list[dict], allowed_languages: set[str], validate_for_import: bool) -> list[SimpleNamespace]:
                 self.assertEqual(allowed_languages, {"zh-tw", "zh-cn"})
                 self.assertEqual(Path(source), source_video)
                 seen_targets.append(Path(output_video_path))
@@ -6097,6 +6156,7 @@ class MikanWorkerPendingTest(unittest.TestCase):
                 output_video_path: Path,
                 diagnostics: list[dict],
                 allowed_languages: set[str],
+                validate_for_import: bool,
             ) -> list[SimpleNamespace]:
                 self.assertEqual(allowed_languages, {"zh-tw", "zh-cn"})
                 seen_sources.append(Path(source))
