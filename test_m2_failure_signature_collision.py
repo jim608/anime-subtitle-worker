@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 import time
 from types import SimpleNamespace
@@ -253,6 +254,123 @@ class CollisionRecoveryTests(unittest.TestCase):
         self.state.observation_connection.execute("UPDATE pipeline_stage_attempts SET status='RUNNING',heartbeat_at=? WHERE stage_attempt_id=(SELECT stage_attempt_id FROM pipeline_stage_attempts LIMIT 1)", (self.now,))
         self.state.commit()
         self.assert_refused("running_work_has_not_reached_safe_boundary")
+
+
+class DeploymentHandoffRecoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture = CollisionRecoveryTests()
+        self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        f = self.fixture
+        self.root_cause = f.evidence["root_cause"]
+        origin = self.root_cause["expected_breaker_updated_at"]
+        self.first_receipt = {
+            "worker_sha": "3" * 40, "created_at": origin + 3,
+            "identity": {"container_id": "e" * 64, "image_id": "sha256:" + "f" * 64,
+                         "source_revision": "b" * 64,
+                         "started_at": datetime.fromtimestamp(origin + 1, timezone.utc).isoformat()},
+            "root_cause_evidence": json.loads(json.dumps(self.root_cause)),
+        }
+        self.receipt_path = f.fixture.logs / "first-attestation-input.json"
+        self.receipt_path.write_text(json.dumps(self.first_receipt))
+        self.latest = {"reason_code": "runtime_change", "observed_at": origin + 2.02,
+                       "evidence": {"stage": "runtime_validation", "error_code": "live_worker_container_identity_mismatch"}}
+        breaker = json.loads(f.breaker_path.read_text())
+        breaker.update({"latest_trip": self.latest, "updated_at": self.latest["observed_at"],
+                        "reasons": [*breaker["reasons"], self.latest]})
+        f.breaker_path.write_text(json.dumps(breaker))
+        from m2_observation_store import invalidate_active_gate, latest_gate, INVALIDATED_RUNTIME
+        gate = latest_gate(f.state.observation_connection)
+        evidence = {
+            "reason_code": "live_worker_container_identity_mismatch",
+            "expected": {"baseline_version": gate["baseline_version"], "worker_sha": gate["worker_sha"],
+                         "container_image_id": gate["container_image_id"], "worker_container_id": gate["worker_container_id"],
+                         "configuration_fingerprint": gate["configuration_fingerprint"], "decision_schema_version": gate["decision_schema_version"]},
+            "actual": {"reason_code": "live_worker_container_identity_mismatch", "runtime_status": "DEGRADED",
+                       "container_identity": "e" * 12, "worker_source_revision": "b" * 64,
+                       "configuration_fingerprint": f.evidence["configuration_fingerprint"],
+                       "decision_schema_version": f.evidence["decision"]["schema_version"],
+                       "decision_version": f.evidence["decision"]["version"]},
+        }
+        invalidate_active_gate(f.state.observation_connection, INVALIDATED_RUNTIME, evidence=evidence, now=origin + 2)
+        f.state.commit()
+        gate = latest_gate(f.state.observation_connection)
+        self.root_cause["expected_deployment_handoff"] = {
+            "first_attestation_path": str(self.receipt_path),
+            "first_attestation_sha256": "sha256:" + hashlib.sha256(self.receipt_path.read_bytes()).hexdigest(),
+            "expected_breaker_updated_at": self.latest["observed_at"],
+            "latest_trip_sha256": "sha256:" + hashlib.sha256(json.dumps(self.latest, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+            "invalidation_evidence_sha256": "sha256:" + hashlib.sha256(gate["invalidation_evidence_json"].encode()).hexdigest(),
+        }
+
+    def test_attested_drift_before_final_container_start_preserves_original_incident(self):
+        f = self.fixture
+        self.assertLess(self.latest["observed_at"], f.evidence["fault_results"]["container_started_at_epoch"])
+        result = f.recover()
+        report = json.loads(Path(result["log_path"]).read_text())
+        self.assertEqual(report["incident"]["trip_observed_at_epoch"], self.root_cause["expected_breaker_updated_at"])
+        self.assertEqual(report["incident"]["deployment_handoff"]["latest_trip_observed_at_epoch"], self.latest["observed_at"])
+        self.assertEqual(json.loads(f.breaker_path.read_text())["latest_trip"], self.latest)
+        self.assertEqual(f.state.observation_connection.execute("SELECT * FROM ai_candidate_queue ORDER BY path").fetchall(), f.queue_before)
+        self.assertEqual(f.state.observation_connection.execute("SELECT * FROM pipeline_stage_attempts ORDER BY stage_attempt_id").fetchall(), f.checkpoints_before)
+
+    def test_missing_handoff_receipt_refuses_newer_trip(self):
+        self.root_cause.pop("expected_deployment_handoff")
+        self.fixture.assert_refused("collision_latest_trip_mismatch")
+
+    def test_unknown_later_incident_cannot_be_hidden_behind_expected_deployment(self):
+        f = self.fixture
+        breaker = json.loads(f.breaker_path.read_text())
+        breaker["reasons"].append({"reason_code": "source_mutation", "observed_at": self.latest["observed_at"] - 0.01, "evidence": {}})
+        f.breaker_path.write_text(json.dumps(breaker))
+        f.assert_refused("handoff_unexpected_later_incident")
+
+    def test_wrong_recorded_first_container_refused_even_with_matching_file_hash(self):
+        self.first_receipt["identity"]["container_id"] = "a" * 64
+        self.receipt_path.write_text(json.dumps(self.first_receipt))
+        self.root_cause["expected_deployment_handoff"]["first_attestation_sha256"] = "sha256:" + hashlib.sha256(self.receipt_path.read_bytes()).hexdigest()
+        self.fixture.assert_refused("handoff_recorded_runtime_mismatch")
+
+    def test_unexpected_runtime_change_reason_refused(self):
+        f = self.fixture
+        breaker = json.loads(f.breaker_path.read_text())
+        breaker["latest_trip"]["evidence"]["error_code"] = "live_configuration_fingerprint_mismatch"
+        f.breaker_path.write_text(json.dumps(breaker))
+        self.root_cause["expected_deployment_handoff"]["latest_trip_sha256"] = "sha256:" + hashlib.sha256(json.dumps(breaker["latest_trip"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        f.assert_refused("handoff_unexpected_runtime_change")
+
+    def test_changed_counters_still_refused_after_verified_handoff(self):
+        f = self.fixture
+        f.state.observation_connection.execute("UPDATE m2_observation_meta SET value='4' WHERE key='identical_failure_streak'")
+        f.state.commit()
+        f.assert_refused("collision_current_counters_changed")
+
+    def _noncohort_terminal_attempt(self):
+        f = self.fixture
+        media = f.fixture.root / "not-enrolled-in-gate.mkv"
+        media.write_bytes(b"new unrelated source")
+        stat = media.stat()
+        obligation = f.state.ensure_ai_delivery_obligation(media, media_size=stat.st_size,
+            media_mtime_ns=stat.st_mtime_ns, policy_revision="noncohort-test")
+        attempt = f.state.begin_ai_delivery_attempt(obligation["obligation_id"])
+        # Terminal now: this must still be rejected even though the separate
+        # existing fresh-running safeguard no longer sees it.
+        f.state.finish_ai_delivery_attempt(attempt["attempt_id"], status="review_required",
+            stage="translation", error_code="quality_blocked", detail="unrelated review")
+        f.state.commit()
+        return attempt["attempt_id"]
+
+    def test_noncohort_new_claim_also_refuses_handoff(self):
+        self._noncohort_terminal_attempt()
+        self.fixture.assert_refused("handoff_new_work_observed")
+
+    def test_standalone_noncohort_terminal_without_observation_event_refused(self):
+        attempt_id = self._noncohort_terminal_attempt()
+        f = self.fixture
+        f.state.observation_connection.execute("UPDATE ai_delivery_attempts SET started_at=? WHERE attempt_id=?",
+            (self.root_cause["expected_breaker_updated_at"] - 1, attempt_id))
+        f.state.commit()
+        f.assert_refused("handoff_new_work_observed")
 
 
 if __name__ == "__main__":

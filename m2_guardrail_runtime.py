@@ -1064,6 +1064,108 @@ def _breaker_incident_sources(
     }
 
 
+def _verified_deployment_handoff(
+    connection: sqlite3.Connection, *, config: Any, root_cause: Mapping[str, Any],
+    breaker: Mapping[str, Any], gate: Mapping[str, Any], origin_epoch: float,
+) -> dict[str, Any]:
+    """Verify one recorded, attested deploy drift without hiding later faults."""
+    proof = root_cause.get("expected_deployment_handoff")
+    if not isinstance(proof, Mapping) or config is None:
+        raise RuntimeContractError("collision_latest_trip_mismatch")
+    latest = breaker.get("latest_trip")
+    if (not isinstance(latest, Mapping) or latest.get("reason_code") != "runtime_change"
+        or latest.get("evidence") != {"stage": "runtime_validation", "error_code": "live_worker_container_identity_mismatch"}):
+        raise RuntimeContractError("handoff_unexpected_runtime_change")
+    latest_text = json.dumps(dict(latest), sort_keys=True, separators=(",", ":"))
+    invalidation_text = str(gate.get("invalidation_evidence_json") or "")
+    if (gate.get("status") != "INVALIDATED_BY_RUNTIME_CHANGE"
+        or gate.get("invalidation_reason") != "INVALIDATED_BY_RUNTIME_CHANGE"
+        or breaker.get("updated_at") != proof.get("expected_breaker_updated_at")
+        or latest.get("observed_at") != breaker.get("updated_at")
+        or "sha256:" + hashlib.sha256(latest_text.encode()).hexdigest() != proof.get("latest_trip_sha256")
+        or "sha256:" + hashlib.sha256(invalidation_text.encode()).hexdigest() != proof.get("invalidation_evidence_sha256")):
+        raise RuntimeContractError("handoff_durable_evidence_mismatch")
+    reasons = breaker.get("reasons")
+    if not isinstance(reasons, list) or any(not isinstance(item, Mapping) for item in reasons):
+        raise RuntimeContractError("handoff_unexpected_later_incident")
+    try:
+        later = [item for item in reasons if float(item.get("observed_at") or 0) > origin_epoch]
+    except (TypeError, ValueError) as exc:
+        raise RuntimeContractError("handoff_unexpected_later_incident") from exc
+    if later != [latest]:
+        raise RuntimeContractError("handoff_unexpected_later_incident")
+    if connection.execute(
+        "SELECT 1 FROM m2_observation_result_events WHERE created_at>? LIMIT 1",
+        (origin_epoch,),
+    ).fetchone() or connection.execute(
+        "SELECT 1 FROM ai_delivery_attempts WHERE started_at>? LIMIT 1",
+        (origin_epoch,),
+    ).fetchone() or connection.execute(
+        "SELECT 1 FROM ai_delivery_attempts WHERE finished_at>? LIMIT 1",
+        (origin_epoch,),
+    ).fetchone() or connection.execute(
+        "SELECT 1 FROM m2_observation_gate_jobs WHERE gate_id=? AND claimed_at>? LIMIT 1",
+        (gate["gate_id"], origin_epoch),
+    ).fetchone():
+        raise RuntimeContractError("handoff_new_work_observed")
+    log_root = Path(str(getattr(config, "log_path", config.work_path))).resolve()
+    receipt_path = Path(str(proof.get("first_attestation_path") or "")).resolve()
+    if (not receipt_path.is_relative_to(log_root) or not receipt_path.is_file()
+        or not 0 < receipt_path.stat().st_size <= 64 * 1024
+        or "sha256:" + sha256_file(receipt_path) != proof.get("first_attestation_sha256")):
+        raise RuntimeContractError("handoff_attestation_receipt_invalid")
+    receipt = _read_json(receipt_path)
+    if not isinstance(receipt, Mapping) or not isinstance(receipt.get("identity"), Mapping):
+        raise RuntimeContractError("handoff_attestation_receipt_invalid")
+    original = receipt.get("root_cause_evidence")
+    if not isinstance(original, Mapping) or any(original.get(key) != root_cause.get(key) for key in (
+        "mode", "breaker_reason", "affected_stage", "failure_code", "expected_old_gate_id",
+        "expected_breaker_updated_at", "expected_counter_updated_at", "members", "lane_quality_pause",
+    )):
+        raise RuntimeContractError("handoff_original_incident_mismatch")
+    identity = receipt["identity"]
+    container_id = _require_container_id(identity.get("container_id"), "handoff")
+    _require_image_id(identity.get("image_id"), "handoff")
+    source_revision = _require_source_revision(identity.get("source_revision"), "handoff")
+    if _require_sha(receipt.get("worker_sha"), "handoff_worker") == gate.get("worker_sha"):
+        raise RuntimeContractError("handoff_new_runtime_not_proven")
+    try:
+        invalidation = json.loads(invalidation_text)
+        expected, actual = invalidation["expected"], invalidation["actual"]
+        started_at = datetime.fromisoformat(str(identity["started_at"]).replace("Z", "+00:00"))
+        if started_at.tzinfo is None:
+            raise ValueError("deployment timestamp needs timezone")
+        started = started_at.timestamp()
+        created = float(receipt["created_at"])
+        invalidated = float(gate["invalidated_at"])
+        tripped = float(latest["observed_at"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeContractError("handoff_recorded_runtime_mismatch") from exc
+    if (not all(math.isfinite(value) for value in (started, created, invalidated, tripped))
+        or not origin_epoch < started <= invalidated <= tripped <= created
+        or tripped - invalidated > 5
+        or invalidation.get("reason_code") != "live_worker_container_identity_mismatch"
+        or actual.get("reason_code") != "live_worker_container_identity_mismatch"
+        or actual.get("container_identity") != container_id[:12]
+        or actual.get("worker_source_revision") != source_revision
+        or any(expected.get(key) != gate.get(column) for key, column in (
+            ("baseline_version", "baseline_version"), ("worker_sha", "worker_sha"),
+            ("container_image_id", "container_image_id"), ("worker_container_id", "worker_container_id"),
+            ("configuration_fingerprint", "configuration_fingerprint"), ("decision_schema_version", "decision_schema_version"),
+        ))
+        or actual.get("configuration_fingerprint") != configuration_fingerprint(config)
+        or actual.get("configuration_fingerprint") != gate.get("configuration_fingerprint")
+        or actual.get("decision_schema_version") != _decision_descriptor(config)["schema_version"]
+        or actual.get("decision_version") != _decision_descriptor(config)["version"]):
+        raise RuntimeContractError("handoff_recorded_runtime_mismatch")
+    return {"first_attestation_sha256": proof["first_attestation_sha256"],
+            "first_worker_sha": receipt["worker_sha"], "first_container_id": container_id,
+            "first_source_revision": source_revision,
+            "latest_trip_observed_at_epoch": tripped,
+            "invalidation_evidence_sha256": proof["invalidation_evidence_sha256"],
+            "new_work_observed": False}
+
+
 def _generic_collision_incident(
     connection: sqlite3.Connection,
     *,
@@ -1071,6 +1173,7 @@ def _generic_collision_incident(
     breaker: Mapping[str, Any],
     threshold: int,
     validate_counters: bool = True,
+    config: Any = None,
 ) -> dict[str, Any]:
     """Bind this narrow repair to immutable current events, never legacy reasons."""
     from m2_observation_store import latest_gate, meta_state
@@ -1088,8 +1191,14 @@ def _generic_collision_incident(
         trip_epoch = float(root_cause.get("expected_breaker_updated_at"))
     except (TypeError, ValueError) as exc:
         raise RuntimeContractError("collision_trip_timestamp_invalid") from exc
-    if not math.isfinite(trip_epoch) or trip_epoch != breaker.get("updated_at") or trip_epoch < float(gate["gate_start_epoch"]):
+    if not math.isfinite(trip_epoch) or trip_epoch < float(gate["gate_start_epoch"]):
         raise RuntimeContractError("collision_latest_trip_mismatch")
+    handoff = None
+    if trip_epoch != breaker.get("updated_at"):
+        handoff = _verified_deployment_handoff(
+            connection, config=config, root_cause=root_cause, breaker=breaker,
+            gate=gate, origin_epoch=trip_epoch,
+        )
     sources: list[dict[str, Any]] = []
     clusters: dict[str, int] = {}
     member_keys: list[str] = []
@@ -1187,10 +1296,13 @@ def _generic_collision_incident(
             or meta["oom_streak"] != 0):
             raise RuntimeContractError("collision_current_counters_changed")
     encoded = json.dumps(sources, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return {"mode": "generic_failure_signature_collision", "gate_id": gate_id,
+    result = {"mode": "generic_failure_signature_collision", "gate_id": gate_id,
             "trip_observed_at_epoch": trip_epoch, "distinct_job_count": threshold,
             "normalized_failure_clusters": clusters, "sources": sources,
             "source_identity_sha256": "sha256:" + hashlib.sha256(encoded).hexdigest()}
+    if handoff is not None:
+        result["deployment_handoff"] = handoff
+    return result
 
 
 def _recover_verified_quality_pause(
@@ -1757,7 +1869,7 @@ def recover_runtime_local(
         before = _durable_recovery_snapshot(connection)
         threshold = int(getattr(config, "m2_server_canary_identical_failure_threshold", 3) or 3)
         incident = _generic_collision_incident(
-            connection, root_cause=root_cause, breaker=breaker, threshold=threshold,
+            connection, root_cause=root_cause, breaker=breaker, threshold=threshold, config=config,
         ) if collision_mode else _breaker_incident_sources(
             connection,
             stage=affected_stage,
@@ -1833,7 +1945,7 @@ def recover_runtime_local(
             if before[key] != after[key]:
                 raise RuntimeContractError(f"recovery_{key}_changed")
         source_after = _generic_collision_incident(
-            connection, root_cause=root_cause, breaker=breaker, threshold=threshold,
+            connection, root_cause=root_cause, breaker=breaker, threshold=threshold, config=config,
             validate_counters=False,
         ) if collision_mode else _breaker_incident_sources(
             connection,
@@ -1930,7 +2042,8 @@ def recover_runtime_local(
                       "observed_at": incident["trip_observed_at_epoch"],
                       "evidence": incident}
         breaker = {**breaker, "reasons": [*list(breaker.get("reasons") or []), occurrence],
-                   "latest_trip": occurrence}
+                   "recovered_incident": occurrence,
+                   "latest_trip": breaker.get("latest_trip") or occurrence}
     atomic_write_text(
         archive_path,
         json.dumps(breaker, ensure_ascii=False, sort_keys=True, indent=2) + "\n",

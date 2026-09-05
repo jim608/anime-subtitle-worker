@@ -2,6 +2,14 @@
 
 ## Recovery unblock candidate safety boundary (2026-09-05)
 
+An expected deployment can append a runtime-change trip while the original
+failure remains latched. Controlled recovery must bind that separate transition
+to the immutable first attestation receipt and exact old-Gate invalidation,
+matching container/source identities and unchanged config/Decision Schema.
+Preserve the original failure time, all trip occurrences and frozen members.
+Any later unknown trip, result event or claim (including non-cohort claims)
+refuses recovery. This evidence does not replace final running-image attestation.
+
 Generic Worker failures are grouped by normalized underlying detail, not only
 the generic error code; media paths and attempt IDs cannot split one recurring
 cause. Typed materialized-subtitle content refusals use existing NEEDS_REVIEW

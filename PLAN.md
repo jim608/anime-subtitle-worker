@@ -35,6 +35,10 @@ M2 translation quality, Translation Memory, full QC redesign and WebUI work are 
   failure-collision fixes; retain typed source-review classification and recover
   only the exact 07:15 UTC incident with immutable evidence. The combined
   server-isolated candidate suite passed 744 tests; runtime is not yet updated.
+- [ ] Complete the narrowly evidenced deployment-drift recovery handoff. First
+  ea0baaf deployment passed 1,813 Worker / 229 WebUI tests, actual-image 65 tests
+  and 7/7 FI, but recovery refused the separate expected runtime-change trip.
+  Keep its old Gate invalidated and all receipts; arm only after final repair.
 - [ ] Complete bounded real-case closeout with separate download/extraction/formal
   publication and AI route/completion evidence. Candidate mapping proves 83 local
   bindings; Amaburi E12 currently fails hard QC and is not a new subtitle success.

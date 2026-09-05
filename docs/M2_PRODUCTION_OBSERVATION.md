@@ -2,6 +2,21 @@
 
 ## Recovery unblock validation in progress (2026-09-05)
 
+The first safe deployment of `ea0baafac3baa703e3f4186632051765bc1af6bb`
+completed (deployment `20260905T081354Z-47629`): 1,813 Worker and 229 WebUI
+tests, 65 actual-image regression tests and fresh 7/7 fault injection passed.
+Its expected container-identity drift invalidated the old Gate at
+`2026-09-05T08:17:54.551592Z` and appended a runtime-change trip. The initial
+recovery correctly refused because its exact old-trip timestamp contract did
+not yet cover that legitimate deployment transition; claims remained paused.
+The follow-up recovery contract binds the first immutable attestation receipt,
+exact invalidation and runtime-change evidence, original incident/counters,
+unchanged configuration/Decision Schema and absence of all newer claims/events.
+It does not replace the original incident time or hide other trips. Server RO
+validation with the actual effective Worker environment passed in
+`runtime-handoff-v2-parity-validation.json`; the first failed attempt and receipts
+are retained. No replacement Gate was armed during this first deployment.
+
 Predeployment incident at `2026-09-05T07:15:03.553Z`: the unchanged b911
 runtime tripped after two materialized-subtitle language refusals and one
 `database is locked` failure were collapsed into `worker:worker_unknown`.

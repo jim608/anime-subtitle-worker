@@ -2,6 +2,14 @@
 
 ## Recovery unblock candidate evidence (2026-09-05)
 
+First actual deployment `ea0baaf...`: safe-update completed with 1,813 Worker
+and 229 WebUI tests; the immutable running image passed 65 focused tests and
+fresh 7/7 fault injection. Controlled recovery then refused the legitimate
+new-container drift because the old event-only contract did not cover deployment
+handoff. Its refusal and all original receipts remain in the server log root.
+The new handoff contract has passed the actual RO event/config/identity parity
+probe; final deployed-image verification must be recorded separately.
+
 The final frozen server-isolated candidate suite passed **744 tests**
 (`server-final-freeze-tests.log`), including both recovery/Queue deadlines,
 retry-budget selection, exact quality-pause release and refusal contracts,
