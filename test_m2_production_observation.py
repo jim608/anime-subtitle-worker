@@ -1345,6 +1345,52 @@ class M2ProductionObservationTests(unittest.TestCase):
             self.assertFalse(observation.admit_new_job(config))
         self._assert_tripped(config, "insufficient_disk_space", sentinel)
 
+    def test_controlled_handoff_requires_pause_and_valid_recovery_record(self) -> None:
+        for invalid in ("missing_pause", "invalid_record", "ordinary_disarm"):
+            with self.subTest(invalid=invalid):
+                config = self._config(f"handoff-{invalid}")
+                state = runtime.load_runtime_state(config)
+                state.update({
+                    "status": "DISARMED",
+                    "disarm_reason": "controlled_breaker_recovery_pending_new_gate",
+                    "recovery_record": {
+                        "contract": "m2-controlled-breaker-recovery-v1",
+                        "recovery_record_id": "verified-test-recovery",
+                    },
+                })
+                if invalid == "missing_pause":
+                    (Path(config.work_path) / "ai_control.json").unlink()
+                elif invalid == "invalid_record":
+                    state["recovery_record"]["contract"] = "unknown"
+                else:
+                    state["disarm_reason"] = "operator_disarmed"
+                atomic_write_text(runtime.runtime_state_path(config), json.dumps(state))
+                self.assertFalse(observation.admit_new_job(config))
+                connection = observation.connect_observation_database(config)
+                try:
+                    self.assertEqual(observation.sqlite_latest_gate(connection)["status"],
+                                     "INVALIDATED_BY_RUNTIME_CHANGE")
+                finally:
+                    connection.close()
+                observation._PROCESS_LOCAL_CIRCUIT_OPEN = False
+
+    def test_delayed_handoff_snapshot_cannot_invalidate_or_trip_current_gate(self) -> None:
+        config = self._config("stale-handoff")
+        state = runtime.load_runtime_state(config)
+        stale = {**state, "status": "DISARMED"}
+        observation._persist_runtime_invalidation_after_rollback(
+            config, error=observation.ObservationStoreError("INVALIDATED_BY_RUNTIME_CHANGE"),
+            runtime_state=stale,
+            runtime_result={"status": "DISARMED", "state": stale}, logger=None,
+        )
+        self.assertFalse(observation.circuit_breaker_active(config))
+        connection = observation.connect_observation_database(config)
+        try:
+            self.assertEqual(observation.sqlite_latest_gate(connection)["status"], "ACTIVE")
+        finally:
+            connection.close()
+        self.assertTrue(observation.admit_new_job(config))
+
     def test_malformed_breaker_state_fails_closed_without_touching_checkpoint(self) -> None:
         config = self._config("malformed")
         sentinel = self._checkpoint_sentinel(config)

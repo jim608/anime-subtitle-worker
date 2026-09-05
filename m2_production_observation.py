@@ -1328,13 +1328,15 @@ def _persist_runtime_invalidation_after_rollback(
     """Redo a validator's rolled-back invalidation in a fresh transaction."""
 
     cause = _runtime_invalidation_cause(error)
-    _persist_runtime_drift_invalidation(
+    invalidation_required = _persist_runtime_drift_invalidation(
         config,
         reason_code=cause,
         runtime_state=runtime_state,
         runtime_result=runtime_result,
         logger=logger,
     )
+    if not invalidation_required:
+        return
     try:
         trip_circuit_breaker(
             config,
@@ -1357,14 +1359,50 @@ def _persist_runtime_drift_invalidation(
     runtime_state: Any,
     runtime_result: Mapping[str, Any] | None = None,
     logger: Any | None,
-) -> None:
+) -> bool:
+    """Invalidate live drift, never a paused handoff or superseded sample.
+
+    Admission remains denied while this runs. Recovery publishes the SQLite
+    Gate before the runtime manifest, under a durable claim pause; a reader
+    from that interval must not invalidate the replacement Gate.
+    """
     try:
         connection = connect_observation_database(config)
         try:
             with immediate_transaction(connection):
                 gate = sqlite_active_gate(connection)
                 if gate is None:
-                    return
+                    return False
+                from m2_guardrail_runtime import runtime_guardrail_status
+
+                current = runtime_guardrail_status(config)
+                current_state = current.get("state")
+                if isinstance(current_state, Mapping):
+                    recovery = current_state.get("recovery_record")
+                    if (
+                        current.get("status") == "DISARMED"
+                        and current_state.get("disarm_reason")
+                        == "controlled_breaker_recovery_pending_new_gate"
+                        and isinstance(recovery, Mapping)
+                        and recovery.get("contract") == "m2-controlled-breaker-recovery-v1"
+                        and str(recovery.get("recovery_record_id") or "")
+                    ):
+                        try:
+                            require_durable_claim_pause(config)
+                        except ObservationStateError:
+                            pass
+                        else:
+                            return False
+                    if (
+                        current.get("status") == "ARMED"
+                        and current_state != runtime_state
+                    ):
+                        try:
+                            validate_active_runtime(connection, current_state)
+                        except ObservationStoreError:
+                            pass
+                        else:
+                            return False
                 sqlite_invalidate_active_gate(
                     connection,
                     INVALIDATED_RUNTIME,
@@ -1414,9 +1452,11 @@ def _persist_runtime_drift_invalidation(
             evidence={"stage": "runtime_validation", "error_code": reason_code},
             logger=logger,
         )
+        return True
     except Exception as exc:  # noqa: BLE001 - admission is already fail-closed.
         if logger is not None:
             logger.exception("M2 runtime drift persistence failed: %s", exc)
+        return True
 
 
 def trip_circuit_breaker(

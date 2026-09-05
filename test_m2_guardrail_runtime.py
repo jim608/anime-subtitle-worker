@@ -9,6 +9,7 @@ import tempfile
 import time
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 import m2_guardrail_runtime as runtime
 from m2_observation_store import ELIGIBILITY_POLICY_VERSION
@@ -1031,11 +1032,28 @@ class M2ControlledRecoveryTests(unittest.TestCase):
         self.assertEqual(pending["old_gate_id"], old_gate)
         self.assertEqual(pending["new_worker_sha"], "3" * 40)
         self.assertTrue(Path(pending["log_path"]).is_file())
-        new_runtime = runtime.initialize_gate(
-            self.config,
-            resume_evidence,
-            source_revision_file=self.revision,
-        )
+        initialize_sqlite_gate = observation.initialize_observation_gate
+
+        def admit_during_manifest_handoff(*args, **kwargs):
+            gate = initialize_sqlite_gate(*args, **kwargs)
+            self.assertFalse(observation.admit_new_job(self.config))
+            self.assertFalse(observation.circuit_breaker_active(self.config))
+            connection = observation.connect_observation_database(self.config)
+            try:
+                self.assertEqual(latest_gate(connection)["status"], "ACTIVE")
+            finally:
+                connection.close()
+            return gate
+
+        with mock.patch.object(
+            observation, "initialize_observation_gate",
+            side_effect=admit_during_manifest_handoff,
+        ):
+            new_runtime = runtime.initialize_gate(
+                self.config,
+                resume_evidence,
+                source_revision_file=self.revision,
+            )
         self.assertEqual(new_runtime["status"], "ARMED")
         resumed = runtime.resume_claims_local(
             self.config,
