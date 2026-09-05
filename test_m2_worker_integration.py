@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -10,6 +11,7 @@ from main import _ai_failure_policy
 from output_manifest import validate_output_manifest
 from scan_state import ScanStateStore
 from source_analyzer import AnalyzerThresholds
+from source_decision_adapter import SourceDecisionAdapterError, SourceDecisionReviewError
 from test_source_decision_adapter import _write_complete_ass
 from test_worker import _config, _logger
 from worker import (
@@ -225,6 +227,20 @@ class M2WorkerIntegrationTest(unittest.TestCase):
             VideoWorker._stage_for_exception(UnsupportedSourceError("unsupported")),
         )
         self.assertEqual(
+            "source_selection_review",
+            VideoWorker._stage_for_exception(SourceDecisionReviewError("rejected content")),
+        )
+        for detail in (
+            "persisted source candidate fingerprint changed",
+            "unsupported M2 source strategy: invalid",
+            "ASR_JA_AUDIO ffprobe validation failed",
+        ):
+            with self.subTest(detail=detail):
+                self.assertEqual(
+                    "worker",
+                    VideoWorker._stage_for_exception(SourceDecisionAdapterError(detail)),
+                )
+        self.assertEqual(
             ("source_unsupported", "permanent"),
             _ai_failure_policy("source_selection_unsupported", "[source_unsupported] none"),
         )
@@ -232,6 +248,92 @@ class M2WorkerIntegrationTest(unittest.TestCase):
             ("source_selection_needs_review", "manual_review"),
             _ai_failure_policy("source_selection_review", "ambiguous"),
         )
+
+    def test_materialized_rejection_is_durable_review_without_model_or_publication(self) -> None:
+        cases = (
+            ("zh-TW", "unknown", False),
+            ("zh-TW", "zh-tw", True),
+            ("ja", "unknown", False),
+            ("ja", "ja", True),
+        )
+        for source_language, language, has_failures in cases:
+            with self.subTest(source=source_language, language=language), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                video = root / "episode.mkv"
+                video.write_bytes(b"immutable-video")
+                source = root / f"episode.{source_language}.ass"
+                _write_complete_ass(source)
+                if source_language == "ja":
+                    source.write_text(
+                        source.read_text(encoding="utf-8").replace(
+                            "這裡會選擇開啟網路連線並顯示完整繁體中文字幕",
+                            "これは日本語の会話字幕です。みんなで一緒にアニメを見ましょう。",
+                        ),
+                        encoding="utf-8",
+                    )
+                before = {
+                    path: (path.read_bytes(), path.stat().st_mtime_ns)
+                    for path in (video, source)
+                }
+                config = self._config(root)
+                worker = VideoWorker(config, _logger())
+                with (
+                    patch(
+                        "source_inventory._probe_media",
+                        return_value={"format": {"duration": "100"}, "streams": []},
+                    ),
+                    patch(
+                        "source_decision_adapter.classify_subtitle_content_file",
+                        return_value=SimpleNamespace(language=language),
+                    ),
+                    patch(
+                        "source_decision_adapter.analyze_subtitle_file",
+                        return_value=SimpleNamespace(has_failures=has_failures, dialogues=24),
+                    ),
+                    patch.object(worker, "_extract_preferred_audio") as extract_audio,
+                    patch.object(worker, "_transcribe") as transcribe,
+                    patch.object(worker, "_get_translator") as translator,
+                    patch("worker.notify_event"),
+                ):
+                    self.assertFalse(worker.process(video))
+                extract_audio.assert_not_called()
+                transcribe.assert_not_called()
+                translator.assert_not_called()
+                self.assertEqual(
+                    before,
+                    {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in before},
+                )
+                self.assertFalse(validate_output_manifest(video, config, verify_hashes=True))
+                state = ScanStateStore.from_config(config)
+                try:
+                    pipeline = state.pipeline_jobs()
+                    job = pipeline.job_for_path(
+                        video, size=video.stat().st_size,
+                        mtime_ns=video.stat().st_mtime_ns, create=False,
+                    )
+                    assert isinstance(job, dict)
+                    self.assertEqual("NEEDS_REVIEW", job["state"])
+                    attempts = pipeline.list_stage_attempts(str(job["job_id"]), "SUBTITLE_DETECTION")
+                    self.assertEqual("NEEDS_REVIEW", attempts[-1]["status"])
+                    self.assertEqual("quality", attempts[-1]["error_class"])
+                    self.assertEqual("source_selection_needs_review", attempts[-1]["error_code"])
+                    decisions = pipeline.list_source_decisions(str(job["job_id"]))
+                    self.assertEqual(1, len(decisions))
+                    self.assertEqual(
+                        "TRANSLATE_JA_SUBTITLE" if source_language == "ja" else "USE_EXISTING_ZH_TW",
+                        decisions[0]["strategy"],
+                    )
+                    self.assertEqual(attempts[-1]["stage_attempt_id"], decisions[0]["stage_attempt_id"])
+                    self.assertEqual(64, len(decisions[0]["decision_sha256"]))
+                    # Rejected executable decisions remain recorded, not reusable.
+                    self.assertFalse(decisions[0]["integrity_valid"])
+                    self.assertEqual(
+                        "source_decision_attempt_reference_invalid",
+                        decisions[0]["integrity_reason_code"],
+                    )
+                    self.assertEqual("", str(job.get("active_stage_attempt_id") or ""))
+                finally:
+                    state.close()
 
     def test_low_confidence_inventory_enters_durable_review_without_whisper(self) -> None:
         probe = {

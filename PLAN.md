@@ -31,6 +31,10 @@ M2 translation quality, Translation Memory, full QC redesign and WebUI work are 
 - [ ] Finish the reproduced M2 recovery blockers: bounded cold/source scheduling,
   evidence-backed season scopes, full official-subtitle admission and staged hard
   QC. Complete combined server tests, safe deployment and guarded runtime handoff.
+- [ ] Deploy the additional reproduced scanner writer-transaction and generic
+  failure-collision fixes; retain typed source-review classification and recover
+  only the exact 07:15 UTC incident with immutable evidence. The combined
+  server-isolated candidate suite passed 744 tests; runtime is not yet updated.
 - [ ] Complete bounded real-case closeout with separate download/extraction/formal
   publication and AI route/completion evidence. Candidate mapping proves 83 local
   bindings; Amaburi E12 currently fails hard QC and is not a new subtitle success.

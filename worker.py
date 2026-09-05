@@ -105,7 +105,11 @@ from source_analyzer import (
     USE_EXISTING_ZH_TW,
     canonical_json_sha256,
 )
-from source_decision_adapter import ResolvedSourceDecision, resolve_source_decision
+from source_decision_adapter import (
+    ResolvedSourceDecision,
+    SourceDecisionReviewError,
+    resolve_source_decision,
+)
 from srt_utils import (
     SrtBlock,
     read_srt,
@@ -8697,7 +8701,7 @@ class VideoWorker:
 
     @staticmethod
     def _stage_for_exception(exc: Exception) -> str:
-        if isinstance(exc, SourceSelectionReviewError):
+        if isinstance(exc, (SourceSelectionReviewError, SourceDecisionReviewError)):
             return "source_selection_review"
         if isinstance(exc, UnsupportedSourceError):
             return "source_selection_unsupported"

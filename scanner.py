@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 from collections import Counter
+from dataclasses import dataclass
+import glob
 import json
 import logging
 import os
@@ -57,6 +59,22 @@ SCANNER_PRE_ATTEMPT_EXCLUSION_CODES = {
 
 class InventoryWalkError(RuntimeError):
     """A media-root walk that cannot support a complete inventory attestation."""
+
+
+@dataclass(frozen=True)
+class _QueueCompletionProof:
+    required_finished: bool
+    ai_finished: bool
+    ai_mtime: float | None
+    revisions: tuple[tuple[Path, tuple[int, ...] | None], ...]
+
+
+def _file_revision(path: Path) -> tuple[int, ...] | None:
+    try:
+        observed = path.stat()
+    except FileNotFoundError:
+        return None
+    return (observed.st_size, observed.st_mtime_ns, observed.st_ctime_ns, observed.st_ino, observed.st_dev)
 
 
 def scan_videos(config: AppConfig, logger: logging.Logger | None = None) -> list[Path]:
@@ -477,11 +495,14 @@ class VideoScanner:
             if state.in_transaction:
                 state.commit()
                 self._state_pending_writes = 0
+            completion_proof = self._prepare_queue_completion_proof(video, status)
             state.begin_ai_inventory_path(self._inventory_epoch_id)
+            self._check_queue_completion_proof(completion_proof)
             self._update_ai_queue(
                 video,
                 status,
                 eligible_at=self._inventory_eligibility_bound,
+                completion_proof=completion_proof,
             )
             after = video.stat()
             if (
@@ -489,11 +510,9 @@ class VideoScanner:
                 or int(before.st_mtime_ns) != int(after.st_mtime_ns)
             ):
                 raise InventoryWalkError(f"media changed during inventory classification: {video}")
-            ai_output_detected = bool(
-                status == "finished" and has_ai_finished_subtitle(video, self.config)
-            )
+            ai_output_detected = bool(status == "finished" and completion_proof.ai_finished)
             ai_output_mtime = (
-                float(ai_finished_subtitle_mtime(video, self.config))
+                float(completion_proof.ai_mtime or 0)
                 if ai_output_detected
                 else 0.0
             )
@@ -520,6 +539,7 @@ class VideoScanner:
                 ai_output_detected=ai_output_detected,
                 ai_output_mtime=ai_output_mtime,
             )
+            self._check_queue_completion_proof(completion_proof)
             state.commit_ai_inventory_path()
             state.commit()
             self._state_pending_writes = 0
@@ -866,16 +886,23 @@ class VideoScanner:
         status: str,
         *,
         eligible_at: float | None = None,
+        completion_proof: _QueueCompletionProof | None = None,
     ) -> None:
         if not self._queue_enabled:
             return
         state = self._state_store()
         if state is None:
             return
+        if completion_proof is None:
+            # Disposable classification-cache writes must not retain the WAL
+            # writer while completion validation hashes/probes media files.
+            self._commit_state_if_needed(force=True)
+            completion_proof = self._prepare_queue_completion_proof(video, status)
+        self._check_queue_completion_proof(completion_proof)
         if eligible_at is None and video.exists():
             stat_result = video.stat()
             ai_output_detected = bool(
-                status == "finished" and has_ai_finished_subtitle(video, self.config)
+                status == "finished" and completion_proof.ai_finished
             )
             if status in {"needs_ai", "failure_cooldown"}:
                 dispositions = {"delivery_required"}
@@ -896,11 +923,11 @@ class VideoScanner:
                 state.mark_ai_inventory_dirty()
                 self._note_state_write()
         if state.is_force_ai_queue_candidate(video):
-            if has_ai_finished_subtitle(video, self.config):
+            if completion_proof.ai_finished:
                 changed = state.mark_ai_queue_done(
                     video,
                     "Forced AI subtitle already exists during scan",
-                    completed_at=ai_finished_subtitle_mtime(video, self.config),
+                    completed_at=completion_proof.ai_mtime,
                     detected_existing=True,
                     mark_inventory_dirty=False,
                 )
@@ -991,12 +1018,12 @@ class VideoScanner:
             )
             self._note_state_write()
             return
-        if status == "finished" and self._has_required_finished_subtitle(video):
-            if has_ai_finished_subtitle(video, self.config):
+        if status == "finished" and completion_proof.required_finished:
+            if completion_proof.ai_finished:
                 changed = state.mark_ai_queue_done(
                     video,
                     "Finished AI subtitle detected during scan",
-                    completed_at=ai_finished_subtitle_mtime(video, self.config),
+                    completed_at=completion_proof.ai_mtime,
                     detected_existing=True,
                     mark_inventory_dirty=False,
                 )
@@ -1015,6 +1042,50 @@ class VideoScanner:
             mark_inventory_dirty=False,
         ):
             self._note_state_write()
+
+    def _prepare_queue_completion_proof(self, video: Path, status: str) -> _QueueCompletionProof:
+        if status != "finished" and not self._force_ai_requested(video):
+            return _QueueCompletionProof(False, False, None, ())
+        # Discover dependencies and do every content read before acquiring the
+        # proof writer. Under the writer only exact-path stat comparisons run.
+        from output_manifest import output_manifest_path, output_publication_marker_path
+        from subtitle_paths import finished_subtitle_paths, paths_for_video
+
+        # The directory revision also rejects a newly added/renamed sidecar
+        # that was not present in the discovered dependency set.
+        paths = {video, video.parent, *finished_subtitle_paths(video, self.config)}
+        paths.update(vars(paths_for_video(video, self.config)).values())
+        paths.update(video.parent.glob(f"{glob.escape(video.stem)}.*"))
+        paths.update((output_manifest_path(video, self.config), output_publication_marker_path(video, self.config)))
+        if bool(getattr(self.config, "completed_delivery_enabled", False)):
+            from completed_delivery import (
+                completed_delivery_destination,
+                completed_delivery_marker_path,
+                completed_delivery_receipt_path,
+            )
+
+            paths.update((
+                completed_delivery_destination(video, self.config),
+                completed_delivery_receipt_path(video, self.config),
+                completed_delivery_marker_path(video, self.config),
+            ))
+        revisions = tuple((path, _file_revision(path)) for path in sorted(paths, key=str))
+        required_finished = status == "finished" and self._has_required_finished_subtitle(video)
+        ai_finished = has_ai_finished_subtitle(video, self.config)
+        proof = _QueueCompletionProof(
+            required_finished,
+            ai_finished,
+            ai_finished_subtitle_mtime(video, self.config) if ai_finished else None,
+            revisions,
+        )
+        self._check_queue_completion_proof(proof)
+        return proof
+
+    @staticmethod
+    def _check_queue_completion_proof(proof: _QueueCompletionProof) -> None:
+        for path, revision in proof.revisions:
+            if _file_revision(path) != revision:
+                raise InventoryWalkError(f"completion evidence changed during inventory classification: {path}")
 
     def backfill_active_queue_obligations(
         self,

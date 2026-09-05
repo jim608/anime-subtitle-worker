@@ -2,6 +2,17 @@
 
 ## Recovery unblock candidate evidence (2026-09-05)
 
+The final frozen server-isolated candidate suite passed **744 tests**
+(`server-final-freeze-tests.log`), including both recovery/Queue deadlines,
+retry-budget selection, exact quality-pause release and refusal contracts,
+scanner second-writer concurrency,
+completion-proof mutation/restart safety, typed materialized-source review,
+mixed generic cause separation, same-cause distinct-job trips, source mutation,
+and negative event-bound recovery contracts. Earlier 87/418/147 counts overlap
+and are not additional tests. Actual read-only incident binding also passed:
+three exact immutable attempts, normalized cause clusters 2 + 1, unchanged source
+checksums. Deployment and fresh running-image evidence remain required.
+
 Full server logs: `/logs/m2-recovery-unblock-20260905T064508843990Z/`.
 The admission/checkpoint isolated container suite passed **87 tests**. The frozen
 mapping probe used only the existing specified keys, 96 stored profiles/cache

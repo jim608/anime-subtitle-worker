@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -11,6 +12,7 @@ from source_analyzer import ASR_JA_AUDIO, USE_EXISTING_ZH_TW, analyze_sources
 from source_decision import USE_ZH_TW
 from source_decision_adapter import (
     SourceDecisionAdapterError,
+    SourceDecisionReviewError,
     resolve_source_decision,
 )
 from source_inventory import build_source_input_identity, inventory_sources
@@ -77,6 +79,54 @@ def _asr_decision(candidate_fingerprint: str, *, index: int = 4) -> dict[str, ob
 
 
 class SourceDecisionAdapterTest(unittest.TestCase):
+    def test_materialized_content_rejections_have_typed_review_without_source_changes(self) -> None:
+        cases = (
+            ("unknown language", "unknown", False, 24, "language conflicts"),
+            ("wrong language", "ja", False, 24, "language conflicts"),
+            ("structural failure", "zh-tw", True, 24, "structural QC"),
+            ("no dialogue", "zh-tw", False, 0, "structural QC"),
+        )
+        for name, language, has_failures, dialogues, message in cases:
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                video = root / "episode.mkv"
+                video.write_bytes(b"immutable-media")
+                sidecar = root / "episode.zh-TW.ass"
+                _write_complete_ass(sidecar)
+                before = {
+                    path: (path.read_bytes(), path.stat().st_mtime_ns)
+                    for path in (video, sidecar)
+                }
+                config = _config(root)
+                job = _media_job_identity(video, config)
+                with patch(
+                    "source_inventory._probe_media",
+                    return_value={"format": {"duration": "100"}, "streams": []},
+                ):
+                    inventory = inventory_sources(video, job, config=config, sidecar_paths=[sidecar])
+                payload = analyze_sources(**inventory.analyzer_arguments()).to_dict()
+                payload["candidate_fingerprint"] = inventory.candidate_fingerprint
+                with (
+                    patch(
+                        "source_decision_adapter.classify_subtitle_content_file",
+                        return_value=SimpleNamespace(language=language),
+                    ),
+                    patch(
+                        "source_decision_adapter.analyze_subtitle_file",
+                        return_value=SimpleNamespace(has_failures=has_failures, dialogues=dialogues),
+                    ) as quality,
+                    self.assertRaisesRegex(SourceDecisionReviewError, message),
+                ):
+                    resolve_source_decision(video, {"decision": payload}, job, config)
+                if language != "zh-tw":
+                    quality.assert_not_called()
+                else:
+                    quality.assert_called_once_with(sidecar, config, role="unknown")
+                self.assertEqual(
+                    before,
+                    {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in before},
+                )
+
     def test_sidecar_inventory_decision_resolves_without_modifying_sources(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

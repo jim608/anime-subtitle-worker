@@ -2,6 +2,28 @@
 
 ## Recovery unblock candidate safety boundary (2026-09-05)
 
+Generic Worker failures are grouped by normalized underlying detail, not only
+the generic error code; media paths and attempt IDs cannot split one recurring
+cause. Typed materialized-subtitle content refusals use existing NEEDS_REVIEW
+semantics. Three distinct jobs with a genuinely identical system failure still
+trip. Each trip occurrence retains its current event/member evidence.
+
+The narrowly supported `generic_failure_signature_collision` recovery requires
+the exact current Gate, immutable three-attempt/event/digest evidence, matching
+current counter and trip epochs, distinct normalized cause groups below the
+threshold, unchanged sources/Queue/checkpoints, a safe claim boundary, changed
+verified runtime, fresh 7/7 fault injection and hashed running-image regression
+evidence. It cannot clear a genuinely identical streak or run blanket historical
+reconciliation. Normal retry/backoff and existing recovery-lane limits remain.
+
+A local hard-display-limit QC refusal cannot pause unrelated recovery as a
+permanent system failure. Repair of the already-paused lane requires exact last
+canary dispatch/settlement hashes, current run/version, review-required result,
+unchanged paused Queue entry and checkpoint, and no inflight recovery. Preserve
+the rejected canary; only the proven lane-level pause can become CANARY_READY.
+Dispatch checks both recovery and Queue deadlines plus remaining budget again
+at the atomic update; normal backoff cannot be cleared to manufacture a claim.
+
 Normal discovery and due recovery share bounded, restartable source scheduling.
 Elapsed-budget preemption preserves pending requests and retry budgets; incomplete
 matching evidence cannot become a confirmed miss or a selected winner. Source

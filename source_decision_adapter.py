@@ -36,6 +36,10 @@ class SourceDecisionAdapterError(RuntimeError):
     """A persisted M2 decision cannot be safely routed to the legacy worker."""
 
 
+class SourceDecisionReviewError(SourceDecisionAdapterError):
+    """The materialized source fails content validation and needs review."""
+
+
 @dataclass(frozen=True)
 class ResolvedSourceDecision:
     strategy: str
@@ -167,7 +171,7 @@ def resolve_source_decision(
         TRANSLATE_JA_SUBTITLE: {"ja"},
     }[strategy]
     if detected_language not in expected_languages:
-        raise SourceDecisionAdapterError(
+        raise SourceDecisionReviewError(
             "materialized subtitle language conflicts with persisted strategy: "
             f"strategy={strategy} detected={detected_language or 'unknown'}"
         )
@@ -177,7 +181,7 @@ def resolve_source_decision(
         role="japanese" if strategy == TRANSLATE_JA_SUBTITLE else "unknown",
     )
     if quality.has_failures or quality.dialogues <= 0:
-        raise SourceDecisionAdapterError("materialized subtitle failed legacy structural QC")
+        raise SourceDecisionReviewError("materialized subtitle failed legacy structural QC")
     legacy_strategy = {
         USE_EXISTING_ZH_TW: USE_ZH_TW,
         NORMALIZE_ZH_HANT: USE_ZH_TW,

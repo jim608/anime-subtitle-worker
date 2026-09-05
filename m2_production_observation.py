@@ -617,10 +617,7 @@ def record_job_result(
                     "_classification_detail",
                 )
             )
-            signature = (
-                f"{sanitized.get('stage') or 'worker'}:"
-                f"{sanitized.get('error_code') or sanitized.get('reason_code') or 'unknown'}"
-            )
+            signature = _outcome_failure_signature(sanitized)
             is_oom = bool(sanitized.get("oom_event")) or _is_oom(text)
             from m2_production_recovery import breaker_streak_eligible
 
@@ -688,6 +685,10 @@ def record_job_result(
                         "identical_failure_streak": projected_streaks[
                             "identical_failure_streak"
                         ],
+                        "normalized_failure_signature": signature,
+                        "identical_failure_job_ids": projected_streaks[
+                            "identical_failure_job_ids"
+                        ],
                         "oom_streak": projected_streaks["oom_streak"],
                     },
                 },
@@ -736,6 +737,10 @@ def record_job_result(
                             "job_key": breaker_job_key,
                             "stage": sanitized["stage"],
                             "error_code": sanitized["error_code"],
+                            "gate_id": str(event_reservation.get("gate_id") or ""),
+                            "claim_identity_hash": hashlib.sha256(str(job_identity).encode("utf-8")).hexdigest(),
+                            "normalized_failure_signature": signature,
+                            "identical_failure_job_ids": streaks["identical_failure_job_ids"],
                             "identical_failure_streak": streaks[
                                 "identical_failure_streak"
                             ],
@@ -1482,11 +1487,12 @@ def trip_circuit_breaker(
         "observed_at": now,
         "evidence": safe_evidence,
     }
-    if not any(
-        isinstance(previous, dict)
-        and str(previous.get("reason_code") or "") == reason
-        for previous in reasons
-    ):
+    # A later occurrence of the same breaker is a new incident, not a replay
+    # of the pre-recovery reason. Preserve both its time and member evidence.
+    if (not reasons or not isinstance(reasons[-1], Mapping)
+        or reasons[-1].get("reason_code") != reason
+        or reasons[-1].get("evidence") != safe_evidence
+        or existing.get("tripped") is not True):
         reasons.append(item)
     try:
         tripped_at = float(existing.get("tripped_at") or now)
@@ -1500,6 +1506,7 @@ def trip_circuit_breaker(
         "tripped_at": tripped_at,
         "updated_at": now,
         "reasons": reasons,
+        "latest_trip": item,
         "action": "stop_claiming_new_jobs",
         "running_job_policy": "finish_without_interruption",
         "checkpoint_policy": "preserve",
@@ -2205,6 +2212,16 @@ def _sanitize_outcome(job_identity: str, outcome: Mapping[str, Any]) -> dict[str
     }
 
 
+def _outcome_failure_signature(outcome: Mapping[str, Any]) -> str:
+    from m2_production_recovery import normalize_failure_signature
+
+    return normalize_failure_signature(
+        outcome.get("stage") or "worker",
+        outcome.get("error_code") or outcome.get("reason_code") or "unknown",
+        outcome.get("_classification_detail") or outcome.get("detail") or "",
+    )
+
+
 def _update_failure_streaks(state: dict[str, Any], outcome: Mapping[str, Any]) -> None:
     from m2_production_recovery import breaker_streak_eligible
 
@@ -2230,7 +2247,7 @@ def _update_failure_streaks(state: dict[str, Any], outcome: Mapping[str, Any]) -
     else:
         state["oom_streak"] = 0
         state["oom_job_ids"] = []
-    signature = f"{outcome.get('stage') or 'worker'}:{outcome.get('error_code') or outcome.get('reason_code') or 'unknown'}"
+    signature = _outcome_failure_signature(outcome)
     if signature == state.get("identical_failure_signature"):
         identical_jobs = list(state.get("identical_failure_job_ids") or [])
         if job_key not in identical_jobs:
@@ -2443,6 +2460,9 @@ def _sanitize_evidence(evidence: Mapping[str, Any]) -> dict[str, Any]:
         "job_key",
         "stage",
         "error_code",
+        "gate_id",
+        "claim_identity_hash",
+        "normalized_failure_signature",
         "identical_failure_streak",
         "oom_streak",
         "volume_role",
@@ -2455,6 +2475,16 @@ def _sanitize_evidence(evidence: Mapping[str, Any]) -> dict[str, Any]:
     sanitized: dict[str, Any] = {}
     for key, value in evidence.items():
         normalized_key = str(key)
+        if normalized_key in {"gate_id", "normalized_failure_signature"}:
+            if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1,160}", value):
+                sanitized[normalized_key] = value
+            continue
+        if normalized_key == "identical_failure_job_ids" and isinstance(value, list):
+            sanitized[normalized_key] = [
+                str(item) for item in value[:50]
+                if re.fullmatch(r"[0-9a-f]{16}", str(item))
+            ]
+            continue
         if normalized_key not in allowed or not isinstance(
             value,
             (str, int, float, bool, type(None)),

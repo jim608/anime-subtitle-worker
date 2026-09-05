@@ -65,6 +65,17 @@ LANE_STATES = frozenset(
 
 _SAFE_CODE_RE = re.compile(r"[^a-z0-9_.:-]+")
 _HEX_TOKEN_RE = re.compile(r"\b(?:[0-9a-f]{16,}|0x[0-9a-f]+)\b", re.IGNORECASE)
+_FAILURE_PATH_RE = re.compile(
+    r"(['\"])(?:[a-z]:[\\/]|/)[^\r\n]*?\1"
+    r"|(?:[a-z]:[\\/]|/)[^\r\n'\"]*?\.(?:mkv|mp4|ass|srt|vtt|sqlite3?|db|json)(?=\s|$|[),:])"
+    r"|(?:[a-z]:[\\/]|/)[^\s'\"]+",
+    re.IGNORECASE,
+)
+_FAILURE_ID_RE = re.compile(
+    r"\b(?:aiatt_|aiobl_|job_|attempt_)[0-9a-f]{16,}\b"
+    r"|\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b",
+    re.IGNORECASE,
+)
 _NUMBER_RE = re.compile(r"\b\d+(?:\.\d+)?\b")
 _SPACE_RE = re.compile(r"\s+")
 
@@ -104,6 +115,8 @@ def normalize_failure_signature(stage: Any, error_code: Any, detail: Any = "") -
     if normalized_code not in {"unknown_failure", "worker_unknown"}:
         return f"{normalized_stage}:{normalized_code}"
     text = str(detail or "").casefold()
+    text = _FAILURE_PATH_RE.sub("<path>", text)
+    text = _FAILURE_ID_RE.sub("<id>", text)
     text = _HEX_TOKEN_RE.sub("<id>", text)
     text = _NUMBER_RE.sub("<n>", text)
     text = _SPACE_RE.sub(" ", text).strip()[:500]
@@ -128,6 +141,14 @@ def classify_failure(
     fixed = {_safe_code(item, "", 120) for item in fixed_failure_codes}
     if code in fixed:
         return "CODE_VERSION_FIXED"
+    if str(detail or "").strip().casefold().startswith(
+        "materialized subtitle language conflicts with persisted strategy:"
+    ):
+        return "QUALITY_BLOCKED"
+    if code == "translation_unknown" and str(detail or "").strip().casefold().startswith(
+        "targeted subtitle readability repair exceeded its hard display limit at index "
+    ):
+        return "QUALITY_BLOCKED"
     if code in {
         "source_selection_needs_review",
         "deterministic_asr_quality",
@@ -1380,18 +1401,35 @@ def dispatch_next_recovery(
         return {"dispatched": False, "reason_code": "recovery_lane_cooldown"}
     cursor = connection.execute(
         """
-        SELECT recovery_id,canonical_path,media_mtime_ns,recovery_decision,
-               failure_signature,checkpoint_sha256,retry_budget,recovery_attempt_count,
-               source_store
-        FROM m2_recovery_jobs
-        WHERE status='READY' AND not_before<=?
-        ORDER BY priority,created_at,recovery_id LIMIT 1
+        SELECT r.recovery_id,r.canonical_path,r.media_mtime_ns,r.recovery_decision,
+               r.failure_signature,r.checkpoint_sha256,r.retry_budget,r.recovery_attempt_count,
+               r.source_store
+        FROM m2_recovery_jobs r
+        LEFT JOIN ai_candidate_queue q ON q.path=r.canonical_path
+        WHERE r.status='READY' AND r.not_before<=?
+          AND r.recovery_attempt_count<r.retry_budget
+          AND (q.path IS NULL OR (q.status IN ('failed_retry','paused')
+                                 AND COALESCE(q.next_retry_at,0)<=?))
+        ORDER BY r.priority,r.created_at,r.recovery_id LIMIT 1
         """,
-        (timestamp,),
+        (timestamp, timestamp),
     )
     columns = [str(item[0]) for item in cursor.description or ()]
     raw = cursor.fetchone()
     if raw is None:
+        waiting = connection.execute(
+            "SELECT r.recovery_id,r.not_before,r.retry_budget,r.recovery_attempt_count,"
+            "COALESCE(q.next_retry_at,0) FROM m2_recovery_jobs r "
+            "LEFT JOIN ai_candidate_queue q ON q.path=r.canonical_path "
+            "WHERE r.status='READY' ORDER BY r.priority,r.created_at,r.recovery_id LIMIT 1"
+        ).fetchone()
+        if waiting is not None:
+            eligible_at = max(float(waiting[1] or 0), float(waiting[4] or 0))
+            return {"dispatched": False, "recovery_id": str(waiting[0]),
+                    "reason_code": ("recovery_budget_exhausted" if int(waiting[3]) >= int(waiting[2])
+                                    else "recovery_backoff" if eligible_at > timestamp
+                                    else "recovery_queue_state_blocked"),
+                    "eligible_at": eligible_at}
         _set_meta(connection, "lane_state", "EMPTY", timestamp)
         return {"dispatched": False, "reason_code": "recovery_queue_empty"}
     item = dict(zip(columns, raw, strict=True))
@@ -1435,8 +1473,12 @@ def dispatch_next_recovery(
         UPDATE ai_candidate_queue
         SET status='queued',source='m2_recovery',running_at=0,next_retry_at=0,updated_at=?
         WHERE path=? AND mtime_ns=? AND status IN ('failed_retry','paused')
+          AND COALESCE(next_retry_at,0)<=?
+          AND EXISTS (SELECT 1 FROM m2_recovery_jobs r WHERE r.recovery_id=?
+                      AND r.status='READY' AND r.not_before<=?
+                      AND r.recovery_attempt_count<r.retry_budget)
         """,
-        (timestamp, path, int(item["media_mtime_ns"])),
+        (timestamp, path, int(item["media_mtime_ns"]), timestamp, item["recovery_id"], timestamp),
     ).rowcount
     if int(updated or 0) != 1:
         return {"dispatched": False, "reason_code": "queue_dispatch_race"}

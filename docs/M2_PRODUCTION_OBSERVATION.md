@@ -2,6 +2,31 @@
 
 ## Recovery unblock validation in progress (2026-09-05)
 
+Predeployment incident at `2026-09-05T07:15:03.553Z`: the unchanged b911
+runtime tripped after two materialized-subtitle language refusals and one
+`database is locked` failure were collapsed into `worker:worker_unknown`.
+The initial deployment attempt stopped before claim-control or runtime changes.
+Immutable-event and source-checksum verification in
+`collision-readonly-validation.json` confirmed three distinct obligations and
+two cause clusters (2 + 1), not three database errors. Candidate fixes preserve
+typed source review, normalize generic failure causes, retain each new trip
+occurrence, and move scanner completion hashing/probing outside its write
+transaction with exact dependency revisions checked before commit. No QC or
+retry deadline is weakened. Controlled recovery must bind this exact incident
+to fresh deployed-image evidence; the full historical reconciliation is skipped.
+The final frozen server-isolated candidate suite passed **744 tests** in
+`server-final-freeze-tests.log`; this is not deployed-image attestation.
+
+The precise paused recovery canary is separate from the three-member breaker:
+its `translation_unknown` detail reports the unchanged hard display limit,
+with a durable `review_required` attempt and preserved checkpoint. It was
+incorrectly classified as a permanent system error. Exact dispatch/settlement
+hashes and the current checkpoint passed `quality-pause-readonly-validation.json`.
+Controlled lane recovery must leave that canary failed/review-only, release only
+its proven lane-level pause, and preserve every retry budget/deadline. Dispatch
+must respect both recovery `not_before` and Queue `next_retry_at`; the first
+READY item remains in normal backoff and cannot be forced ahead of its deadline.
+
 Evidence root: `/logs/m2-recovery-unblock-20260905T064508843990Z/`.
 The one entry attestation confirmed Worker `b911794ed0ec872cb475f714e1385e20e8ac4388`,
 WebUI `7bd36c30fb07e393eba71760a164246d267c5b16`, ARMED and the existing ACTIVE
@@ -50,6 +75,15 @@ hard QC; no Production publication is credited. New download, extraction,
 official-publication, AI routing and AI completion counts must remain separate.
 Full source-video checksums and existing subtitle hashes were unchanged in the
 real-artifact probes. No M3 or Production-accepted/SLO claim is made.
+
+A second exact missing-output target, Amaburi E13
+`m2dl_4cd4c0387bcc606d1e7b`, has complete downloaded TC/SC sidecars and a verified
+episode match, but both fail unchanged hard QC (348 cues, 2 empty/too-short
+cues, 27 overlaps and 2 hallucination-text detections). Parse/coverage eligibility
+alone is not publication approval. At `2026-09-05T08:04:25.947483Z` the existing
+torrent was 75.7% complete and still downloading its original partials; normal
+whole-torrent extraction was not yet eligible. This probe wrote no subtitles,
+and the original E13 source and existing subtitle hashes remained unchanged.
 
 ## Bounded acceptance follow-up (2026-09-05, no runtime change)
 

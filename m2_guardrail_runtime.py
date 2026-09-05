@@ -1064,6 +1064,246 @@ def _breaker_incident_sources(
     }
 
 
+def _generic_collision_incident(
+    connection: sqlite3.Connection,
+    *,
+    root_cause: Mapping[str, Any],
+    breaker: Mapping[str, Any],
+    threshold: int,
+    validate_counters: bool = True,
+) -> dict[str, Any]:
+    """Bind this narrow repair to immutable current events, never legacy reasons."""
+    from m2_observation_store import latest_gate, meta_state
+    from m2_production_observation import _outcome_failure_signature
+    from m2_production_recovery import normalize_failure_signature
+
+    gate_id = str(root_cause.get("expected_old_gate_id") or "")
+    members = root_cause.get("members")
+    gate = latest_gate(connection)
+    if not gate_id or not gate or gate.get("gate_id") != gate_id:
+        raise RuntimeContractError("collision_current_gate_mismatch")
+    if not isinstance(members, list) or len(members) != threshold or not 2 <= threshold <= 20:
+        raise RuntimeContractError("collision_member_evidence_incomplete")
+    try:
+        trip_epoch = float(root_cause.get("expected_breaker_updated_at"))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeContractError("collision_trip_timestamp_invalid") from exc
+    if not math.isfinite(trip_epoch) or trip_epoch != breaker.get("updated_at") or trip_epoch < float(gate["gate_start_epoch"]):
+        raise RuntimeContractError("collision_latest_trip_mismatch")
+    sources: list[dict[str, Any]] = []
+    clusters: dict[str, int] = {}
+    member_keys: list[str] = []
+    prior_event_epoch = float(gate["gate_start_epoch"])
+    for index, supplied in enumerate(members, 1):
+        if not isinstance(supplied, Mapping):
+            raise RuntimeContractError("collision_member_evidence_incomplete")
+        attempt_id = str(supplied.get("attempt_id") or "")
+        claim_hash = hashlib.sha256(attempt_id.encode("utf-8")).hexdigest()
+        cursor = connection.execute(
+            "SELECT a.attempt_id,a.obligation_id,a.attempt_number,a.finished_at,a.status,"
+            "a.stage,a.error_code,a.detail,o.canonical_path,o.media_fingerprint,"
+            "o.media_size,o.media_mtime_ns FROM ai_delivery_attempts a "
+            "JOIN ai_delivery_obligations o ON o.obligation_id=a.obligation_id "
+            "WHERE a.attempt_id=?", (attempt_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise RuntimeContractError("collision_delivery_evidence_missing")
+        delivery = dict(zip((column[0] for column in cursor.description), row, strict=True))
+        cursor = connection.execute(
+            "SELECT * FROM m2_observation_result_events WHERE claim_identity_hash=?",
+            (claim_hash,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise RuntimeContractError("collision_event_evidence_missing")
+        event = dict(zip((column[0] for column in cursor.description), row, strict=True))
+        detail = str(delivery["detail"] or "")
+        detail_digest = hashlib.sha256(detail.encode("utf-8")).hexdigest()
+        payload_text = str(event["event_payload_json"])
+        job_hash = hashlib.sha256(str(delivery["obligation_id"]).encode("utf-8")).hexdigest()
+        if (
+            event["gate_id"] != gate_id or event["job_id"] != job_hash
+            or event["event_sha256"] != supplied.get("event_sha256")
+            or event["event_sha256"] != hashlib.sha256(payload_text.encode("utf-8")).hexdigest()
+            or not detail or detail_digest != supplied.get("detail_sha256")
+            or delivery["stage"] != "worker" or delivery["error_code"] != "worker_unknown"
+            or delivery["status"] not in {"failed", "retryable_failure", "review_required"}
+        ):
+            raise RuntimeContractError("collision_member_binding_mismatch")
+        payload = json.loads(payload_text)
+        outcome = payload.get("outcome", {})
+        event_breaker = payload.get("breaker", {})
+        event_epoch = float(event["created_at"])
+        if (
+            not prior_event_epoch < event_epoch <= trip_epoch
+            or trip_epoch - event_epoch > 3600
+            or not 0 <= event_epoch - float(delivery["finished_at"] or 0) <= 30
+            or event_breaker.get("identical_failure_streak") != index
+            or event_breaker.get("oom_streak") != 0
+            or event_breaker.get("tripped") is not (index == threshold)
+            or event_breaker.get("reason_code", "") != ("repeated_identical_stage_failure" if index == threshold else "")
+            or outcome.get("stage") != "worker" or outcome.get("error_code") != "worker_unknown"
+            or outcome.get("failed") is not True
+        ):
+            raise RuntimeContractError("collision_event_sequence_mismatch")
+        prior_event_epoch = event_epoch
+        job_key = job_hash[:16]
+        if job_key in member_keys:
+            raise RuntimeContractError("collision_distinct_members_required")
+        member_keys.append(job_key)
+        signature = normalize_failure_signature("worker", "worker_unknown", detail)
+        if _outcome_failure_signature({**outcome, "_classification_detail": detail}) != signature:
+            raise RuntimeContractError("collision_signature_fix_not_loaded")
+        clusters[signature] = clusters.get(signature, 0) + 1
+        path = Path(str(delivery["canonical_path"]))
+        try:
+            stat = path.stat()
+        except OSError as exc:
+            raise RuntimeContractError("breaker_source_identity_unavailable") from exc
+        if stat.st_size != delivery["media_size"] or stat.st_mtime_ns != delivery["media_mtime_ns"]:
+            raise RuntimeContractError("breaker_source_identity_changed")
+        sources.append({
+            "attempt_key": _job_key(attempt_id), "obligation_key": job_key,
+            "path_key": _job_key(str(path)), "media_fingerprint": delivery["media_fingerprint"],
+            "media_size": stat.st_size, "media_mtime_ns": stat.st_mtime_ns,
+            "event_sha256": event["event_sha256"], "event_at_epoch": event_epoch,
+            "detail_sha256": detail_digest, "normalized_failure_signature": signature,
+            "stage": delivery["stage"], "error_code": delivery["error_code"],
+            # Original details remain in the exact durable attempt row; logs carry
+            # hashes and the FK key, not private media paths from arbitrary errors.
+        })
+    if trip_epoch - prior_event_epoch > 5.0 or len(clusters) < 2 or max(clusters.values()) >= threshold:
+        raise RuntimeContractError("collision_not_proven")
+    if validate_counters:
+        meta = meta_state(connection)
+        counter_epoch = connection.execute(
+            "SELECT updated_at FROM m2_observation_meta WHERE key='identical_failure_job_ids'"
+        ).fetchone()[0]
+        if (meta["identical_failure_signature"] != "worker:worker_unknown"
+            or meta["identical_failure_streak"] != threshold
+            or meta["identical_failure_job_ids"] != member_keys
+            or counter_epoch != root_cause.get("expected_counter_updated_at")
+            or meta["oom_streak"] != 0):
+            raise RuntimeContractError("collision_current_counters_changed")
+    encoded = json.dumps(sources, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return {"mode": "generic_failure_signature_collision", "gate_id": gate_id,
+            "trip_observed_at_epoch": trip_epoch, "distinct_job_count": threshold,
+            "normalized_failure_clusters": clusters, "sources": sources,
+            "source_identity_sha256": "sha256:" + hashlib.sha256(encoded).hexdigest()}
+
+
+def _recover_verified_quality_pause(
+    connection: sqlite3.Connection, *, root_cause: Mapping[str, Any],
+    old_worker_sha: str, recovery_record_id: str, now: float,
+    validate_only: bool = False,
+) -> dict[str, Any]:
+    """Release only a proven local-QC canary pause; keep its failed job intact."""
+    from m2_production_recovery import (
+        _current_checkpoint_sha, _meta, _record_event, _set_meta, classify_failure,
+    )
+    lane = _meta(connection, "lane_state", "EMPTY")
+    proof = root_cause.get("lane_quality_pause")
+    if lane != "PAUSED":
+        if proof:
+            raise RuntimeContractError("quality_pause_lane_changed")
+        return {"changed": False, "lane_state": lane}
+    if not isinstance(proof, Mapping):
+        raise RuntimeContractError("quality_pause_evidence_missing")
+    if connection.execute("SELECT 1 FROM m2_recovery_jobs WHERE status IN ('DISPATCHED','CLAIMED') LIMIT 1").fetchone():
+        raise RuntimeContractError("quality_pause_work_inflight")
+
+    def one(query: str, args: tuple[Any, ...]) -> dict[str, Any]:
+        cursor = connection.execute(query, args)
+        row = cursor.fetchone()
+        if row is None:
+            raise RuntimeContractError("quality_pause_evidence_missing")
+        return dict(zip((item[0] for item in cursor.description), row, strict=True))
+
+    job = one("SELECT * FROM m2_recovery_jobs WHERE recovery_id=?", (str(proof.get("recovery_id") or ""),))
+    dispatch = one("SELECT * FROM m2_recovery_events WHERE event_id=?", (str(proof.get("dispatch_event_id") or ""),))
+    settled = one("SELECT * FROM m2_recovery_events WHERE event_id=?", (str(proof.get("settlement_event_id") or ""),))
+    latest = one("SELECT event_id FROM m2_recovery_events WHERE recovery_id=? ORDER BY created_at DESC,event_id DESC LIMIT 1", (job["recovery_id"],))
+    attempt = one("SELECT * FROM ai_delivery_attempts WHERE attempt_id=?", (str(proof.get("claim_attempt_id") or ""),))
+    queue = one("SELECT * FROM ai_candidate_queue WHERE path=?", (job["canonical_path"],))
+    gate = one("SELECT gate_start_epoch FROM m2_observation_gates WHERE gate_id=?", (str(root_cause.get("expected_old_gate_id") or ""),))
+    for event, event_type, digest_key in (
+        (dispatch, "RECOVERY_DISPATCHED", "dispatch_payload_sha256"),
+        (settled, "RECOVERY_FAILED", "settlement_payload_sha256"),
+    ):
+        if (event["recovery_id"] != job["recovery_id"] or event["event_type"] != event_type
+            or event["run_id"] != _meta(connection, "last_run_id", "")
+            or hashlib.sha256(str(event["payload_json"]).encode("utf-8")).hexdigest() != proof.get(digest_key)):
+            raise RuntimeContractError("quality_pause_event_binding_mismatch")
+    payload = json.loads(str(settled["payload_json"]))
+    detail = str(attempt["detail"] or "")
+    if (job["status"] != "FAILED" or job["failure_category"] != "PERMANENT_SYSTEM_ERROR"
+        or job["last_recovery_version"] != old_worker_sha
+        or payload.get("runtime_version") != old_worker_sha
+        or payload.get("failure_category") != "PERMANENT_SYSTEM_ERROR"
+        or payload.get("next_status") != "FAILED"
+        or job["claim_attempt_id"] != attempt["attempt_id"]
+        or payload.get("attempt_id") != attempt["attempt_id"]
+        or attempt["status"] != "review_required" or attempt["stage"] != "translation"
+        or attempt["error_code"] != "translation_unknown"
+        or not detail.startswith("Targeted subtitle readability repair exceeded its hard display limit at index ")
+        or detail != job["failure_reason"] or detail != queue["last_error"]
+        or classify_failure(attempt["stage"], attempt["error_code"], detail) != "QUALITY_BLOCKED"
+        or latest["event_id"] != settled["event_id"]
+        or float(_meta(connection, "last_dispatch_at", "0")) != dispatch["created_at"]
+        or not float(gate["gate_start_epoch"]) <= dispatch["created_at"] < settled["created_at"] <= float(root_cause["expected_breaker_updated_at"])
+        or not 0 <= settled["created_at"] - float(attempt["finished_at"] or 0) <= 30
+        or queue["status"] != "paused" or queue["last_error_code"] != "translation_unknown"
+        or queue["mtime_ns"] != job["media_mtime_ns"]):
+        raise RuntimeContractError("quality_pause_cause_not_proven")
+    checkpoint = str(proof.get("checkpoint_sha256") or "")
+    if (not re.fullmatch(r"[0-9a-f]{64}", checkpoint)
+        or checkpoint != job["checkpoint_sha256"] or checkpoint != payload.get("checkpoint_after")
+        or checkpoint != _current_checkpoint_sha(connection, job["canonical_path"], job["media_mtime_ns"])):
+        raise RuntimeContractError("quality_pause_checkpoint_changed")
+    evidence = {
+        "changed": True, "lane_before": "PAUSED", "lane_after": "CANARY_READY",
+        "recovery_record_id": recovery_record_id, "recovery_id": job["recovery_id"],
+        "original_canary_status": "FAILED", "delivery_status": "review_required",
+        "corrected_failure_category": "QUALITY_BLOCKED", "checkpoint_sha256": checkpoint,
+        "dispatch_event_id": dispatch["event_id"], "settlement_event_id": settled["event_id"],
+        "job_states_changed": 0, "queue_states_changed": 0,
+        "retry_budget_preserved": True, "retry_deadlines_preserved": True,
+    }
+    if not validate_only:
+        _set_meta(connection, "lane_state", "CANARY_READY", now)
+        _record_event(connection, event_key=f"quality-pause-release:{recovery_record_id}",
+                      recovery_id=job["recovery_id"], run_id=str(settled["run_id"]),
+                      event_type="RECOVERY_QUALITY_PAUSE_RELEASED", payload=evidence, now=now)
+    return evidence
+
+
+def _validate_collision_regression(config: Any, evidence: Mapping[str, Any], root_cause: Mapping[str, Any], now: float) -> None:
+    proof = root_cause.get("regression_results")
+    if (not isinstance(proof, Mapping)
+        or proof.get("contract") != "m2-generic-failure-collision-regression-v1"
+        or proof.get("worker_source_revision") != evidence.get("worker_source_revision")
+        or proof.get("production_resources_affected") is not False
+        or any(proof.get(key) is not True for key in (
+            "mixed_causes_separated", "same_cause_distinct_jobs_trips",
+            "scanner_second_writer_during_inventory_io"))):
+        raise RuntimeContractError("collision_regression_evidence_invalid")
+    log_root = Path(str(getattr(config, "log_path", config.work_path))).resolve()
+    log_path = Path(str(proof.get("full_log_path") or "")).resolve()
+    if not log_path.is_relative_to(log_root) or not log_path.is_file() or "sha256:" + sha256_file(log_path) != proof.get("full_log_sha256"):
+        raise RuntimeContractError("collision_regression_log_invalid")
+    fault = evidence["fault_results"]
+    try:
+        started = float(fault["container_started_at_epoch"])
+        testing = float(fault["started_at_epoch"])
+        finished = float(fault["finished_at_epoch"])
+        trip_epoch = float(root_cause["expected_breaker_updated_at"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeContractError("collision_fault_evidence_not_fresh") from exc
+    if not all(math.isfinite(value) for value in (started, testing, finished, trip_epoch)) or not trip_epoch < started <= testing <= finished <= now:
+        raise RuntimeContractError("collision_fault_evidence_not_fresh")
+
+
 def _prepare_pending_recovery_resume(
     config: Any,
     evidence: Mapping[str, Any],
@@ -1144,7 +1384,10 @@ def _prepare_pending_recovery_resume(
         raise RuntimeContractError("pending_recovery_root_cause_mismatch")
     from m2_production_recovery import breaker_streak_eligible, classify_failure
 
-    if classify_failure(affected_stage, failure_code) != "QUALITY_BLOCKED" or breaker_streak_eligible(
+    collision_mode = root_cause.get("mode") == "generic_failure_signature_collision"
+    if collision_mode:
+        _validate_collision_regression(config, evidence, root_cause, now)
+    elif root_cause.get("mode") or classify_failure(affected_stage, failure_code) != "QUALITY_BLOCKED" or breaker_streak_eligible(
         {
             "terminal_status": "RETRYING",
             "stage": affected_stage,
@@ -1221,6 +1464,14 @@ def _prepare_pending_recovery_resume(
         or recovery_log.get("production_resources_affected") is not False
     ):
         raise RuntimeContractError("pending_recovery_log_invalid")
+    if collision_mode and (
+        recovery_log.get("recovery_mode") != "generic_failure_signature_collision"
+        or recovery_log.get("incident", {}).get("trip_observed_at_epoch") != root_cause.get("expected_breaker_updated_at")
+        or recovery_log.get("root_cause_evidence_sha256") != "sha256:" + hashlib.sha256(
+            json.dumps(dict(root_cause), sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+    ):
+        raise RuntimeContractError("pending_collision_evidence_mismatch")
 
     from m2_observation_store import INVALIDATED_RUNTIME, active_gate, gate_by_id
     from scan_state import ScanStateStore
@@ -1405,8 +1656,14 @@ def recover_runtime_local(
         record_breaker_recovery,
     )
 
+    collision_mode = root_cause.get("mode") == "generic_failure_signature_collision"
     category = classify_failure(affected_stage, failure_code)
-    if category != "QUALITY_BLOCKED" or breaker_streak_eligible(
+    if collision_mode:
+        if affected_stage != "worker" or failure_code != "worker_unknown":
+            raise RuntimeContractError("unsupported_collision_recovery_signature")
+        _validate_collision_regression(config, evidence, root_cause, timestamp)
+        category = "GENERIC_FAILURE_SIGNATURE_COLLISION"
+    elif root_cause.get("mode") or category != "QUALITY_BLOCKED" or breaker_streak_eligible(
         {
             "terminal_status": "RETRYING",
             "stage": affected_stage,
@@ -1492,8 +1749,16 @@ def recover_runtime_local(
         )
         if fresh_delivery or fresh_pipeline:
             raise RuntimeContractError("running_work_has_not_reached_safe_boundary")
+        if collision_mode and connection.execute(
+            "SELECT 1 FROM ai_candidate_queue WHERE status='running' AND running_at>? LIMIT 1",
+            (stale_before,),
+        ).fetchone() is not None:
+            raise RuntimeContractError("running_work_has_not_reached_safe_boundary")
         before = _durable_recovery_snapshot(connection)
-        incident = _breaker_incident_sources(
+        threshold = int(getattr(config, "m2_server_canary_identical_failure_threshold", 3) or 3)
+        incident = _generic_collision_incident(
+            connection, root_cause=root_cause, breaker=breaker, threshold=threshold,
+        ) if collision_mode else _breaker_incident_sources(
             connection,
             stage=affected_stage,
             error_code=failure_code,
@@ -1526,7 +1791,8 @@ def recover_runtime_local(
                 or (expected_old_gate and invalidated.get("gate_id") != expected_old_gate)
             ):
                 raise RuntimeContractError("active_gate_missing_for_recovery")
-        recovery = reconcile_historical_jobs(
+        recovery = {"scope": "exact_incident_only", "historical_reconciliation_skipped": True,
+                    "requeued": 0, "job_states_changed": 0} if collision_mode else reconcile_historical_jobs(
             connection,
             current_worker_version=worker_commit,
             current_analyzer_version=str(
@@ -1549,6 +1815,11 @@ def recover_runtime_local(
                 ),
             },
         )
+        if collision_mode:
+            recovery["lane_recovery"] = _recover_verified_quality_pause(
+                connection, root_cause=root_cause, old_worker_sha=old_worker_commit,
+                recovery_record_id=recovery_record_id, now=timestamp,
+            )
         reset_failure_streaks(connection)
         after = _durable_recovery_snapshot(connection)
         for key in (
@@ -1561,7 +1832,10 @@ def recover_runtime_local(
         ):
             if before[key] != after[key]:
                 raise RuntimeContractError(f"recovery_{key}_changed")
-        source_after = _breaker_incident_sources(
+        source_after = _generic_collision_incident(
+            connection, root_cause=root_cause, breaker=breaker, threshold=threshold,
+            validate_counters=False,
+        ) if collision_mode else _breaker_incident_sources(
             connection,
             stage=affected_stage,
             error_code=failure_code,
@@ -1599,6 +1873,15 @@ def recover_runtime_local(
             "incident": incident,
             "reconciliation": recovery,
         }
+        if collision_mode:
+            recovery_evidence.update({
+                "recovery_mode": "generic_failure_signature_collision",
+                "root_cause_evidence_sha256": "sha256:" + hashlib.sha256(
+                    json.dumps(dict(root_cause), sort_keys=True, separators=(",", ":")).encode("utf-8")
+                ).hexdigest(),
+                "regression_results": dict(root_cause["regression_results"]),
+                "remaining_language_failures_unresolved": True,
+            })
         record_breaker_recovery(
             connection,
             recovery_record_id=recovery_record_id,
@@ -1640,6 +1923,14 @@ def recover_runtime_local(
     archive_path = breaker_path.with_name(
         f"{breaker_path.stem}.tripped-{stamp}-{recovery_record_id[-8:]}.json"
     )
+    if collision_mode:
+        # Repair the missing current occurrence in the old runtime's reason-code
+        # de-duplicated history, without replacing the historical incident.
+        occurrence = {"reason_code": expected_reason,
+                      "observed_at": incident["trip_observed_at_epoch"],
+                      "evidence": incident}
+        breaker = {**breaker, "reasons": [*list(breaker.get("reasons") or []), occurrence],
+                   "latest_trip": occurrence}
     atomic_write_text(
         archive_path,
         json.dumps(breaker, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
@@ -1753,6 +2044,7 @@ def recover_runtime_on_host(
     worker_source_revision_file: str = "/app/.source-revision",
     webui_source_revision_file: str = "/app/.source-revision",
     runtime_state_path_override: str = "",
+    root_cause_evidence: Mapping[str, Any] | None = None,
     runner: CommandRunner | None = None,
 ) -> dict[str, Any]:
     """Attest, recover, re-arm, and seed one recovery canary without waiting."""
@@ -1860,6 +2152,7 @@ def recover_runtime_on_host(
             "worker_config_unchanged_since_start": True,
         },
         "root_cause": {
+            **dict(root_cause_evidence or {}),
             "breaker_reason": expected_breaker_reason,
             "affected_stage": affected_stage,
             "failure_code": failure_code,
