@@ -4085,6 +4085,31 @@ class MikanWorkerPendingTest(unittest.TestCase):
             self.assertEqual(restarted._enqueue_replacements_after_extract_failure_unlocked.call_args.args[0], [MikanReplacementTarget(456, 2)])
             self.assertIsNone(restarted.consume_replacement_enqueue_request())
 
+    def test_historical_failure_with_verified_existing_output_never_redownloads(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config = _mikan_enqueue_config(root)
+            video = root / "Show - S01E01.mkv"
+            video.write_bytes(b"immutable original")
+            video.with_suffix(".zh-TW.ass").write_text(dialogue_ass(), encoding="utf-8")
+            video.with_suffix(".zh.ass").write_text(dialogue_ass("这里的学校让我们一起选择明天的课程"), encoding="utf-8")
+            pending = {"items": {"123:1": {"bangumi_id": 123, "episode": 1,
+                "failed_urls": ["https://mikan/old-failed.torrent"], "last_failure_reason": "did not start",
+                "download_recovery": {"decision": "SEARCH_ALTERNATE_WITH_EXISTING_BUDGET", "historical_reasons": ["did not start"]}}}}
+            (root / "mikan_pending.json").write_text(json.dumps(pending), encoding="utf-8")
+            for _ in range(2):
+                worker = MikanWorker(config, _logger())
+                worker._series_mappings = Mock(return_value=[{"bangumi_id": 123, "path": str(root)}])
+                with patch("mikan_worker._target_videos_from_episode_index", return_value=[video]), patch(
+                    "source_inventory._probe_media", return_value={"format": {"duration": "100"}}
+                ):
+                    self.assertFalse(worker._release_can_be_queued(_release("https://mikan/new.torrent"), operation="test-reconcile", state_required=True))
+            saved = json.loads((root / "mikan_pending.json").read_text(encoding="utf-8"))["items"]["123:1"]
+            self.assertEqual(saved["completion_kind"], "verified_existing_output")
+            self.assertEqual(saved["download_recovery"]["actual_new_imports"], 0)
+            self.assertEqual(saved["failed_urls"], ["https://mikan/old-failed.torrent"])
+            self.assertEqual(video.read_bytes(), b"immutable original")
+
     def test_expire_stalled_pending_deletes_started_zero_speed_torrent(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config = SimpleNamespace(

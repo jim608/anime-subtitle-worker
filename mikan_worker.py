@@ -3992,6 +3992,53 @@ class MikanWorker:
         pending = _load_pending(self.pending_path)
         seen = _load_seen(self.seen_path)
         covered_episodes = release_episode_numbers(release)
+        # Historical failed downloads can outlive a later successful subtitle
+        # import. Revalidate those indexed targets before starting any torrent.
+        historical = [episode for episode in covered_episodes
+                      if isinstance(_pending_entry(release.bangumi_id, episode, pending).get("download_recovery"), dict)]
+        if historical:
+            mappings = [mapping for mapping in self._series_mappings(cached_only=True)
+                        if int(mapping.get("bangumi_id") or 0) == release.bangumi_id]
+            for episode in historical:
+                entry = _pending_entry(release.bangumi_id, episode, pending)
+                if _pending_is_terminal_success(entry) or _pending_has_active_release(entry):
+                    continue
+                targets = _target_videos_from_episode_index(self.config, mappings, episode, season_hint=release.season_number)
+                if len(targets) != 1:
+                    continue
+                target = targets[0]
+                video_lock = VideoLock(target)
+                if not video_lock.acquire():
+                    continue
+                try:
+                    if not _target_has_required_chinese_subtitles(target, verify_config=self.config):
+                        continue
+                    lock = self._acquire_state_lock_for_enqueue(operation, required=state_required, log_busy=state_required)
+                    if lock is None:
+                        return False
+                    try:
+                        current = _load_pending(self.pending_path)
+                        live = _pending_entry(release.bangumi_id, episode, current)
+                        if _pending_has_active_release(live):
+                            continue
+                        live["download_recovery"] = {**live.get("download_recovery", {}),
+                            "decision": "SATISFIED_BY_VERIFIED_EXISTING_OUTPUT", "verified_at": _utc_now().isoformat(),
+                            "target": str(target), "actual_new_imports": 0}
+                        live["completion_kind"] = "verified_existing_output"
+                        live["completed_at"] = _utc_now().isoformat()
+                        live["last_extracted_count"] = 1  # existing availability counter, not new publications
+                        _clear_no_candidate_retry(live)
+                        _clear_candidate_review(live)
+                        for name in ("last_failure_reason", "last_extract_failed_at", "last_extract_failure_reason", "last_extract_failure_detail"):
+                            live.pop(name, None)
+                        _save_pending(self.pending_path, current)
+                        pending = current
+                    finally:
+                        lock.release()
+                finally:
+                    video_lock.release()
+        if covered_episodes and all(_pending_is_terminal_success(_pending_entry(release.bangumi_id, episode, pending)) for episode in covered_episodes):
+            return False
         if covered_episodes and all(
             _has_active_pending(release.bangumi_id, episode, pending)
             for episode in covered_episodes
