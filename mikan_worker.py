@@ -361,6 +361,7 @@ class MikanWorker:
             self.consume_completed_state_update_request()
             if process_completed and self.config.mikan_extract_completed:
                 self.process_completed_downloads(required=False)
+            self.consume_replacement_enqueue_request()
             if self.consume_deferred_requests() is not None:
                 return
             self.enqueue_latest_releases(required=False)
@@ -1043,7 +1044,7 @@ class MikanWorker:
             return None
         request = _load_request_file(request_path)
         if float(request.get("next_retry_at") or 0) > time.time():
-            return {"deferred": True, "request_path": str(request_path), "reason": "source_backoff"}
+            return None  # Backoff for history must not starve unrelated enqueue work.
         raw_targets = request.get("targets")
         targets: list[MikanReplacementTarget] = []
         if isinstance(raw_targets, list):
@@ -1074,6 +1075,7 @@ class MikanWorker:
             return {"deferred": True, "request_path": str(request_path), "targets": request.get("targets", [])}
         try:
             qbit = self._qbit()
+            self._fallback_sources.begin_cycle()
             queued = self._enqueue_replacements_after_extract_failure_unlocked(
                 batch,
                 qbit,
@@ -3165,7 +3167,15 @@ class MikanWorker:
         deferred = 0
 
         for bangumi_id, episodes in grouped_targets.items():
-            missing_episodes = set(episodes)
+            if not self._reconcile_verified_history_outputs(
+                bangumi_id, episodes, operation="history_output_reconciliation", state_required=False,
+            ):
+                continue
+            pending = _load_pending(self.pending_path)
+            missing_episodes = {episode for episode in episodes
+                                if not _pending_is_terminal_success(_pending_entry(bangumi_id, episode, pending))}
+            if not missing_episodes:
+                continue
             bangumi_mappings = mappings_by_bangumi.get(bangumi_id, [])
             primary_lookup_succeeded = True
             try:
@@ -3982,28 +3992,20 @@ class MikanWorker:
             self.logger.info("Queued Mikan release to qBittorrent: %s", release.title)
         return "queued"
 
-    def _release_can_be_queued(
-        self,
-        release: MikanRelease,
-        *,
-        operation: str,
-        state_required: bool,
-    ) -> bool:
+    def _reconcile_verified_history_outputs(self, bangumi_id, episodes, *, season_hint=None, operation, state_required):
         pending = _load_pending(self.pending_path)
-        seen = _load_seen(self.seen_path)
-        covered_episodes = release_episode_numbers(release)
         # Historical failed downloads can outlive a later successful subtitle
         # import. Revalidate those indexed targets before starting any torrent.
-        historical = [episode for episode in covered_episodes
-                      if isinstance(_pending_entry(release.bangumi_id, episode, pending).get("download_recovery"), dict)]
+        historical = [episode for episode in episodes
+                      if isinstance(_pending_entry(bangumi_id, episode, pending).get("download_recovery"), dict)]
         if historical:
             mappings = [mapping for mapping in self._series_mappings(cached_only=True)
-                        if int(mapping.get("bangumi_id") or 0) == release.bangumi_id]
+                        if int(mapping.get("bangumi_id") or 0) == bangumi_id]
             for episode in historical:
-                entry = _pending_entry(release.bangumi_id, episode, pending)
+                entry = _pending_entry(bangumi_id, episode, pending)
                 if _pending_is_terminal_success(entry) or _pending_has_active_release(entry):
                     continue
-                targets = _target_videos_from_episode_index(self.config, mappings, episode, season_hint=release.season_number)
+                targets = _target_videos_from_episode_index(self.config, mappings, episode, season_hint=season_hint)
                 if len(targets) != 1:
                     continue
                 target = targets[0]
@@ -4018,7 +4020,7 @@ class MikanWorker:
                         return False
                     try:
                         current = _load_pending(self.pending_path)
-                        live = _pending_entry(release.bangumi_id, episode, current)
+                        live = _pending_entry(bangumi_id, episode, current)
                         if _pending_has_active_release(live):
                             continue
                         live["download_recovery"] = {**live.get("download_recovery", {}),
@@ -4037,6 +4039,21 @@ class MikanWorker:
                         lock.release()
                 finally:
                     video_lock.release()
+        return True
+
+    def _release_can_be_queued(
+        self,
+        release: MikanRelease,
+        *,
+        operation: str,
+        state_required: bool,
+    ) -> bool:
+        pending = _load_pending(self.pending_path)
+        seen = _load_seen(self.seen_path)
+        covered_episodes = release_episode_numbers(release)
+        if not self._reconcile_verified_history_outputs(release.bangumi_id, covered_episodes, season_hint=release.season_number, operation=operation, state_required=state_required):
+            return False
+        pending = _load_pending(self.pending_path)
         if covered_episodes and all(_pending_is_terminal_success(_pending_entry(release.bangumi_id, episode, pending)) for episode in covered_episodes):
             return False
         if covered_episodes and all(

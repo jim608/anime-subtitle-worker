@@ -4075,7 +4075,7 @@ class MikanWorkerPendingTest(unittest.TestCase):
             restarted._qbit = Mock()
             restarted._enqueue_replacements_after_extract_failure_unlocked = Mock(return_value=0)
             with patch("mikan_worker.time.time", return_value=1001):
-                self.assertEqual(restarted.consume_replacement_enqueue_request()["reason"], "source_backoff")
+                self.assertIsNone(restarted.consume_replacement_enqueue_request())
             restarted._qbit.assert_not_called()
             with patch("mikan_worker.time.time", return_value=1301):
                 restarted.consume_replacement_enqueue_request()
@@ -4102,13 +4102,42 @@ class MikanWorkerPendingTest(unittest.TestCase):
                 worker._series_mappings = Mock(return_value=[{"bangumi_id": 123, "path": str(root)}])
                 with patch("mikan_worker._target_videos_from_episode_index", return_value=[video]), patch(
                     "source_inventory._probe_media", return_value={"format": {"duration": "100"}}
-                ):
+                ), patch("mikan_worker.fetch_bangumi_releases") as fetch:
+                    self.assertEqual(worker._enqueue_replacements_after_extract_failure_unlocked(
+                        [MikanReplacementTarget(123, 1)], Mock(),
+                    ), 0)
+                    fetch.assert_not_called()
                     self.assertFalse(worker._release_can_be_queued(_release("https://mikan/new.torrent"), operation="test-reconcile", state_required=True))
             saved = json.loads((root / "mikan_pending.json").read_text(encoding="utf-8"))["items"]["123:1"]
             self.assertEqual(saved["completion_kind"], "verified_existing_output")
             self.assertEqual(saved["download_recovery"]["actual_new_imports"], 0)
             self.assertEqual(saved["failed_urls"], ["https://mikan/old-failed.torrent"])
             self.assertEqual(video.read_bytes(), b"immutable original")
+
+    def test_history_backoff_or_one_batch_does_not_starve_normal_enqueues(self) -> None:
+        for backoff in (False, True):
+            with self.subTest(backoff=backoff), tempfile.TemporaryDirectory() as temp_dir:
+                config = _mikan_enqueue_config(Path(temp_dir))
+                worker = MikanWorker(config, _logger())
+                worker._repair_terminal_completed_pending_entries = Mock()
+                worker._repair_invalid_release_part_pending_entries = Mock()
+                worker.enqueue_latest_releases = Mock()
+                worker._qbit = Mock()
+                worker._enqueue_replacements_after_extract_failure_unlocked = Mock(return_value=0)
+                worker.request_replacement_enqueue([MikanReplacementTarget(123, 1), MikanReplacementTarget(456, 2)])
+                from mikan_worker import _mikan_replacement_enqueue_request_path
+                path = _mikan_replacement_enqueue_request_path(config)
+                if backoff:
+                    request = json.loads(path.read_text(encoding="utf-8"))
+                    request["next_retry_at"] = time.time() + 3600
+                    path.write_text(json.dumps(request), encoding="utf-8")
+                worker.run_once(process_completed=False)
+                worker.enqueue_latest_releases.assert_called_once_with(required=False)
+                self.assertTrue(path.exists())
+                if backoff:
+                    worker._qbit.assert_not_called()
+                else:
+                    self.assertEqual(len(json.loads(path.read_text(encoding="utf-8"))["targets"]), 1)
 
     def test_expire_stalled_pending_deletes_started_zero_speed_torrent(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
