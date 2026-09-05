@@ -373,6 +373,117 @@ class M2ProductionRecoveryTests(unittest.TestCase):
         mark_recovery_claimed(self.connection, path, str(attempt["attempt_id"]))
         return str(attempt["attempt_id"])
 
+    def test_removed_preclaim_canary_is_reviewable_and_next_survives_restart(self) -> None:
+        first = self._media("removed-preclaim.mkv")
+        second = self._media("next-preclaim.mkv")
+        before = {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in (first, second)}
+        self._queue(first)
+        self._queue(second)
+        self._reconcile()
+        base = time.time() + 1000
+        dispatched = dispatch_next_recovery(self.connection, runtime_status="ARMED", now=base)
+        removed = Path(self.connection.execute(
+            "SELECT canonical_path FROM m2_recovery_jobs WHERE recovery_id=?",
+            (dispatched["recovery_id"],),
+        ).fetchone()[0])
+        original = self._recovery_row(removed)
+        self.state.remove_ai_queue_candidate(removed, clear_job_state=True)
+        result = dispatch_next_recovery(self.connection, runtime_status="ARMED", now=base + 1)
+        self.assertFalse(result["dispatched"])
+        self.assertEqual(result["reason_code"], "dispatched_queue_item_removed_before_claim")
+        excluded = self._recovery_row(removed)
+        self.assertEqual(excluded["status"], "EXCLUDED")
+        self.assertEqual(excluded["recovery_decision"], "KEEP_NEEDS_REVIEW")
+        for key in ("recovery_attempt_count", "claim_attempt_id", "checkpoint_json",
+                    "checkpoint_sha256", "retry_budget", "failure_signature_history_json"):
+            self.assertEqual(excluded[key], original[key])
+        self.assertEqual(excluded["recovery_attempt_count"], 0)
+        status = recovery_status(self.connection)
+        self.assertEqual(status["lane_state"], "CANARY_READY")
+        self.assertEqual(status["preclaim_excluded_count"], 1)
+        self.assertEqual(status["recovery_success"], 0)
+        payload = json.loads(self.connection.execute(
+            "SELECT payload_json FROM m2_recovery_events WHERE event_type='RECOVERY_PRECLAIM_EXCLUDED'"
+        ).fetchone()[0])
+        self.assertEqual(payload["new_claims"], 0)
+        self.assertTrue(payload["media_identity_matches"])
+        self.assertFalse(payload["completion_verified"])
+        self.assertEqual(dispatch_next_recovery(
+            self.connection, runtime_status="ARMED", now=base + 299
+        )["reason_code"], "recovery_lane_cooldown")
+        self.connection.commit()
+        self.state.close()
+        self.state = ScanStateStore(self.root / "scanner.sqlite3")
+        self.addCleanup(self.state.close)
+        self.connection = self.state.observation_connection
+        next_result = dispatch_next_recovery(
+            self.connection, runtime_status="ARMED", now=base + 300
+        )
+        self.assertTrue(next_result["dispatched"])
+        self.assertTrue(next_result["canary"])
+        self.assertNotEqual(next_result["recovery_id"], dispatched["recovery_id"])
+        self.assertEqual(self._recovery_row(removed)["status"], "EXCLUDED")
+        self.assertIsNone(self.connection.execute(
+            "SELECT 1 FROM ai_candidate_queue WHERE path=?", (str(removed),)
+        ).fetchone())
+        self.assertEqual(self.connection.execute(
+            "SELECT COUNT(*) FROM m2_recovery_events WHERE event_type='RECOVERY_PRECLAIM_EXCLUDED'"
+        ).fetchone()[0], 1)
+        for table in ("ai_delivery_attempts", "pipeline_jobs"):
+            self.assertEqual(self.connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], 0)
+        for path, digest in before.items():
+            self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), digest)
+
+    def test_existing_dispatched_queue_is_not_requeued_or_excluded(self) -> None:
+        media = self._media("still-queued.mkv")
+        self._queue(media)
+        self._reconcile()
+        base = time.time() + 1000
+        first = dispatch_next_recovery(self.connection, runtime_status="ARMED", now=base)
+        again = dispatch_next_recovery(self.connection, runtime_status="ARMED", now=base + 1000)
+        self.assertFalse(again["dispatched"])
+        self.assertEqual(again["recovery_id"], first["recovery_id"])
+        self.assertEqual(self._recovery_row(media)["status"], "DISPATCHED")
+        self.assertEqual(self.connection.execute(
+            "SELECT COUNT(*) FROM m2_recovery_events WHERE event_type='RECOVERY_DISPATCHED'"
+        ).fetchone()[0], 1)
+        self.connection.execute("UPDATE ai_candidate_queue SET mtime_ns=mtime_ns+1 WHERE path=?", (str(media),))
+        mismatch = dispatch_next_recovery(self.connection, runtime_status="ARMED", now=base + 1001)
+        self.assertEqual(mismatch["reason_code"], "recovery_queue_identity_mismatch")
+        self.assertEqual(self._recovery_row(media)["status"], "DISPATCHED")
+
+    def test_claimed_recovery_with_missing_queue_is_untouched(self) -> None:
+        media = self._media("claimed-missing-queue.mkv")
+        self._queue(media)
+        self._reconcile()
+        dispatch_next_recovery(self.connection, runtime_status="ARMED", now=time.time() + 1000)
+        attempt_id = self._claim_dispatched(media)
+        self.state.remove_ai_queue_candidate(media, clear_job_state=True)
+        result = dispatch_next_recovery(self.connection, runtime_status="ARMED", now=time.time() + 2000)
+        self.assertFalse(result["dispatched"])
+        row = self._recovery_row(media)
+        self.assertEqual(row["status"], "CLAIMED")
+        self.assertEqual(row["claim_attempt_id"], attempt_id)
+        self.assertEqual(row["recovery_attempt_count"], 1)
+        self.assertEqual(recovery_status(self.connection)["lane_state"], "CANARY_IN_FLIGHT")
+
+    def test_dispatched_orphan_with_running_delivery_is_not_excluded(self) -> None:
+        media = self._media("running-delivery.mkv")
+        self._queue(media)
+        self._reconcile()
+        dispatch_next_recovery(self.connection, runtime_status="ARMED", now=time.time() + 1000)
+        stat = media.stat()
+        obligation = self.state.ensure_ai_delivery_obligation(
+            media, media_size=stat.st_size, media_mtime_ns=stat.st_mtime_ns,
+            policy_revision="recovery-test",
+        )
+        self.state.begin_ai_delivery_attempt(str(obligation["obligation_id"]))
+        self.state.remove_ai_queue_candidate(media, clear_job_state=True)
+        result = dispatch_next_recovery(self.connection, runtime_status="ARMED", now=time.time() + 2000)
+        self.assertFalse(result["dispatched"])
+        self.assertEqual(self._recovery_row(media)["status"], "DISPATCHED")
+        self.assertEqual(recovery_status(self.connection)["lane_state"], "CANARY_IN_FLIGHT")
+
     def test_successful_canary_activates_lane_and_records_checkpoint_resume(self) -> None:
         media = self._media("success.mkv")
         self._queue(media)
@@ -410,11 +521,9 @@ class M2ProductionRecoveryTests(unittest.TestCase):
         )
         first_result = settle_recovery_attempt(self.connection, media, first, now=base + 1)
         self.assertEqual(first_result["status"], "READY")
+        self.assertEqual(recovery_status(self.connection)["lane_state"], "CANARY_READY")
         self.connection.execute(
             "UPDATE ai_candidate_queue SET status='failed_retry' WHERE path=?", (str(media),)
-        )
-        self.connection.execute(
-            "UPDATE m2_recovery_meta SET value='ACTIVE' WHERE key='lane_state'"
         )
         dispatch_next_recovery(self.connection, runtime_status="ARMED", now=base + 1000)
         second = self._claim_dispatched(media)
@@ -430,6 +539,37 @@ class M2ProductionRecoveryTests(unittest.TestCase):
         )
         self.assertEqual(second_result["status"], "BLOCKED_NO_PROGRESS")
         self.assertTrue(second_result["no_progress"])
+
+    def _assert_local_canary_failure_allows_next(self, stage: str, error_code: str) -> None:
+        first = self._media("first.mkv")
+        second = self._media("second.mkv")
+        self._queue(first)
+        self._queue(second)
+        self._reconcile()
+        base = time.time() + 1000
+        dispatched = dispatch_next_recovery(self.connection, runtime_status="ARMED", now=base)
+        selected = first if dispatched["recovery_id"] == self._recovery_row(first)["recovery_id"] else second
+        attempt_id = self._claim_dispatched(selected)
+        self.state.finish_ai_delivery_attempt(
+            attempt_id, status="retryable_failure", stage=stage, error_code=error_code,
+        )
+        result = settle_recovery_attempt(self.connection, selected, attempt_id, now=base + 1)
+        self.assertEqual(result["status"], "EXCLUDED")
+        status = recovery_status(self.connection)
+        self.assertEqual(status["lane_state"], "CANARY_READY")
+        self.assertEqual(status["recovery_success"], 0)
+        self.assertFalse(dispatch_next_recovery(self.connection, runtime_status="ARMED", now=base + 2)["dispatched"])
+        self.assertFalse(dispatch_next_recovery(self.connection, runtime_status="TRIPPED", now=base + 400)["dispatched"])
+        next_item = dispatch_next_recovery(self.connection, runtime_status="ARMED", now=base + 400)
+        self.assertTrue(next_item["dispatched"])
+        self.assertTrue(next_item["canary"])
+        self.assertNotEqual(next_item["recovery_id"], dispatched["recovery_id"])
+
+    def test_quality_blocked_canary_isolated_and_next_canary_continues(self) -> None:
+        self._assert_local_canary_failure_allows_next("source_selection_review", "source_selection_needs_review")
+
+    def test_bad_input_canary_isolated_and_next_canary_continues(self) -> None:
+        self._assert_local_canary_failure_allows_next("source_analysis", "unsupported_media")
 
     def test_reconciliation_does_not_touch_source_or_formal_output(self) -> None:
         media = self._media("safe-source.mkv")

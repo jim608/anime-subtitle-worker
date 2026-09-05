@@ -1290,20 +1290,91 @@ def dispatch_next_recovery(
     if str(runtime_status).upper() != "ARMED":
         return {"dispatched": False, "reason_code": "runtime_not_armed"}
     lane_state = _meta(connection, "lane_state", "EMPTY")
-    if lane_state in {"DISABLED", "EMPTY", "PAUSED", "CANARY_IN_FLIGHT"}:
+    if lane_state in {"DISABLED", "EMPTY", "PAUSED"}:
         return {"dispatched": False, "reason_code": f"lane_{lane_state.casefold()}"}
-    inflight = connection.execute(
-        "SELECT recovery_id,status FROM m2_recovery_jobs WHERE status IN ('DISPATCHED','CLAIMED') ORDER BY updated_at LIMIT 1"
-    ).fetchone()
-    if inflight is not None:
+    inflight_rows = connection.execute(
+        "SELECT recovery_id,status,canonical_path,media_mtime_ns,claim_attempt_id "
+        "FROM m2_recovery_jobs WHERE status IN ('DISPATCHED','CLAIMED') "
+        "ORDER BY updated_at LIMIT 2"
+    ).fetchall()
+    if len(inflight_rows) > 1:
+        return {"dispatched": False, "reason_code": "multiple_recovery_items_inflight"}
+    if inflight_rows:
+        inflight = inflight_rows[0]
+        queue = connection.execute(
+            "SELECT status,mtime_ns FROM ai_candidate_queue WHERE path=?",
+            (str(inflight[2]),),
+        ).fetchone()
+        if str(inflight[1]) == "DISPATCHED" and not inflight[4] and queue is None:
+            # The scanner may remove a not-yet-claimed item because existing
+            # subtitles make it ineligible. Never recreate it blindly or
+            # report AI completion; retain a reviewable pre-claim exclusion.
+            changed = connection.execute(
+                """
+                UPDATE m2_recovery_jobs
+                SET status='EXCLUDED',recovery_decision='KEEP_NEEDS_REVIEW',
+                    recovery_reason='dispatched_queue_item_removed_before_claim',
+                    updated_at=?
+                WHERE recovery_id=? AND status='DISPATCHED' AND claim_attempt_id=''
+                  AND NOT EXISTS (SELECT 1 FROM ai_candidate_queue WHERE path=?)
+                  AND NOT EXISTS (
+                    SELECT 1 FROM ai_job_state WHERE path=? AND status='running'
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM ai_delivery_attempts a
+                    JOIN ai_delivery_obligations o ON o.obligation_id=a.obligation_id
+                    WHERE o.canonical_path=? AND a.status='running'
+                  )
+                """,
+                (timestamp, str(inflight[0]), *(str(inflight[2]),) * 3),
+            ).rowcount
+            if int(changed or 0) == 1:
+                try:
+                    actual_mtime = int(Path(str(inflight[2])).stat().st_mtime_ns)
+                except OSError:
+                    actual_mtime = None
+                if lane_state == "CANARY_IN_FLIGHT":
+                    _set_meta(connection, "lane_state", "CANARY_READY", timestamp)
+                _record_event(
+                    connection,
+                    event_key=f"preclaim-excluded:{inflight[0]}",
+                    recovery_id=str(inflight[0]),
+                    run_id=_meta(connection, "last_run_id", ""),
+                    event_type="RECOVERY_PRECLAIM_EXCLUDED",
+                    payload={
+                        "reason_code": "dispatched_queue_item_removed_before_claim",
+                        "previous_status": "DISPATCHED",
+                        "status": "EXCLUDED",
+                        "recovery_decision": "KEEP_NEEDS_REVIEW",
+                        "queue_item_present": False,
+                        "expected_media_mtime_ns": int(inflight[3]),
+                        "observed_media_mtime_ns": actual_mtime,
+                        "media_identity_matches": actual_mtime == int(inflight[3]),
+                        "new_claims": 0,
+                        "completion_verified": False,
+                    },
+                    now=timestamp,
+                )
+                return {
+                    "dispatched": False,
+                    "reason_code": "dispatched_queue_item_removed_before_claim",
+                    "recovery_id": str(inflight[0]),
+                    "status": "EXCLUDED",
+                }
         return {
             "dispatched": False,
-            "reason_code": "recovery_inflight",
+            "reason_code": (
+                "recovery_queue_identity_mismatch"
+                if queue is not None and int(queue[1]) != int(inflight[3])
+                else "recovery_inflight"
+            ),
             "recovery_id": str(inflight[0]),
             "status": str(inflight[1]),
         }
+    if lane_state == "CANARY_IN_FLIGHT":
+        return {"dispatched": False, "reason_code": "lane_canary_in_flight"}
     last_dispatch = float(_meta(connection, "last_dispatch_at", "0") or 0)
-    if lane_state == "ACTIVE" and timestamp < last_dispatch + max(
+    if lane_state in {"ACTIVE", "CANARY_READY"} and timestamp < last_dispatch + max(
         60, int(dispatch_interval_seconds or 0)
     ):
         return {"dispatched": False, "reason_code": "recovery_lane_cooldown"}
@@ -1604,7 +1675,14 @@ def settle_recovery_attempt(
         ),
     )
     if lane_state == "CANARY_IN_FLIGHT" and next_status != "SUCCEEDED":
-        _set_meta(connection, "lane_state", "PAUSED", timestamp)
+        # A local rejection or bounded retry must not permanently hold every
+        # unrelated recovery job. Stay in single-canary mode; admission still
+        # requires ARMED and the existing dispatch/retry interval.
+        _set_meta(
+            connection, "lane_state",
+            "PAUSED" if category == "PERMANENT_SYSTEM_ERROR" else "CANARY_READY",
+            timestamp,
+        )
     _record_event(
         connection,
         event_key=f"settled:{item['recovery_id']}:{delivery_attempt_id}",
@@ -1684,6 +1762,7 @@ def recovery_status(connection: sqlite3.Connection) -> dict[str, Any]:
         "recovered_from_checkpoint": checkpoint_success,
         "requeued_for_stage_retry": event_counts.get("RECOVERY_DISPATCHED", 0),
         "recovery_success": event_counts.get("RECOVERY_SUCCEEDED", 0),
+        "preclaim_excluded_count": event_counts.get("RECOVERY_PRECLAIM_EXCLUDED", 0),
         "recovery_failed": event_counts.get("RECOVERY_FAILED", 0)
         + event_counts.get("RECOVERY_NO_PROGRESS_BLOCKED", 0),
         "repeated_no_progress_blocked": status_counts.get("BLOCKED_NO_PROGRESS", 0),
