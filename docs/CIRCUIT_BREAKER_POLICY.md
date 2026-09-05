@@ -1,5 +1,18 @@
 # M2 Circuit Breaker Policy
 
+## Acceptance-only follow-up, 2026-09-05
+
+Read-only target validation, bounded source lookup, immutable-event inspection
+and documentation synchronization did not change runtime baseline or recreate
+the Gate. The b911 runtime was still `ARMED / runtime_baseline_match` and Gate
+`m2-gate-20260905T045640981079Z-08147de925` remained ACTIVE. Historical download
+dispositions and two observed recovery claims do not replace cohort members.
+An isolated `database is locked` retry and a source-selection NEEDS_REVIEW
+retained their existing budgets/checkpoints; neither was relabeled COMPLETED.
+The four missing-valid-subtitle targets remained source-blocked under current
+QC/dedup policy. No breaker thresholds, source decisions or claim protections
+were changed. Detailed acceptance boundaries are in M2_PRODUCTION_OBSERVATION.
+
 ## M2 download recovery boundary (2026-09-05)
 
 The final M2 runtime is Worker

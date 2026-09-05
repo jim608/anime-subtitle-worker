@@ -1,5 +1,31 @@
 # M2 Circuit Breaker Test Results
 
+## Acceptance follow-up without redeployment (2026-09-05)
+
+No code change, container restart, Gate rebuild, full audit or repeat full
+regression/fault-injection suite was performed. The preceding deployed-image
+7/7 result remains historical evidence for the unchanged b911 image, not a
+fresh test count from this follow-up. Runtime still reported ARMED and the
+same Gate remained ACTIVE.
+
+Bounded server evidence in
+`/logs/m2-recovery-acceptance-20260905T051642581908Z/` includes:
+
+- Full validation of the exact four unsuccessful and five old-completed
+  obligations (11 indexed target paths); 4/5 old completions have verified
+  existing formal subtitles, one has unresolved 6 versus 6.5 identity.
+- Four genuinely missing-valid-subtitle targets; existing QC rejects their
+  current content. Source discovery was reachable but selected no permitted
+  replacement. **New formal publications: 0; new-publication E2E NOT PASSED.**
+- Two subsequent M2 recovery claims with SUBTITLE_DETECTION start, heartbeat
+  and durable terminal/retry evidence; a complete checkpoint for the
+  quality-isolated case. No AI success or translation completion was credited.
+- Download source-search activity is separate; the earlier enqueue cycle is
+  still executing. No different next download/extraction claim was proven.
+- All checked source-file identities and existing subtitle hash sets stayed
+  unchanged. Source-video full checksums were not recomputed during this
+  read-only follow-up. No runtime/protection state was manually overridden.
+
 ## Latest deployed M2 download/recovery closeout (2026-09-05)
 
 - Worker runtime: `b911794ed0ec872cb475f714e1385e20e8ac4388`.

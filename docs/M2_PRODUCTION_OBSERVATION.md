@@ -1,5 +1,116 @@
 # M2 Production Observation
 
+## Bounded acceptance follow-up (2026-09-05, no runtime change)
+
+This follow-up accepts **partial repair and recovery started**, not a completely
+repaired download chain or Production acceptance. Evidence is retained under
+`/logs/m2-recovery-acceptance-20260905T051642581908Z/`. Only the preceding audit's
+fixed four unsuccessful obligations and five old completions were rechecked
+(11 exact indexed video paths, including two ambiguous pairs). No library or
+Queue re-audit was run. No Worker/WebUI code, QC, models, configuration, image,
+container or Gate was changed. The runtime remains Worker `b911794...`, WebUI
+`7bd36c3...`, `ARMED / runtime_baseline_match`, with the same ACTIVE Gate and
+baseline recorded below. Documentation synchronization does not redeploy it.
+
+### Real missing-output acceptance: BLOCKED, new Production subtitles = 0
+
+Four real targets, anonymous obligations `m2dl_9e2ac34428c091432381`,
+`m2dl_0e107117422ec1a044b0`, `m2dl_62b18022da8c630ffb2d` and
+`m2dl_606f48fc7c3811cb0e8e`, lack subtitles passing the existing full Traditional
+Chinese validation. Their existing subtitles were preserved. The first three
+parse but fail `insufficient_coverage`; the fourth also fails complete timestamp
+parsing. No threshold was relaxed and no invalid subtitle was replaced for a test.
+
+The one-series bounded lookup succeeded against Mikan (206 release records)
+and all six configured alternative providers (35 matched fallback records).
+Only 2/1/1/1 candidates respectively survived existing format/episode policy;
+the current selection returned no permitted source for any of the four after
+the existing failed/seen-source exclusions. This is **not a network outage**,
+nor proof that no usable subtitles can ever exist. Provider circuits were
+closed. Existing per-obligation backoff, failed hashes and source budgets stay
+intact; retry requires the next normal cycle and an eligible source, without
+re-adding the same failed resource. No bulk AI fallback was authorized.
+
+The only completed project torrent in the bounded qB snapshot was the earlier
+Dark Gathering sample, whose formal target already had valid subtitles. It
+was not reused to fabricate a new-publication pass. Consequently extraction
+through new formal publication, final-location re-read and duplicate-publication
+replay for a genuinely missing target remain **unverified**, not PASS. The
+current download set has not supplied an eligible new-publication case.
+
+### Exact four failures and five old completions
+
+| Frozen group | Reverification/disposition | New imports |
+| --- | --- | --- |
+| Four No-Rin obligations (episodes 1, 2, 3, 8) | Still `failed_candidate / find_replacement`; full validation rejects current subtitles as above; retain failed-source exclusions and bounded future discovery | 0 |
+| `m2dl_d33bd08cfffb12d1fce9` | BOFURI completed release explicitly identifies season 2; exact S02E10 formal subtitles pass parse and existing source QC (S01E10 was checked separately, not substituted) | 0 |
+| `m2dl_09eb5d97eb7c68f441c3` | Exact Selection Project S01E12 formal Traditional Chinese output reverified | 0 |
+| `m2dl_74a5c3e62a7de64c7ac9` | Exact Undead Murder Farce S01E13 formal Traditional Chinese output reverified | 0 |
+| `m2dl_0ad1e9abcdb7f6be54f4` | Exact I Want to End This Love Game S01E03 formal Traditional Chinese output reverified | 0 |
+| `m2dl_5c44d82d26a12657804a` | Still identity review: ledger episode 6 versus completed release 6.5. Regular E06 has valid output; special 6.5 does not. E06 cannot prove completion of 6.5 | 0 |
+
+Thus **4/5 old completions have current final-file availability/QC evidence;
+1/5 remains unsafe to reconcile**. This is not verification of the historical
+download's provenance or a new import. `target-reverification.json` retains
+every classifier, full parse/source-QC result, subtitle SHA-256 and video file
+identity before/after. All 11 target file identities and existing subtitle
+hash sets were unchanged. Full source-video hashing was not repeated in this
+read-only acceptance; no source or formal output was written.
+
+### Automatic claim evidence, split by lane
+
+The previous unclaimed Full Metal Panic canary was autonomously recorded as
+`RECOVERY_PRECLAIM_EXCLUDED` at `2026-09-05T05:17:06.280160Z`, with unchanged
+media identity, zero claims and no false completion. There were no remaining
+running deliveries for that exact path in the later bounded check.
+
+AI recovery now has **two real subsequent claims**, not merely dispatch:
+
+| Anonymous recovery | Dispatch / claim (UTC) | Actual stage, heartbeat and disposition |
+| --- | --- | --- |
+| `m2rec_0104be54ca1f75f715c7d8e622c2b49bb81add01a2a34311901b6499a1b5bf35` | 05:18:08.202955 / 05:23:42.550219 | SUBTITLE_DETECTION started 05:23:42.564939; heartbeat 05:23:56.672366; transient `database is locked`, existing bounded retry remains; no successful checkpoint or completion credited |
+| `m2rec_04ea5b7eba0f570717fc61b0031bb9ad1674df353ffdefa0560f856c0fde8f24` | 05:24:28.395641 / 05:24:28.959080 | SUBTITLE_DETECTION started 05:24:28.972935; heartbeat 05:24:31.803102; complete decision/checkpoint persisted; NEEDS_REVIEW / quality isolation, no false COMPLETED |
+
+The second automatic claim after the first disposition proves the recovery
+lane continues. `stage-evidence.json` preserves immutable dispatch/claim/settle
+events, attempt IDs, actual stage attempts, heartbeats, transitions and the
+checkpoint digest. Both used the unchanged b911 runtime. A single transient
+SQLite contention event is recorded, not treated as a reproduced scheduler
+defect and not bypassed by clearing a lock or rewriting state.
+
+Download continuation is **not equated with those AI claims**. The normal
+server Mikan source-search cycle remained actively processing indexed series
+through 05:33 UTC (timestamps in the single saved 2 MiB `app-window.log`);
+the historical replacement request still awaits that earlier enqueue cycle.
+Its retry time had elapsed, but the single enqueue worker had not returned to
+the request consumer. The explicit waiting reason is **previous source-enqueue
+cycle still executing**, with the existing six-lookup-per-cycle budget, not
+operator pause, deployment hold or a tripped breaker. No lock was cleared and
+no normal wait was skipped. The latest extraction lease/start/finish remains
+the earlier Dark Gathering job (04:00:05.945955–04:00:09.028567); a different
+subsequent download/extraction claim has **not** been demonstrated. Source
+search progress alone does not close that acceptance item.
+
+### Frozen 1,227 blocked obligations: disjoint routing groups
+
+These are the preceding audit's exact deduplicated keys, not a new scan.
+`frozen-keysets.json` retains all IDs and reasons; multiple historical stage
+reasons for one obligation must not be summed as additional jobs.
+
+| Route | Count | Trigger or explicit blocker |
+| --- | ---: | --- |
+| Existing source-backoff, potentially retryable | 356 | Eligible after persisted `no_candidate_until`, when normal enqueue cycle reaches the series; existing candidate and lookup budgets still apply. This historical classification is not proof all 356 sources are currently offline |
+| Proven unsuitable source, immediately eligible for a safe alternative | 0 | None of this frozen blocked subset has enough additional current evidence to promote it safely; the separate original 887 replacement targets must not be counted again |
+| Proven no usable ready-made subtitle, eligible for AI fallback | 0 | No conclusive source decision establishing this was obtained; missing historical download paths do not qualify |
+| Insufficient matching/identity evidence | 871 | 148 release-identity reviews + 325 ambiguous targets + 9 match reviews + 2 unindexed targets + 387 missing mappings; preserve review until trusted identity/mapping/index evidence is resolved, then existing policy may reassess |
+| **Total** | **1,227** | **No blanket Whisper, permanent media exclusion, or false completion** |
+
+The 871 review records have no claimed unconditional automatic-resume date:
+their blocker is missing trustworthy matching evidence. A suitable alternate
+source may help after identity is established; unavailable paths alone are
+not a permanent no-subtitle decision. No historical recovery total replaces a
+frozen cohort member. No Gate completion, M3, acceptance rate or SLO is claimed.
+
 ## Current M2 download/recovery closeout (2026-09-05)
 
 The deployed Worker is `b911794ed0ec872cb475f714e1385e20e8ac4388`; WebUI

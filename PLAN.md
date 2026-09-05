@@ -28,6 +28,11 @@ M2 translation quality, Translation Memory, full QC redesign and WebUI work are 
 
 ## M2 — Deterministic source analysis and durable decisions
 
+- [x] Perform bounded acceptance on the exact four unsuccessful and five old-completed download obligations without redeployment/Gate recreation: reverify four existing formal completions, retain one 6-versus-6.5 identity review, and preserve four failed-source/insufficient-subtitle cases without a false new-publication count.
+- [x] Prove two subsequent M2 recovery claims, SUBTITLE_DETECTION execution/heartbeats, safe local disposition and continued automatic claim; preserve the actual database-contention retry and source-quality review evidence separately from success.
+- [x] Freeze and document routing for the existing 1,227 blocked keys: 356 source-backoff and 871 unresolved identity/mapping/index records; zero newly proven ready-for-alternative or AI-fallback obligations in that blocked subset. Keep the separate 887 historical replacement targets and all recovery metrics outside Gate backfill.
+- [ ] Prove a different subsequent download/extraction claim and genuinely new formal subtitle publication: current source-enqueue cycle is still processing, and the four bounded missing-valid-subtitle cases have no permitted untried source. Preserve normal waiting, failed hashes, QC and existing formal outputs.
+
 - [x] Audit download/extraction/import history separately from AI recovery; verify qB authentication and actual mount parity with bounded server evidence.
 - [x] Repair four-digit episode parsing, partial queuedDL timeout handling, piece preservation, pre-publication subtitle validation and durable bounded replacement/backoff; pass 283 server candidate tests.
 - [x] Safely deploy the M2 download extension and recovery closeout as Worker `b911794ed0ec872cb475f714e1385e20e8ac4388`; pass 1,737 Worker and 229 WebUI tests, fresh 7/7 breakers, and attest ARMED without changing QC/models/configuration.
