@@ -74,6 +74,48 @@ def runtime_state_path(config: Any, override: str | Path | None = None) -> Path:
     return target
 
 
+def _set_durable_claim_control(
+    config: Any,
+    *,
+    paused: bool,
+    requested_by: str,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """Atomically persist the operator claim latch and verify the written state."""
+
+    timestamp = time.time() if now is None else float(now)
+    if not math.isfinite(timestamp) or timestamp <= 0:
+        raise RuntimeContractError("claim_control_timestamp_invalid")
+    payload = {
+        "paused": bool(paused),
+        "requested_at": _utc_timestamp(timestamp),
+        "updated_at": timestamp,
+        "requested_by": _safe_code(requested_by, "m2_guardrail_runtime"),
+    }
+    path = Path(str(config.work_path)) / "ai_control.json"
+    atomic_write_text(
+        path,
+        json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+    )
+    written = _read_json(path)
+    if (
+        not isinstance(written, Mapping)
+        or written.get("paused") is not bool(paused)
+        or float(written.get("updated_at") or 0) != timestamp
+    ):
+        raise RuntimeContractError("claim_control_persistence_failed")
+    if paused:
+        from m2_production_observation import require_durable_claim_pause
+
+        durable = require_durable_claim_pause(config)
+        return {**durable, "requested_by": str(payload["requested_by"])}
+    return {
+        "paused": False,
+        "updated_at": timestamp,
+        "requested_by": str(payload["requested_by"]),
+    }
+
+
 def configuration_fingerprint(config: Any) -> str:
     """Hash the complete effective config without publishing any config value."""
 
@@ -1022,6 +1064,246 @@ def _breaker_incident_sources(
     }
 
 
+def _prepare_pending_recovery_resume(
+    config: Any,
+    evidence: Mapping[str, Any],
+    *,
+    source_revision_file: str | Path,
+    state_path_override: str | Path | None,
+    now: float,
+) -> dict[str, Any]:
+    """Resume a verified recovery that stopped after reconciliation but before arm."""
+
+    if not bool(getattr(config, "m2_recovery_enabled", False)):
+        raise RuntimeContractError("m2_recovery_policy_not_loaded")
+    decision = _decision_descriptor(config)
+    local_status, reason_code = _local_guardrail_status(config, decision)
+    if local_status != "ARMED":
+        raise RuntimeContractError(reason_code, status=local_status)
+
+    worker_commit = _require_sha(evidence.get("worker_commit_sha"), "worker_commit")
+    _require_sha(evidence.get("webui_commit_sha"), "webui_commit")
+    expected_source = _require_source_revision(
+        evidence.get("worker_source_revision"), "worker"
+    )
+    _require_source_revision(evidence.get("webui_source_revision"), "webui")
+    if _read_source_revision(source_revision_file) != expected_source:
+        raise RuntimeContractError("worker_source_revision_mismatch")
+    if worker_runtime_code_revision(config) != _require_source_revision(
+        evidence.get("worker_runtime_code_revision"), "worker_runtime_code"
+    ):
+        raise RuntimeContractError("worker_runtime_code_revision_mismatch")
+    if configuration_fingerprint(config) != str(
+        evidence.get("configuration_fingerprint") or ""
+    ):
+        raise RuntimeContractError("configuration_fingerprint_mismatch")
+    if evidence.get("decision") != decision:
+        raise RuntimeContractError("decision_schema_mismatch")
+    live_instance = worker_runtime_instance_fingerprint(config)
+    if live_instance["container_identity"] != _require_container_identity(
+        evidence.get("worker_container_identity"), "worker"
+    ):
+        raise RuntimeContractError("worker_container_identity_mismatch")
+    if live_instance["runtime_instance_fingerprint"] != str(
+        evidence.get("worker_runtime_instance_fingerprint") or ""
+    ):
+        raise RuntimeContractError("worker_runtime_instance_mismatch")
+    runtime_checks = evidence.get("runtime_checks")
+    if not isinstance(runtime_checks, Mapping) or any(
+        runtime_checks.get(key) is not True
+        for key in (
+            "worker_container_running",
+            "webui_container_running",
+            "worker_config_mount_readonly",
+            "worker_command_uses_config",
+            "worker_config_unchanged_since_start",
+        )
+    ):
+        raise RuntimeContractError("runtime_container_contract_unproven")
+    fault_results = evidence.get("fault_results")
+    if (
+        not isinstance(fault_results, Mapping)
+        or fault_results.get("contract") != FAULT_RESULT_CONTRACT
+        or int(fault_results.get("passed_count") or 0) != len(REQUIRED_BREAKERS)
+        or int(fault_results.get("required_count") or 0) != len(REQUIRED_BREAKERS)
+        or fault_results.get("worker_source_revision") != expected_source
+        or fault_results.get("production_resources_affected") is not False
+    ):
+        raise RuntimeContractError("recovery_fault_evidence_invalid")
+
+    root_cause = evidence.get("root_cause")
+    if not isinstance(root_cause, Mapping):
+        raise RuntimeContractError("recovery_root_cause_missing")
+    expected_reason = _safe_code(
+        root_cause.get("breaker_reason"), "recovery_reason_missing"
+    )
+    affected_stage = _safe_code(root_cause.get("affected_stage"), "stage_missing")
+    failure_code = _safe_code(root_cause.get("failure_code"), "failure_code_missing")
+    expected_old_gate = str(root_cause.get("expected_old_gate_id") or "")
+    if expected_reason != "repeated_identical_stage_failure" or not expected_old_gate:
+        raise RuntimeContractError("pending_recovery_root_cause_mismatch")
+    from m2_production_recovery import breaker_streak_eligible, classify_failure
+
+    if classify_failure(affected_stage, failure_code) != "QUALITY_BLOCKED" or breaker_streak_eligible(
+        {
+            "terminal_status": "RETRYING",
+            "stage": affected_stage,
+            "error_code": failure_code,
+        }
+    ):
+        raise RuntimeContractError("breaker_root_cause_fix_not_loaded")
+
+    state_path = runtime_state_path(config, state_path_override)
+    prior_runtime = load_runtime_state(config, state_path_override)
+    if not isinstance(prior_runtime, dict) or prior_runtime.get("status") not in {
+        "DISARMED",
+        "ARMED",
+    }:
+        raise RuntimeContractError("pending_recovery_runtime_state_missing")
+    if prior_runtime.get("status") == "DISARMED" and prior_runtime.get("disarm_reason") != (
+        "controlled_breaker_recovery_pending_new_gate"
+    ):
+        raise RuntimeContractError("pending_recovery_runtime_state_invalid")
+
+    breaker_path = Path(
+        str(getattr(config, "m2_server_canary_circuit_breaker_state_path", ""))
+    )
+    if not breaker_path.is_absolute():
+        breaker_path = Path(config.work_path) / breaker_path
+    breaker = _read_json(breaker_path)
+    breaker_record = breaker.get("recovery_record") if isinstance(breaker, Mapping) else None
+    if (
+        not isinstance(breaker, dict)
+        or breaker.get("tripped") is not False
+        or not isinstance(breaker_record, Mapping)
+        or breaker_record.get("contract") != BREAKER_RECOVERY_CONTRACT
+    ):
+        raise RuntimeContractError("pending_recovery_breaker_record_invalid")
+    recovery_record_id = str(breaker_record.get("recovery_record_id") or "")
+    if not recovery_record_id.startswith("m2breakerrec_"):
+        raise RuntimeContractError("pending_recovery_record_id_invalid")
+    if str(breaker_record.get("old_gate_id") or "") != expected_old_gate:
+        raise RuntimeContractError("pending_recovery_old_gate_mismatch")
+    original_new_worker_sha = _require_sha(
+        breaker_record.get("new_worker_sha"), "pending_recovery_worker"
+    )
+    state_record = prior_runtime.get("recovery_record")
+    if isinstance(state_record, Mapping) and (
+        state_record.get("contract") != BREAKER_RECOVERY_CONTRACT
+        or str(state_record.get("recovery_record_id") or "") != recovery_record_id
+    ):
+        raise RuntimeContractError("pending_recovery_state_record_mismatch")
+
+    expected_log_digest = str(
+        (state_record.get("log_sha256") if isinstance(state_record, Mapping) else "")
+        or breaker_record.get("log_sha256")
+        or ""
+    )
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", expected_log_digest):
+        raise RuntimeContractError("pending_recovery_log_digest_invalid")
+    log_root = Path(str(getattr(config, "log_path", config.work_path)))
+    candidates = [
+        path
+        for path in log_root.glob(
+            f"m2-production-recovery-*-{recovery_record_id[-8:]}.json"
+        )
+        if not path.name.startswith("m2-production-recovery-resume-")
+    ]
+    if len(candidates) != 1 or "sha256:" + sha256_file(candidates[0]) != expected_log_digest:
+        raise RuntimeContractError("pending_recovery_log_unavailable")
+    recovery_log = _read_json(candidates[0])
+    if (
+        not isinstance(recovery_log, Mapping)
+        or recovery_log.get("contract") != BREAKER_RECOVERY_CONTRACT
+        or recovery_log.get("recovery_record_id") != recovery_record_id
+        or recovery_log.get("old_gate_id") != expected_old_gate
+        or recovery_log.get("new_worker_sha") != original_new_worker_sha
+        or recovery_log.get("production_resources_affected") is not False
+    ):
+        raise RuntimeContractError("pending_recovery_log_invalid")
+
+    from m2_observation_store import INVALIDATED_RUNTIME, active_gate, gate_by_id
+    from scan_state import ScanStateStore
+
+    store = ScanStateStore.from_config(config)
+    try:
+        old_gate = gate_by_id(store.observation_connection, expected_old_gate)
+        if not isinstance(old_gate, Mapping) or old_gate.get("status") != INVALIDATED_RUNTIME:
+            raise RuntimeContractError("pending_recovery_old_gate_not_invalidated")
+        current_active = active_gate(store.observation_connection)
+        if prior_runtime.get("status") == "DISARMED" and current_active is not None:
+            raise RuntimeContractError("pending_recovery_unexpected_active_gate")
+        if prior_runtime.get("status") == "ARMED":
+            current_gate_id = str((prior_runtime.get("gate") or {}).get("gate_id") or "")
+            if not isinstance(current_active, Mapping) or current_active.get("gate_id") != current_gate_id:
+                raise RuntimeContractError("pending_recovery_active_gate_mismatch")
+    finally:
+        store.close()
+
+    claim_pause = _set_durable_claim_control(
+        config,
+        paused=True,
+        requested_by="m2-controlled-breaker-recovery",
+        now=now,
+    )
+    resume_evidence = {
+        "contract": "m2-controlled-breaker-recovery-resume-v1",
+        "recovery_record_id": recovery_record_id,
+        "prepared_at": _utc_timestamp(now),
+        "prepared_at_epoch": now,
+        "old_gate_id": expected_old_gate,
+        "original_recovery_worker_sha": original_new_worker_sha,
+        "completion_worker_sha": worker_commit,
+        "durable_claim_pause": claim_pause,
+        "production_resources_affected": False,
+    }
+    stamp = datetime.fromtimestamp(now, tz=timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    resume_log_path = log_root / (
+        f"m2-production-recovery-resume-{stamp}-{recovery_record_id[-8:]}.json"
+    )
+    atomic_write_text(
+        resume_log_path,
+        json.dumps(resume_evidence, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+    )
+    completion = {
+        "worker_sha": worker_commit,
+        "prepared_at_epoch": now,
+        "log_sha256": "sha256:" + sha256_file(resume_log_path),
+    }
+    updated_breaker = dict(breaker)
+    updated_breaker_record = dict(breaker_record)
+    updated_breaker_record["completion"] = completion
+    updated_breaker["recovery_record"] = updated_breaker_record
+    updated_breaker["updated_at"] = now
+    atomic_write_text(
+        breaker_path,
+        json.dumps(updated_breaker, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+    )
+    if prior_runtime.get("status") == "DISARMED" and isinstance(state_record, Mapping):
+        updated_runtime = dict(prior_runtime)
+        updated_state_record = dict(state_record)
+        updated_state_record["completion"] = completion
+        updated_runtime["recovery_record"] = updated_state_record
+        atomic_write_text(
+            state_path,
+            json.dumps(updated_runtime, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        )
+    return {
+        "status": "DISARMED",
+        "recovery_record_id": recovery_record_id,
+        "old_worker_sha": str(recovery_log.get("old_worker_sha") or ""),
+        "new_worker_sha": worker_commit,
+        "old_gate_id": expected_old_gate,
+        "old_gate_status": "INVALIDATED_BY_RUNTIME_CHANGE",
+        "breaker_before": "TRIPPED",
+        "breaker_after": "ARMED_PENDING_NEW_GATE",
+        "log_path": str(resume_log_path),
+        "log_sha256": completion["log_sha256"],
+        "reconciliation": recovery_log.get("reconciliation"),
+        "production_resources_affected": False,
+    }
+
+
 def recover_runtime_local(
     config: Any,
     evidence: Mapping[str, Any],
@@ -1040,6 +1322,14 @@ def recover_runtime_local(
     decision = _decision_descriptor(config)
     local_status, reason_code = _local_guardrail_status(config, decision)
     if local_status != "TRIPPED":
+        if local_status == "ARMED":
+            return _prepare_pending_recovery_resume(
+                config,
+                evidence,
+                source_revision_file=source_revision_file,
+                state_path_override=state_path_override,
+                now=timestamp,
+            )
         raise RuntimeContractError("breaker_not_tripped", status=local_status)
     if reason_code != "circuit_breaker_tripped":
         raise RuntimeContractError("breaker_status_unexpected", status=local_status)
@@ -1141,6 +1431,12 @@ def recover_runtime_local(
     expected_old_gate = str(root_cause.get("expected_old_gate_id") or "")
     if expected_old_gate and str(prior_gate.get("gate_id") or "") != expected_old_gate:
         raise RuntimeContractError("prior_gate_identity_mismatch")
+    claim_pause = _set_durable_claim_control(
+        config,
+        paused=True,
+        requested_by="m2-controlled-breaker-recovery",
+        now=timestamp,
+    )
 
     breaker_path = Path(
         str(getattr(config, "m2_server_canary_circuit_breaker_state_path", ""))
@@ -1297,6 +1593,7 @@ def recover_runtime_local(
             "source_identity_preserved": True,
             "formal_output_identity_preserved": True,
             "production_resources_affected": False,
+            "durable_claim_pause": claim_pause,
             "before": before,
             "after": after,
             "incident": incident,
@@ -1387,6 +1684,57 @@ def recover_runtime_local(
     }
 
 
+def resume_claims_local(
+    config: Any,
+    *,
+    source_revision_file: str | Path = "/app/.source-revision",
+    state_path_override: str | Path | None = None,
+    now: float | None = None,
+) -> dict[str, Any]:
+    """Release the durable operator pause only after the new Gate is ARMED."""
+
+    timestamp = time.time() if now is None else float(now)
+    status = runtime_guardrail_status(
+        config,
+        source_revision_file=source_revision_file,
+        state_path_override=state_path_override,
+    )
+    if status.get("status") != "ARMED" or status.get("reason_code") != (
+        "runtime_baseline_match"
+    ):
+        raise RuntimeContractError(
+            str(status.get("reason_code") or "runtime_not_armed_for_claim_resume"),
+            status=str(status.get("status") or "DEGRADED"),
+        )
+    state = status.get("state")
+    gate = state.get("gate") if isinstance(state, Mapping) else None
+    gate_id = str(gate.get("gate_id") or "") if isinstance(gate, Mapping) else ""
+    if not gate_id:
+        raise RuntimeContractError("claim_resume_gate_missing")
+    from m2_production_observation import public_status
+
+    observation = public_status(config)
+    if (
+        observation.get("status") != "ARMED"
+        or observation.get("gate_status") != "ACTIVE"
+        or observation.get("gate_id") != gate_id
+    ):
+        raise RuntimeContractError("claim_resume_observation_not_ready")
+    control = _set_durable_claim_control(
+        config,
+        paused=False,
+        requested_by="m2-controlled-breaker-recovery-complete",
+        now=timestamp,
+    )
+    return {
+        "status": "ARMED",
+        "claims_resumed": True,
+        "gate_id": gate_id,
+        "gate_progress": str(observation.get("gate_progress") or "0/20"),
+        "claim_control": control,
+    }
+
+
 def recover_runtime_on_host(
     *,
     docker_binary: str,
@@ -1465,8 +1813,13 @@ def recover_runtime_on_host(
         run,
         "worker_recovery_probe_failed",
     )
-    if probe_result.get("status") != "TRIPPED":
-        raise RuntimeContractError("worker_breaker_not_tripped")
+    probe_status = str(probe_result.get("status") or "DEGRADED")
+    if probe_status not in {"TRIPPED", "ARMED"}:
+        raise RuntimeContractError("worker_breaker_not_recoverable", status=probe_status)
+    if probe_status == "ARMED" and probe_result.get("reason_code") != (
+        "runtime_guardrails_loaded"
+    ):
+        raise RuntimeContractError("pending_recovery_runtime_probe_invalid")
     if probe_result.get("worker_source_revision") != worker_source_revision:
         raise RuntimeContractError("worker_source_revision_mismatch")
     if (
@@ -1565,6 +1918,29 @@ def recover_runtime_on_host(
         run,
         "recovery_canary_dispatch_failed",
     )
+    resume_command = [
+        docker_binary,
+        "exec",
+        worker_name,
+        "python",
+        "/app/m2_guardrail_runtime.py",
+        "resume-local",
+        "--config",
+        worker_config_path,
+        "--source-revision-file",
+        worker_source_revision_file,
+    ]
+    if runtime_state_path_override:
+        resume_command.extend(["--state-path", runtime_state_path_override])
+    claim_resume = _run_json(
+        resume_command,
+        run,
+        "claim_resume_failed",
+    )
+    if claim_resume.get("status") != "ARMED" or claim_resume.get(
+        "claims_resumed"
+    ) is not True:
+        raise RuntimeContractError("claim_resume_incomplete")
     return {
         **armed,
         "breaker_before": "TRIPPED",
@@ -1574,6 +1950,7 @@ def recover_runtime_on_host(
         "recovery_log_sha256": str(recovered.get("log_sha256") or ""),
         "reconciliation": recovered.get("reconciliation"),
         "recovery_dispatch": dispatch,
+        "claim_resume": claim_resume,
     }
 
 
@@ -2020,6 +2397,15 @@ def _run_command(
     except (OSError, subprocess.SubprocessError) as exc:
         raise RuntimeContractError(reason_code) from exc
     if result.returncode != 0:
+        try:
+            child = json.loads(result.stdout)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            child = None
+        if isinstance(child, Mapping) and child.get("reason_code"):
+            raise RuntimeContractError(
+                str(child.get("reason_code")),
+                status=str(child.get("status") or "DEGRADED"),
+            )
         raise RuntimeContractError(reason_code)
     return result
 
@@ -2230,6 +2616,10 @@ def _parser() -> argparse.ArgumentParser:
     recover_local.add_argument("--config", required=True)
     recover_local.add_argument("--source-revision-file", required=True)
     recover_local.add_argument("--state-path", default="")
+    resume_local = subparsers.add_parser("resume-local", help=argparse.SUPPRESS)
+    resume_local.add_argument("--config", required=True)
+    resume_local.add_argument("--source-revision-file", required=True)
+    resume_local.add_argument("--state-path", default="")
     return parser
 
 
@@ -2276,6 +2666,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 source_revision_file=args.source_revision_file,
                 fault_summary_path=args.fault_summary,
                 fault_summary_not_before_epoch=args.fault_not_before_epoch,
+            )
+        elif args.command == "resume-local":
+            from config import load_config
+
+            result = resume_claims_local(
+                load_config(args.config),
+                source_revision_file=args.source_revision_file,
+                state_path_override=args.state_path or None,
             )
         else:
             from config import load_config

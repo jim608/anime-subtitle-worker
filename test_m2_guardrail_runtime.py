@@ -780,6 +780,29 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
                 Path(self.temp.name) / "outside.json",
             )
 
+    def test_child_runtime_reason_is_preserved_without_unbounded_output(self) -> None:
+        def runner(
+            command: list[str], stdin: str | None, timeout: float
+        ) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(
+                command,
+                2,
+                json.dumps(
+                    {"status": "DEGRADED", "reason_code": "ai_claims_not_paused"}
+                ),
+                "ignored child detail",
+            )
+
+        with self.assertRaisesRegex(
+            runtime.RuntimeContractError, "ai_claims_not_paused"
+        ) as raised:
+            runtime._run_command(
+                ["docker", "exec", "worker"],
+                runner,
+                reason_code="generic_child_failure",
+            )
+        self.assertEqual(raised.exception.reason_code, "ai_claims_not_paused")
+
 
 class M2ControlledRecoveryTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -937,6 +960,16 @@ class M2ControlledRecoveryTests(unittest.TestCase):
                 "identical_failure_streak": 3,
             },
         )
+        (self.work / "ai_control.json").write_text(
+            json.dumps(
+                {
+                    "paused": False,
+                    "updated_at": time.time(),
+                    "requested_by": "deployment-restore",
+                }
+            ),
+            encoding="utf-8",
+        )
         state.close()
         evidence = self._evidence("2" * 40, time.time())
         evidence["root_cause"] = {
@@ -955,6 +988,11 @@ class M2ControlledRecoveryTests(unittest.TestCase):
         self.assertEqual(result["status"], "DISARMED")
         self.assertEqual(result["breaker_before"], "TRIPPED")
         self.assertFalse(observation.circuit_breaker_active(self.config))
+        self.assertTrue(
+            json.loads((self.work / "ai_control.json").read_text(encoding="utf-8"))[
+                "paused"
+            ]
+        )
         persisted = runtime.load_runtime_state(self.config)
         self.assertEqual(persisted["status"], "DISARMED")
         reopened = ScanStateStore(Path(self.config.scanner_state_path))
@@ -981,6 +1019,34 @@ class M2ControlledRecoveryTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(formal.read_bytes()).hexdigest(), formal_digest)
         self.assertTrue(Path(result["log_path"]).is_file())
         self.assertFalse(result["production_resources_affected"])
+
+        resume_evidence = dict(evidence)
+        resume_evidence["worker_commit_sha"] = "3" * 40
+        pending = runtime.recover_runtime_local(
+            self.config,
+            resume_evidence,
+            source_revision_file=self.revision,
+        )
+        self.assertEqual(pending["recovery_record_id"], result["recovery_record_id"])
+        self.assertEqual(pending["old_gate_id"], old_gate)
+        self.assertEqual(pending["new_worker_sha"], "3" * 40)
+        self.assertTrue(Path(pending["log_path"]).is_file())
+        new_runtime = runtime.initialize_gate(
+            self.config,
+            resume_evidence,
+            source_revision_file=self.revision,
+        )
+        self.assertEqual(new_runtime["status"], "ARMED")
+        resumed = runtime.resume_claims_local(
+            self.config,
+            source_revision_file=self.revision,
+        )
+        self.assertTrue(resumed["claims_resumed"])
+        self.assertFalse(
+            json.loads((self.work / "ai_control.json").read_text(encoding="utf-8"))[
+                "paused"
+            ]
+        )
 
 
 if __name__ == "__main__":
