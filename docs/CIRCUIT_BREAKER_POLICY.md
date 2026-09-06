@@ -1,5 +1,23 @@
 # M2 Circuit Breaker Policy
 
+## Verified owned deployment mode (2026-09-06 22:40 UTC)
+
+The existing safe updater now supports optional `RECONCILIATION_HOLD_ID`.
+It verifies the matching durable paused reconciliation hold before maintenance
+and at scheduler closeout. `deployment_hold` is accepted only with that verified
+ownership and healthy Worker/heartbeat checks; the updater does not release
+reconciliation admission. Failure after retiring containers preserves current
+databases/images/checkpoints and protection, reports nonzero, and does not run
+the legacy Production database rollback. Normal deployment mode is unchanged.
+
+This mode was applied with `m2-recon-sidecar-20260906`; formal controlled recovery,
+not the deployer or direct state edits, then resumed admission. All prior 60
+holds survived and three newly changed Queue identities were additionally held.
+Runtime is ARMED on Worker `d508b599291978cc5f6ab786c560823ea755e249` and frozen
+baseline `m2-guardrail-v1:4909e2dd94c41ae93f96a169`. Earlier receipts and the
+UNKNOWN historical continuity evidence are retained. See the observation
+closeout for actual identity, Gate and immutable evidence paths.
+
 ## Applied authorization record (2026-09-06)
 
 `m2-recon-20260906-b92a61f` applied the policy below: 27 UNKNOWN revisions,

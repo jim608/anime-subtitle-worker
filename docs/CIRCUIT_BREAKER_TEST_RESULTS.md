@@ -1,5 +1,25 @@
 # M2 Circuit Breaker Test Results
 
+## Actual sidecar-discovery image and handoff (2026-09-06 22:40 UTC)
+
+Worker `d508b599291978cc5f6ab786c560823ea755e249`, WebUI
+`175a02a7bad46e0b6fa2372c59f39e8dd272911e`: safe-update **1,874 Worker + 231
+WebUI tests PASS**; immutable actual-image targeted suite **94 PASS**.
+Fresh post-reconciliation breaker injection **7/7 PASS**, Production resources
+affected false. Full FI:
+`/logs/m2-guardrail-fi-20260906T223959047915Z-8166f43b/{result.json,events.jsonl}`.
+Owned deployment mode additionally passed **9 server-isolated shell/probe tests**.
+The source fix reproduced the real MP4 Chinese-external rejection, passed local
+48 targeted tests and the 305-test server candidate suite, followed by the final
+actual-image/safe-update suites including the extra negative regression.
+
+Server evidence:
+`/logs/m2-recovery-unblock-20260905T064508843990Z/external-sidecar-handoff-20260906/`.
+Actual checks: 63 publication guards blocked, zero held-source claims; formal
+controlled recovery ARMED; real unheld Queue claim with completed source-decision
+checkpoint and subsequent ASR. Real source metadata selection is not a verified
+download or subtitle publication. No first-20 acceptance is asserted.
+
 ## Authorized runtime closeout (2026-09-06)
 
 Worker `b92a61fe086bb0cb48aef46f9b9efd967d33d969` is actually deployed.

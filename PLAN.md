@@ -1,15 +1,25 @@
 # Incremental Delivery Plan
 
-## External-sidecar discovery repair (2026-09-06; candidate, not deployed)
+## External-sidecar discovery repair (2026-09-06; deployed, bounded source acceptance ongoing)
 
 - [x] Real source metadata reproduces rejection of MP4 releases explicitly carrying Chinese external subtitles.
 - [x] Minimal discovery-hint repair; no QC, parser, model, source identity or publication policy relaxation.
 - [x] Local48 source/matcher/fairness tests; server-isolated305 shared-boundary tests before the final extra negative regression.
 - [x] Real primary-source replay selects new hashes for No-Rin E1/E2/E3 without resetting failed/seen; E8 remains excluded.
-- [ ] Safe controlled runtime handoff preserving60 existing source holds and original evidence.
+- [x] Safe controlled runtime handoff preserving60 existing source holds and original evidence;3 new Queue identity changes additionally held.
 - [ ] Real representative download/extraction/QC/publication or bounded explicit source failure.
 
-Current actual runtime remains b92a61fe086bb0cb48aef46f9b9efd967d33d969 until new deployment attestation.
+Bounded post-deploy source check: No-Rin E1 request persisted, qB connection-reset
+retry recorded, but no actual torrent/extraction claim after the retry timestamp
+was observed. Counts remain0/0/0; end-to-end download acceptance is outstanding.
+Do not mark it complete based on request acceptance. Normal AI claim/checkpoint
+is verified separately; do not wait for full AI/backlog/Gate completion here.
+
+Actual Worker d508b599291978cc5f6ab786c560823ea755e249; WebUI175a02a7bad46e0b6fa2372c59f39e8dd272911e.
+Safe-update1874/231 PASS, actual-image94 PASS, fresh breakers7/7 PASS.
+Reconciliation m2-recon-sidecar-20260906:63 holds,7139 recoverable Queue identities,6863 other retained states.
+ARMED Gate m2-gate-20260906T224005061938Z-5b93117971 initialized0/20 with no backfill.
+Real unheld normal Queue claim, source-decision checkpoint and ASR verified; no new subtitle counted for that claim.
 Source metadata fixtures/replay: `/logs/m2-recovery-unblock-20260905T064508843990Z/external-sidecar-isolated-20260906T173812862585Z.json`.
 The prior5 recorded completions remain unresolved:2 identity ambiguities and3 unique targets without validated official TC;
 all5 source torrents absent in the bounded exact query. This is not proof of permanent source unavailability.

@@ -1,5 +1,91 @@
 # M2 Production Observation
 
+## External-sidecar runtime handoff (2026-09-06 22:40 UTC)
+
+Worker runtime: `d508b599291978cc5f6ab786c560823ea755e249`; WebUI runtime:
+`175a02a7bad46e0b6fa2372c59f39e8dd272911e`. Worker image:
+`sha256:e3c7565294685226fe0f6151cbcf389a6961f733afeeec716ce5586e39a12491`.
+Configuration remains `sha256:355300b197164801be4616a688d852c1b8b5274fe91e91e40a2a21f12a3c4dbc`;
+decision schema 1. Source discovery now recognizes explicitly Chinese external
+subtitles in MP4 releases; parsing, QC, source identity, models and publication
+policy are unchanged. WebUI changes are confined to safe deployment handling.
+
+Safe deployment `20260906T223600Z-3694121` completed with exit 0, a verified
+consistent backup and no Production DB rollback. Formal recovery record
+`m2breakerrec_7dd01725fdd34748afba86fe51c2b487` restored ARMED and resumed claims.
+Reconciliation `m2-recon-sidecar-20260906` has receipt
+`/logs/m2-reconciliation-m2-recon-sidecar-20260906.json`, SHA256
+`11fd97e30162ea52e03498df7dc85526c658219e60e5e05de16ec2ad69de992e`.
+It links `/logs/m2-planned-runtime-change-external-sidecar-20260906.json` and
+ancestor `m2-recon-20260906-b92a61f`, retaining the original failed receipt/Gate.
+Historical preservation is still UNPROVEN; this is a new current-state boundary.
+
+All prior 60 holds remain byte-for-byte intact: 27 UNKNOWN revisions, 24 pending
+removals and 9 unproven arrivals. Three additional existing Queue identities
+changed during handoff; all three were classified PENDING_REVIEW and held, not
+absorbed. Total holds **63**; verified Queue-identity recovery scope **7,139**;
+other retained states **6,863**. These are not delivery counts or full-library
+content attestations. The runtime publication guard rejected all 63, with zero
+post-Gate claims on held paths. Old receipt digest verification passed.
+
+New frozen Gate `m2-gate-20260906T224005061938Z-5b93117971` started
+`2026-09-06T22:40:05.061938Z` at **0/20**, baseline
+`m2-guardrail-v1:4909e2dd94c41ae93f96a169`. The prior Gate was invalidated by
+actual runtime change through the admission validator. No old member/result was
+transferred. First-20 selection, failure retention and no-backfill policy remain
+unchanged; neither Gate completion nor M2_PRODUCTION_ACCEPTED is claimed.
+
+Actual normal Queue claim `aiatt_e7611fa33db9fc19d53a5be32726c0f36edd5efa8fa1870e9cabceb1b47bcd29`
+for anonymous obligation `aiobl_0fc295150f45861965387be3b785972a099e522d544582196f98026596f3e69c`
+started at epoch `1788734438.6192768`. Source size/mtime matched and it was not
+held. SUBTITLE_DETECTION completed with heartbeat and a digest-valid decision
+checkpoint (`f9b6d44d010432cded2df41475440489d4bfd868498d162df93aee589fe11e55`);
+subsequent ASR was RUNNING. Empty in-progress ASR checkpoints are not reported as
+verified checkpoints. Historical recovery remains under the existing autonomous
+server loop and safety concurrency, not a Codex retry loop.
+
+Full evidence directory:
+`/logs/m2-recovery-unblock-20260905T064508843990Z/external-sidecar-handoff-20260906/`:
+`recovery-closeout.json`, `attestation.json`, `prepared-reconciliation.json`,
+`safe-deploy.log`, `actual-image-tests.log`, and
+`runtime-proof-20260906T224236462292Z.json`.
+
+### Bounded source-case result and remaining acceptance
+
+Anonymous download obligation `m2dl_9e2ac34428c091432381` (the existing No-Rin
+E1 failure) has a unique indexed season/episode target and no validated TC under
+the existing import validator. Its original video SHA256
+`0250f4914392b06d6423f2c3c9d8ae8d254841afd5591ed2822d5086f2caa180`
+and existing subtitle hashes were saved before recovery. Source size/mtime stayed
+unchanged. The existing replacement entry point respected a busy Queue lock and
+retained the request; no failed/seen reset or direct qB addition occurred.
+
+The exact-hash check after the existing retry timestamp found no torrent and no
+extraction job for `3cd450ac6bde916586f7144dd3f5bbb1601c624b`. The persisted request
+still contains this target, with a recorded qB `ConnectionResetError`, retry 1
+and `next_retry_at=1788734776.279922`. At the check that timestamp had elapsed,
+but source dispatch had not yet been observed; it is not reported as a completed
+retry or proven new automatic download claim. Existing source-loop retry and
+bounded discovery mechanisms remain responsible for continuation. No lock,
+retry timestamp, resource limit or protection was bypassed to produce acceptance.
+
+This handoff therefore records **0 new downloads, 0 new extractions and 0 new
+formal subtitle deliveries** from this case. The earlier independently verified
+AI delivery remains separate and is not a download-chain result. End-to-end
+download acceptance is still unverified, not silently upgraded to PASS.
+Likewise the new runtime's normal Queue claim is proven; a new historical
+recovery-lane claim has not yet been observed while the normal job occupies the
+existing processing slot. Earlier b92 recovery and autonomous-next-claim evidence
+is retained as earlier evidence, not relabeled with this new runtime SHA.
+
+Case evidence: `source-case-result-1788734472458182454.json`,
+`source-status-1788734840286545772.json` in the directory above. Original evidence
+was independently checked again in
+`../authorized-reconciliation-b92a61f/final-boundary-1788734749.290652.json`:
+old Gate and all four members unchanged, original backup present, zero held
+claims since isolation; work/log disk free 1,963,848,638,464 bytes.
+No full backlog or 20-job Gate wait was performed. M3 was not started.
+
 ## Authorized reconciliation production closeout (2026-09-06 16:35 UTC)
 
 Actual Worker: `b92a61fe086bb0cb48aef46f9b9efd967d33d969`.
