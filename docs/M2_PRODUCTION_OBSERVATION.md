@@ -1,5 +1,86 @@
 # M2 Production Observation
 
+## Authorized reconciliation production closeout (2026-09-06 16:35 UTC)
+
+Actual Worker: `b92a61fe086bb0cb48aef46f9b9efd967d33d969`.
+WebUI: `7bd36c30fb07e393eba71760a164246d267c5b16` (unchanged).
+Worker image: `sha256:84309dd39a38869ccf7f56444632a92dff073c2875b8993e42c30b7aaafaff40`.
+Container: `3410f72e7b6854f56aba353c98dd9d4d241238a63c5302ccf7e66fa4f590e7f4`.
+Configuration: `sha256:355300b197164801be4616a688d852c1b8b5274fe91e91e40a2a21f12a3c4dbc`.
+Decision schema: `1`; eligibility policy: `m2-frozen-first-20-v1`.
+
+New record `m2-recon-20260906-b92a61f` is exported at
+`/logs/m2-reconciliation-m2-recon-20260906-b92a61f.json`, SHA256
+`1808696d245904545f16b83c9bdd5e2484ea6beb4f0672eaffafb0f03f50c15d`.
+It links the explicit user authorization and original failed receipt
+`/logs/m2-planned-runtime-change-parser-boundary-20260905T1416.json`
+(`0b22223e9ed9cc1f51c129cc73cff198756e971a69c9a81067935872ce0bbc29`).
+Historical preservation remains **UNPROVEN**. The original receipt, original
+invalidated Gate and its four members, and original database backup remain intact.
+
+Disposition at the sealed boundary:
+
+- 27 UNKNOWN source revisions: logically quarantined, no media moved or edited.
+- 24 unexplained Queue removals: persistent pending obligations, not completed.
+- 9 new members lacking sufficient evidence: pending and held.
+- 473 new scanner admissions: current file/index size and mtime evidence matched.
+- Total source holds: **60**. Verified Queue-identity recovery scope: **7,191**;
+  other retained states/retry/lease obligations: **6,807**. These counts are not
+  full-content checksum attestations for all media or guaranteed subtitle successes.
+- Runtime checks: all 60 publication guards reject; zero claims for held paths
+  since isolation. Related job/obligation/recovery IDs are preserved in the proof.
+
+Controlled recovery record `m2breakerrec_c63e6bb174154521bf0bf94340a2f09d`
+retired the latch through the formal recovery flow and resumed admission.
+Runtime was rechecked **ARMED**; new Gate
+`m2-gate-20260906T115457465856Z-a0ccafa2ff`, baseline
+`m2-guardrail-v1:5777c0c5ec237c4b07cb56b4`, started
+`2026-09-06T11:54:57.465856Z` at **0/20**, subsequently observed ACTIVE.
+No old cohort member/result was copied. No Gate completion or acceptance is claimed.
+
+Safe deployment `20260906T113802Z-327718` finished with exit 0. Its final scheduler
+check initially waited because reconciliation hold was reported as deployment hold.
+The exact deployment shell was temporarily stopped to prevent the legacy timeout
+rollback, then continued after formal recovery; the same safe-update invocation
+completed. No lock/latch was deleted manually and no database rollback occurred.
+This sequencing issue is recorded, not disguised as a new runtime-code fix.
+
+Real post-boundary evidence (not merely queued): recovery obligation
+`aiobl_24e089cf35a00c13530694a8a8eab18e0a7f1e34c18c80ea94ca51783d2e9285`
+was claimed, entered SUBTITLE_DETECTION, persisted a matching checkpoint digest
+and heartbeat, then correctly settled to review. The next recovery obligation
+`aiobl_46446ba1ff6a863eb341216525aeaa6243073e4695c2eb784668d0f0833cf599`
+was automatically claimed afterward. Normal Queue obligation
+`aiobl_8c18f6a6e8bc85123a056fdfa8a1bd8a7ac49a6de807e75c69346a050645db6d`
+also entered source detection and actual ASR, later held for deterministic ASR QC.
+Scheduler/recovery dispatch remain server-owned; no Codex polling is required.
+Legacy recovery event `runtime_version` retains its configured historical label
+`b911794...`; actual image/Gate attestation above is the deployed version authority.
+
+Autonomous execution produced six post-boundary new manifest records. One was
+re-read from its formal final paths: obligation
+`aiobl_f4b7205dc0f034d20a5e60b194323e2a38f65e0484f6ac6e1650bba96a149a55`.
+Its baseline obligation had no manifest; current pipeline state is COMPLETED;
+three output hashes/parse checks and role-correct hard QC pass, source full SHA256
+matches the processing checksum. It used the existing trusted-Japanese-audio ASR
+fallback policy. Count **1 verified newly delivered Traditional Chinese subtitle
+set** (three language ASS files), not a download-chain success. The other five
+new manifest records were not independently revalidated in this bounded closeout.
+The first read-only verifier incorrectly applied Traditional Chinese QC to the
+Simplified Chinese companion; both evidence runs remain, and only the corrected
+language-role run supports this result. Runtime QC was not changed or relaxed.
+
+Evidence root:
+`/logs/m2-recovery-unblock-20260905T064508843990Z/authorized-reconciliation-b92a61f/`.
+Key files: `authorized-recovery-closeout.json`, `prepared-reconciliation.json`,
+`runtime-proof-20260906T163014192266Z.json`,
+`final-boundary-1788712325.464795.json`,
+`delivery-final-verify-1788712492.532112.json`, `safe-deploy.log`.
+Database quick_check is `ok`; work/log filesystem had 1,956,361,412,608 free bytes.
+Remaining: 60 held obligations require new evidence; quality/no-progress cases
+retain their reasons and budgets. This does not close all historical download,
+matching or QC failures, independently verify the other five deliveries, or pass M2/M3.
+
 ## Authorized reconciliation preparation (2026-09-06)
 
 The failed parser handoff is retained, not retried as a successful preservation

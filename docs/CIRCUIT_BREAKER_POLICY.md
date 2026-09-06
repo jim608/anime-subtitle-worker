@@ -1,5 +1,24 @@
 # M2 Circuit Breaker Policy
 
+## Applied authorization record (2026-09-06)
+
+`m2-recon-20260906-b92a61f` applied the policy below: 27 UNKNOWN revisions,
+24 unresolved removals and 9 unsupported new identities remain held (60 total).
+The original failed receipt/Gate were not rewritten; the new boundary represents
+verified current Queue identity, not proven historical source continuity.
+Runtime `b92a61fe086bb0cb48aef46f9b9efd967d33d969` is ARMED after fresh 7/7 FI.
+New Gate starts at `2026-09-06T11:54:57.465856Z`, frozen baseline
+`m2-guardrail-v1:5777c0c5ec237c4b07cb56b4`; only its own first eligible 20 claims
+can qualify, with failures retained and no historical recovery backfill.
+
+During this deployment the legacy scheduler closeout called reconciliation hold
+`deployment_hold`; the deployment owner was preserved until formal controlled
+recovery released admission, then its existing final verification completed.
+Do not solve this sequencing condition by deleting control files, releasing holds
+manually, accepting fake scheduler status, or rolling back the Production database.
+Future deployment automation must distinguish the two holds before reusing this
+maintenance sequence. Document-only synchronization must not redeploy or rearm.
+
 ## Authorized current-state reconciliation (2026-09-06)
 
 The user explicitly authorized a new reconciliation boundary after the failed

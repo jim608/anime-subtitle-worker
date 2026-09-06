@@ -1,16 +1,24 @@
 # Incremental Delivery Plan
 
-## Authorized reconciliation recovery (2026-09-06; in progress)
+## Authorized reconciliation recovery (2026-09-06; production closeout)
 
 - [x] Preserve failed original handoff; receive explicit authority for a new boundary.
 - [x] Implement persistent source holds and controlled reconciliation mode in existing recovery mechanisms.
 - [x] Server-isolated targeted/shared-boundary suite:405 PASS, including restart and fail-closed paths.
-- [ ] Safe deployment and complete actual runtime attestation.
-- [ ] Persist 27 UNKNOWN revisions plus all other unexplained current differences; reconcile remaining members.
-- [ ] Seal new reconciliation record and run fresh actual-image breaker tests.
-- [ ] Controlled recovery, matching ARMED new Gate at0/20, protected admission resume.
-- [ ] Prove one verified unheld task claim/stage/heartbeat/checkpoint and autonomous continuation.
-- [ ] Final production closeout evidence; docs-only sync without another deployment.
+- [x] Safe deployment and complete actual runtime attestation: Worker b92a61fe086bb0cb48aef46f9b9efd967d33d969; 1,871/229 safe-update and78 actual-image tests PASS.
+- [x] Persist27 UNKNOWN revisions,24 removed obligations and9 unproven arrivals (60 held); classify473 supported new scanner arrivals; preserve7,191 recoverable identities and6,807 other states.
+- [x] Seal m2-recon-20260906-b92a61f, retaining old receipt/Gate, then fresh actual-image breakers7/7 PASS.
+- [x] Controlled recovery; ARMED Gate m2-gate-20260906T115457465856Z-a0ccafa2ff initialized0/20; protected admission resumed.
+- [x] Real normal/recovery claims, stage/heartbeat/digest-valid checkpoint and automatic next claim verified.
+- [x] Final production evidence recorded below; synchronize documents without another deployment.
+
+One autonomous newly published Traditional Chinese subtitle set has final-path
+hash/parse/role-correct QC and source checksum verification, with final COMPLETED.
+Five additional new manifest records remain unverified by this closeout. Download
+chain acceptance and remaining quality/matching failures are not implied solved.
+Original Gate's four members remain unchanged;60 source holds await new evidence.
+Full evidence: `/logs/m2-recovery-unblock-20260905T064508843990Z/authorized-reconciliation-b92a61f/`.
+See `docs/M2_PRODUCTION_OBSERVATION.md` for exact record IDs and proof paths.
 
 No M3, no QC relaxation, no cohort substitution, no claim counted as subtitle delivery.
 

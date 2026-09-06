@@ -1,5 +1,28 @@
 # M2 Circuit Breaker Test Results
 
+## Authorized runtime closeout (2026-09-06)
+
+Worker `b92a61fe086bb0cb48aef46f9b9efd967d33d969` is actually deployed.
+Safe-update: **1,871 Worker + 229 WebUI tests PASS**. Final candidate server
+isolation: **405 PASS**. Immutable actual deployed image targeted suite: **78 PASS**.
+Fresh post-reconciliation FI: **7/7 PASS**, no Production resources affected;
+`/logs/m2-guardrail-fi-20260906T115451045785Z-853ce952/{result.json,events.jsonl}`.
+
+The required isolation/restart/refusal/preservation cases are covered by
+`test_m2_reconciliation_source_holds`, `test_m2_authorized_reconciliation`,
+`test_event_watcher` and related shared-boundary suites. Actual Production checks
+confirm 60 durable holds reject publication, zero held-source claims, old receipt
+and old Gate/four-member evidence unchanged, original backup retained, SQLite `ok`.
+Real normal/recovery claims, stage heartbeats and digest-valid checkpoints are
+recorded, followed by autonomous next claims. One autonomous new formal subtitle
+set was revalidated from final paths (COMPLETED, hashes/parse/role-correct QC PASS,
+source checksum matches). Neither mock tests nor claims are counted as delivery.
+
+Full deployment, image tests, proof and final output verification logs remain at
+`/logs/m2-recovery-unblock-20260905T064508843990Z/authorized-reconciliation-b92a61f/`.
+See current observation closeout for exact filenames and remaining boundaries.
+No frozen first-20 completion or production autonomy rate is claimed.
+
 ## Authorized reconciliation candidate (2026-09-06; not yet production closeout)
 
 Server-isolated verification: **405 tests PASS**, 13 targeted/shared-boundary
