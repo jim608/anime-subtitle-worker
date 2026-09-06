@@ -503,6 +503,13 @@ def has_english_only_subtitle_hint(title: str) -> bool:
 
 def has_extractable_subtitle_hint(title: str) -> bool:
     lowered = title.casefold()
+    # Sidecar subtitles do not depend on whether the accompanying video is
+    # MKV or MP4. This is discovery evidence only: extraction/import still
+    # validates the actual subtitle language, episode, parse and quality.
+    if (any(marker in lowered for marker in ("外掛", "外挂", "外置字幕"))
+            and has_chinese_subtitle_hint(title)
+            and not re.search(r"(?:无|無|沒有|没有|不含|不带|不帶)\s*(?:外掛|外挂|外置)", lowered)):
+        return True
     if any(keyword.casefold() in lowered for keyword in ("内封", "內封", "内挂", "內掛", "内封字幕", "內封字幕")):
         return True
     if "mkv" in lowered and has_chinese_subtitle_hint(title) and not any(

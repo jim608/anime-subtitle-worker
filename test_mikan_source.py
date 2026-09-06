@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from unittest.mock import patch
 
 from mikan_source import (
@@ -10,6 +11,7 @@ from mikan_source import (
     extract_episode_numbers,
     fetch_bangumi_releases,
     has_english_only_subtitle_hint,
+    has_extractable_subtitle_hint,
     parse_mikan_rss,
     release_score,
     release_episode_numbers,
@@ -53,6 +55,42 @@ RSS = """<?xml version="1.0" encoding="utf-8"?>
 
 
 class MikanSourceTest(unittest.TestCase):
+    def test_explicit_external_chinese_subtitles_are_candidates_independent_of_video_container(self) -> None:
+        original = parse_mikan_rss(RSS, "https://mikanani.me", 260)[0]
+        for title in (
+            "【千夏農場栽培小隊】【農林 Nourin】[第02話][1920x1080][10bit_MP4_AAC][繁簡外掛]",
+            "[Group] Test Anime [02][MP4][简繁外挂字幕]",
+            "[Group] Test Anime [02][繁中外置字幕][MP4]",
+        ):
+            with self.subTest(title=title):
+                release = replace(original, title=title, episode=2, episodes=(2,))
+                self.assertTrue(has_extractable_subtitle_hint(title))
+                selected = select_preferred_release_candidates_for_episodes(
+                    [release], episodes={2}, prefer_keywords=[], reject_keywords=[], require_extractable=True)
+                self.assertEqual(selected[2], [release])
+
+    def test_hardcoded_or_explicitly_absent_external_subtitles_remain_rejected(self) -> None:
+        for title in (
+            "[Group] Test Anime [02][MP4][繁體內嵌]",
+            "[Group] Test Anime [02][MP4][繁中][無外掛字幕]",
+            "[Group] Test Anime [02][MP4][简中][不含外挂字幕]",
+        ):
+            with self.subTest(title=title):
+                self.assertFalse(has_extractable_subtitle_hint(title))
+
+    def test_external_hint_does_not_override_language_episode_or_operator_rejection(self) -> None:
+        original = parse_mikan_rss(RSS, "https://mikanani.me", 260)[0]
+        for title, rejected in (
+            ("[Group] Test Anime [06][MP4][English Subs][外挂字幕]", []),
+            ("[Group] Test Anime [06.5][MP4][繁簡外掛]", []),
+            ("[Group] Test Anime [06][MP4][繁簡外掛]", ["MP4"]),
+        ):
+            with self.subTest(title=title, rejected=rejected):
+                release = replace(original, title=title, episode=None, episodes=())
+                selected = select_preferred_release_candidates_for_episodes(
+                    [release], episodes={6}, prefer_keywords=[], reject_keywords=rejected, require_extractable=True)
+                self.assertFalse(selected.get(6))
+
     def test_chinese_season_numbers_preserve_season_identity(self) -> None:
         for marker, expected in (("第二季", 2), ("第三期", 3), ("第四季", 4),
                                  ("第十季", 10), ("第十二季", 12), ("第二十一季", 21)):

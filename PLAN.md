@@ -1,5 +1,19 @@
 # Incremental Delivery Plan
 
+## External-sidecar discovery repair (2026-09-06; candidate, not deployed)
+
+- [x] Real source metadata reproduces rejection of MP4 releases explicitly carrying Chinese external subtitles.
+- [x] Minimal discovery-hint repair; no QC, parser, model, source identity or publication policy relaxation.
+- [x] Local48 source/matcher/fairness tests; server-isolated305 shared-boundary tests before the final extra negative regression.
+- [x] Real primary-source replay selects new hashes for No-Rin E1/E2/E3 without resetting failed/seen; E8 remains excluded.
+- [ ] Safe controlled runtime handoff preserving60 existing source holds and original evidence.
+- [ ] Real representative download/extraction/QC/publication or bounded explicit source failure.
+
+Current actual runtime remains b92a61fe086bb0cb48aef46f9b9efd967d33d969 until new deployment attestation.
+Source metadata fixtures/replay: `/logs/m2-recovery-unblock-20260905T064508843990Z/external-sidecar-isolated-20260906T173812862585Z.json`.
+The prior5 recorded completions remain unresolved:2 identity ambiguities and3 unique targets without validated official TC;
+all5 source torrents absent in the bounded exact query. This is not proof of permanent source unavailability.
+
 ## Authorized reconciliation recovery (2026-09-06; production closeout)
 
 - [x] Preserve failed original handoff; receive explicit authority for a new boundary.
