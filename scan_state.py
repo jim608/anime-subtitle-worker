@@ -871,6 +871,9 @@ class ScanStateStore:
         identity changed after selection.
         """
 
+        from m2_production_recovery import source_hold, RecoveryError
+        if source_hold(self._conn, path):
+            raise RecoveryError('source_continuity_unverified')
         now = time.time()
         exact_identity_requested = any(
             value is not None
@@ -2557,11 +2560,13 @@ class ScanStateStore:
 
         observed_at = float(time.time() if now is None else now)
         if acceptance_targets is not None:
-            return self._iter_acceptance_queue_candidates(
+            from m2_production_recovery import held_source_paths
+            holds = held_source_paths(self._conn)
+            return [p for p in self._iter_acceptance_queue_candidates(
                 acceptance_targets,
                 observed_at=observed_at,
                 exact_target=exact_target,
-            )
+            ) if str(p.resolve()) not in holds]
 
         if oldest_first:
             queue_tail_order = """
@@ -2646,7 +2651,9 @@ class ScanStateStore:
             """,
             parameters,
         ).fetchall()
-        return [Path(str(row[0])) for row in rows]
+        from m2_production_recovery import held_source_paths
+        holds = held_source_paths(self._conn)
+        return [Path(str(row[0])) for row in rows if str(row[0]) not in holds]
 
     def _iter_acceptance_queue_candidates(
         self,

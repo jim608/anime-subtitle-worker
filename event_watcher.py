@@ -544,6 +544,9 @@ class _FilesystemEventQueue:
         return rehydrated
 
     def _write_batch(self, paths: list[Path], *, allow_promote: bool = True) -> None:
+        from m2_production_recovery import reconciliation_admission_held
+        reconciliation_held = reconciliation_admission_held(self.config)
+        allow_promote = allow_promote and not reconciliation_held
         decisions: list[_IngestDecision] = []
         dropped: list[Path] = []
         retry_after_stability: list[Path] = []
@@ -629,6 +632,11 @@ class _FilesystemEventQueue:
             return
 
         if not allow_promote:
+            if reconciliation_held:
+                # Keep the existing durable ingest journal and retry queue;
+                # a restart rehydrates it. No new admission during handoff.
+                self._requeue([decision.path for decision in decisions],
+                              delay_seconds=max(30.0, self.retry_seconds))
             return
 
         ready = [decision for decision in decisions if decision.ready_for_probe]
@@ -734,6 +742,9 @@ class _FilesystemEventQueue:
     ) -> tuple[list[Path], list[Path], list[Path]]:
         if not passed and not failed:
             return [], [], []
+        from m2_production_recovery import reconciliation_admission_held
+        if reconciliation_admission_held(self.config):
+            return [], [], [decision.path for decision in [*passed, *failed]]
         state: ScanStateStore | None = None
         promoted: list[Path] = []
         changed: list[Path] = []

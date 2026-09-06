@@ -301,6 +301,8 @@ class VideoWorker:
 
     def process(self, video_path: str | Path) -> bool:
         video = Path(video_path)
+        from m2_production_recovery import require_source_not_held
+        require_source_not_held(self.config, video)
         self._selected_audio_stream = None
         self._audio_selection_payload = {}
         self._provenance = None
@@ -5166,6 +5168,9 @@ class VideoWorker:
     ) -> int:
         """Validate a complete staged ASS set before replacing media sidecars."""
 
+        from m2_production_recovery import require_source_not_held
+        require_source_not_held(self.config, video)
+
         normalized_source_language = str(source_language or "ja").split("-", 1)[0].casefold()
         source_is_japanese = normalized_source_language in {"ja", "jpn"}
         self._enforce_asr_publication_gate(
@@ -5700,6 +5705,8 @@ class VideoWorker:
         return _normalize_review_ranges(ranges)
 
     def _publish_source_ass(self, video: Path, source_srt: Path, destination: Path) -> None:
+        from m2_production_recovery import require_source_not_held
+        require_source_not_held(self.config, video)
         """Quality-gate one non-Japanese source transcript before publication."""
 
         self._enforce_asr_publication_gate(

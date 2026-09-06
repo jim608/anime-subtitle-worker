@@ -1,5 +1,19 @@
 # Incremental Delivery Plan
 
+## Authorized reconciliation recovery (2026-09-06; in progress)
+
+- [x] Preserve failed original handoff; receive explicit authority for a new boundary.
+- [x] Implement persistent source holds and controlled reconciliation mode in existing recovery mechanisms.
+- [x] Server-isolated targeted/shared-boundary suite:405 PASS, including restart and fail-closed paths.
+- [ ] Safe deployment and complete actual runtime attestation.
+- [ ] Persist 27 UNKNOWN revisions plus all other unexplained current differences; reconcile remaining members.
+- [ ] Seal new reconciliation record and run fresh actual-image breaker tests.
+- [ ] Controlled recovery, matching ARMED new Gate at0/20, protected admission resume.
+- [ ] Prove one verified unheld task claim/stage/heartbeat/checkpoint and autonomous continuation.
+- [ ] Final production closeout evidence; docs-only sync without another deployment.
+
+No M3, no QC relaxation, no cohort substitution, no claim counted as subtitle delivery.
+
 ## M2 Recovery bounded closeout update (2026-09-05)
 
 - [x] Actually deploy `60d6b2361a54a76730c5a943dfd3fac8b98cca19` using safe-update;

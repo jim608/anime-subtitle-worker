@@ -8,6 +8,7 @@ queue, attempt, or checkpoint state that the Worker already owns.
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -264,6 +265,24 @@ def ensure_recovery_schema(connection: sqlite3.Connection) -> None:
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL,
             updated_at REAL NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS m2_recovery_source_holds (
+            canonical_path TEXT PRIMARY KEY,
+            reconciliation_id TEXT NOT NULL,
+            reason_code TEXT NOT NULL,
+            continuity TEXT NOT NULL CHECK(continuity='UNKNOWN'),
+            evidence_json TEXT NOT NULL,
+            evidence_sha256 TEXT NOT NULL,
+            created_at REAL NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS m2_recovery_reconciliations (
+            reconciliation_id TEXT PRIMARY KEY,
+            request_sha256 TEXT NOT NULL,
+            evidence_json TEXT NOT NULL,
+            evidence_sha256 TEXT NOT NULL,
+            created_at REAL NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS m2_recovery_runs (
@@ -1048,6 +1067,10 @@ def reconcile_historical_jobs(
             resume_stage=resume_stage,
             deterministic_review_fix=_safe_code(code, "", 120) in deterministic_codes,
         )
+        if source_hold(connection, path):
+            decision, reason, priority = 'KEEP_QUARANTINED', 'source_continuity_unverified', 100
+            checkpoint_compatible = False
+            resume_stage = ''
         if decision in RECOVERABLE_DECISIONS:
             metrics["recoverable_total"] += 1
         if category == "CODE_VERSION_FIXED" and decision in RECOVERABLE_DECISIONS:
@@ -1291,6 +1314,189 @@ def reconcile_historical_jobs(
     }
 
 
+def persist_authorized_reconciliation(connection: sqlite3.Connection, *,
+                                     reconciliation_id: str, request: Mapping[str, Any],
+                                     verified_snapshot: Mapping[str, Any], now: float) -> dict[str, Any]:
+    """Atomically retain differences/holds in the existing ledger, never repair an old receipt.
+
+    The controlled entry point must establish durable admission pause and prove
+    verified_snapshot against current runtime/Queue inside its write transaction.
+    This function neither resumes admission nor retires a breaker.
+    """
+    required = ('authorization', 'old_receipt', 'old_gate_id', 'runtime_identity',
+                'differences', 'recoverable_identities')
+    if not reconciliation_id or any(key not in request for key in required):
+        raise RecoveryError('reconciliation_request_incomplete')
+    if not request['authorization'] or not request['old_receipt'] or not verified_snapshot:
+        raise RecoveryError('reconciliation_evidence_missing')
+    differences = request['differences']
+    if not isinstance(differences, list) or not isinstance(request['recoverable_identities'], list):
+        raise RecoveryError('reconciliation_membership_invalid')
+    dispositions = {'QUARANTINE', 'VERIFIED_COMPLETION', 'VERIFIED_NEW', 'PENDING_REVIEW'}
+    paths = set()
+    for item in differences:
+        if (not isinstance(item, dict) or not item.get('path') or item.get('disposition') not in dispositions
+            or not item.get('evidence')):
+            raise RecoveryError('reconciliation_difference_unclassified')
+        path = str(Path(item['path']).resolve())
+        if path in paths:
+            raise RecoveryError('reconciliation_duplicate_difference')
+        paths.add(path)
+    request_json = _json(dict(request))
+    request_sha = 'sha256:' + hashlib.sha256(request_json.encode()).hexdigest()
+    ensure_recovery_schema(connection)
+    existing = connection.execute(
+        'SELECT request_sha256,evidence_json FROM m2_recovery_reconciliations WHERE reconciliation_id=?',
+        (reconciliation_id,),
+    ).fetchone()
+    if existing:
+        if existing[0] != request_sha:
+            raise RecoveryError('reconciliation_immutable_conflict')
+        return json.loads(existing[1])
+    connection.execute('SAVEPOINT authorized_reconciliation')
+    try:
+        retained = []
+        for item in differences:
+            if item['disposition'] in {'QUARANTINE', 'PENDING_REVIEW'}:
+                hold = install_source_hold(connection, item['path'], reconciliation_id=reconciliation_id,
+                                           evidence=item['evidence'], now=now)
+                retained.append({'path': str(Path(item['path']).resolve()), **hold})
+        blocked = held_source_paths(connection)
+        queue = {str(row[0]): (int(row[1]), str(row[2])) for row in connection.execute(
+            'SELECT path,mtime_ns,status FROM ai_candidate_queue')}
+        covered = set(blocked) & set(queue)
+        for identity in request['recoverable_identities']:
+            if (not isinstance(identity, dict) or not identity.get('path')
+                or str(Path(identity['path']).resolve()) in blocked):
+                raise RecoveryError('reconciliation_recoverable_member_held')
+            canonical = str(Path(identity['path']).resolve())
+            if canonical in covered or queue.get(canonical, (None, None))[0] != identity.get('mtime_ns'):
+                raise RecoveryError('reconciliation_recoverable_identity_mismatch')
+            covered.add(canonical)
+        for identity in request.get('retained_identities', []):
+            canonical = str(Path(identity.get('path') or '').resolve())
+            if (canonical in covered or not identity.get('reason_code')
+                or queue.get(canonical) != (identity.get('mtime_ns'), identity.get('status'))):
+                raise RecoveryError('reconciliation_retained_identity_mismatch')
+            covered.add(canonical)
+        if covered != set(queue):
+            raise RecoveryError('reconciliation_unclassified_queue_members')
+        record = {
+            'contract': 'm2-authorized-reconciliation-v1', 'reconciliation_id': reconciliation_id,
+            'created_at_epoch': now, 'historical_preservation': 'UNPROVEN',
+            'old_handoff_disposition': 'FAILED_PRESERVATION_NOT_PROVEN',
+            'request': dict(request), 'request_sha256': request_sha,
+            'snapshot': dict(verified_snapshot), 'retained_holds': retained,
+            'hold_inventory': [list(row) for row in connection.execute(
+                'SELECT * FROM m2_recovery_source_holds ORDER BY canonical_path')],
+            'admission_resumed': False,
+        }
+        payload = _json(record)
+        connection.execute('INSERT INTO m2_recovery_reconciliations VALUES(?,?,?,?,?)',
+                           (reconciliation_id, request_sha, payload,
+                            'sha256:' + hashlib.sha256(payload.encode()).hexdigest(), now))
+        connection.execute('RELEASE authorized_reconciliation')
+        return record
+    except BaseException:
+        connection.execute('ROLLBACK TO authorized_reconciliation')
+        connection.execute('RELEASE authorized_reconciliation')
+        raise
+
+
+def held_source_paths(connection: sqlite3.Connection) -> set[str]:
+    if not connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='m2_recovery_source_holds'"
+    ).fetchone():
+        return set()
+    return {str(row[0]) for row in connection.execute('SELECT canonical_path FROM m2_recovery_source_holds')}
+
+
+def source_hold(connection: sqlite3.Connection, path: str | Path) -> dict[str, Any] | None:
+    """Read the persistent path hold; new revisions/attempt IDs cannot bypass it."""
+    if not connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='m2_recovery_source_holds'"
+    ).fetchone():
+        return None
+    row = connection.execute(
+        "SELECT reconciliation_id,reason_code,continuity,evidence_sha256 FROM m2_recovery_source_holds "
+        "WHERE canonical_path=?", (str(Path(path).resolve()),),
+    ).fetchone()
+    return dict(zip(('reconciliation_id', 'reason_code', 'continuity', 'evidence_sha256'), row)) if row else None
+
+
+def install_source_hold(connection: sqlite3.Connection, path: str | Path, *,
+                        reconciliation_id: str, evidence: Mapping[str, Any], now: float) -> dict[str, Any]:
+    """Append an immutable logical hold in the existing recovery ledger."""
+    if not reconciliation_id or not evidence.get('old_identity') or not evidence.get('current_identity'):
+        raise RecoveryError('source_hold_evidence_incomplete')
+    ensure_recovery_schema(connection)
+    canonical = str(Path(path).resolve())
+    payload = _json(dict(evidence))
+    digest = 'sha256:' + hashlib.sha256(payload.encode()).hexdigest()
+    existing = source_hold(connection, canonical)
+    if existing:
+        if existing['reconciliation_id'] != reconciliation_id or existing['evidence_sha256'] != digest:
+            raise RecoveryError('source_hold_evidence_conflict')
+        return existing
+    # The caller must establish admission pause. Never take over an active job.
+    if connection.execute(
+        "SELECT 1 FROM ai_candidate_queue WHERE path=? AND status='running'", (canonical,),
+    ).fetchone():
+        raise RecoveryError('source_hold_active_claim')
+    if connection.execute(
+        "SELECT 1 FROM ai_delivery_attempts a JOIN ai_delivery_obligations o "
+        "ON o.obligation_id=a.obligation_id WHERE o.canonical_path=? AND a.status='running' LIMIT 1",
+        (canonical,),
+    ).fetchone() or connection.execute(
+        "SELECT 1 FROM pipeline_stage_attempts a JOIN pipeline_jobs j ON j.job_id=a.job_id "
+        "WHERE j.canonical_path=? AND a.status='RUNNING' LIMIT 1", (canonical,),
+    ).fetchone():
+        raise RecoveryError('source_hold_active_claim')
+    connection.execute(
+        "INSERT INTO m2_recovery_source_holds VALUES(?,?,'source_continuity_unverified','UNKNOWN',?,?,?)",
+        (canonical, reconciliation_id, payload, digest, now),
+    )
+    return source_hold(connection, canonical)
+
+
+def require_source_not_held(config: Any, path: str | Path) -> None:
+    """Fail closed on storage errors; no file/DB creation on this read path."""
+    from scan_state import scan_state_path
+    # Standalone legacy subtitle utilities may have no runtime state at all.
+    # AppConfig-based Worker/recovery deployments always supply work_path.
+    if not hasattr(config, 'work_path') and not getattr(config, 'scanner_state_path', None):
+        return
+    if reconciliation_admission_held(config):
+        raise RecoveryError('reconciliation_admission_hold')
+    database = scan_state_path(config)
+    if not database.exists():
+        if bool(getattr(config, 'm2_server_canary_observer_enabled', False)):
+            raise RecoveryError('source_hold_store_unavailable')
+        return
+    with closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True, timeout=5)) as connection:
+        connection.execute('PRAGMA query_only=ON')
+        if bool(getattr(config, 'm2_server_canary_observer_enabled', False)) and not connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='m2_recovery_source_holds'"
+        ).fetchone():
+            raise RecoveryError('source_hold_store_unavailable')
+        if source_hold(connection, path):
+            raise RecoveryError('source_continuity_unverified')
+
+
+def reconciliation_admission_held(config: Any) -> bool:
+    work = getattr(config, 'work_path', None)
+    if work is None:
+        return False
+    control = Path(work) / 'ai_control.json'
+    try:
+        payload = json.loads(control.read_text(encoding='utf-8'))
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError, TypeError):
+        return True
+    return not isinstance(payload, dict) or payload.get('reconciliation_hold') is True
+
+
 def _current_checkpoint_sha(connection: sqlite3.Connection, path: str, mtime_ns: int) -> str:
     pipeline = _latest_pipeline_evidence(connection, path, mtime_ns)
     _available, _payload, digest = _checkpoint_payload(pipeline)
@@ -1407,6 +1613,7 @@ def dispatch_next_recovery(
         FROM m2_recovery_jobs r
         LEFT JOIN ai_candidate_queue q ON q.path=r.canonical_path
         WHERE r.status='READY' AND r.not_before<=?
+          AND NOT EXISTS (SELECT 1 FROM m2_recovery_source_holds h WHERE h.canonical_path=r.canonical_path)
           AND r.recovery_attempt_count<r.retry_budget
           AND (q.path IS NULL OR (q.status IN ('failed_retry','paused')
                                  AND COALESCE(q.next_retry_at,0)<=?))
@@ -1542,6 +1749,8 @@ def mark_recovery_claimed(
     now: float | None = None,
 ) -> dict[str, Any]:
     ensure_recovery_schema(connection)
+    if source_hold(connection, canonical_path):
+        raise RecoveryError('source_continuity_unverified')
     timestamp = float(time.time() if now is None else now)
     cursor = connection.execute(
         """

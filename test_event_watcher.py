@@ -490,6 +490,32 @@ class FilesystemEventQueueTest(unittest.TestCase):
 
             self.assertEqual(len(state.queue_rows), 1)
 
+    def test_reconciliation_hold_persists_ingest_without_promoting_and_resumes_after_restart(self) -> None:
+        import json
+        from contextlib import closing
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / 'Series - S01E01.mkv'
+            video.write_bytes(b'unchanged-source')
+            config = SimpleNamespace(video_extensions=['.mkv'], work_path=root)
+            control = root / 'ai_control.json'
+            control.write_text(json.dumps({'paused': True, 'reconciliation_hold': True}))
+            queue = _FilesystemEventQueue(config, logging.getLogger('test_event_watcher'),
+                                          quiet_window_seconds=0, file_complete_probe=lambda _path: True)
+            queue._write_batch([video])
+            queue._write_batch([video])
+            with closing(ScanStateStore.from_config(config)) as state:
+                self.assertEqual([], state.iter_ai_queue_candidates())
+                restarted = _FilesystemEventQueue(config, logging.getLogger('test_event_watcher'),
+                    quiet_window_seconds=0, file_complete_probe=lambda _path: True)
+                self.assertEqual(1, restarted._rehydrate_pending_observations(_IngestStoreAdapter(state)))
+            control.write_text(json.dumps({'paused': False, 'reconciliation_hold': False}))
+            restarted._write_batch([video])
+            restarted._write_batch([video])
+            with closing(ScanStateStore.from_config(config)) as state:
+                self.assertEqual([video], state.iter_ai_queue_candidates())
+            self.assertEqual(b'unchanged-source', video.read_bytes())
+
     def test_no_close_runs_default_ffprobe_only_in_debounce_batch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

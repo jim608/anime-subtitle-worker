@@ -268,6 +268,60 @@ class PlannedRuntimeChangeTests(unittest.TestCase):
         self.state.commit()
         self.assert_refused("planned_change_new_work_or_evidence_changed")
 
+    def test_late_scan_batch_is_not_limited_by_gate_size(self):
+        self.connection.execute("UPDATE ai_candidate_queue SET updated_at=?", (self.now - 1,))
+        self.state.commit()
+        self.deploy()
+        for index in range(25):
+            path = self.fixture.root / f"arrival-{index}.mkv"
+            self.state.upsert_ai_queue_candidate(path, index + 1)
+            self.connection.execute("UPDATE ai_candidate_queue SET updated_at=? WHERE path=?", (self.now + 1, str(path)))
+        self.state.commit()
+        count_before = self.connection.execute("SELECT COUNT(*) FROM ai_candidate_queue").fetchone()[0]
+        self.assertEqual("DISARMED", self.recover()["status"])
+        self.assertEqual(count_before, self.connection.execute("SELECT COUNT(*) FROM ai_candidate_queue").fetchone()[0])
+
+    def add_new_ingest(self, **overrides):
+        args = dict(size=20, mtime_ns=123, event_type="closed",
+                    observed_at=self.now + 2, state="QUEUED",
+                    evidence={"source": "filesystem_event"})
+        args.update(overrides)
+        result = self.state.pipeline_jobs().observe_ingest(
+            self.fixture.root / "new-ingest.mkv", **args)
+        self.state.commit()
+        return result
+
+    def test_new_unclaimed_ingest_without_queue_growth_is_preserved(self):
+        self.connection.execute("UPDATE ai_candidate_queue SET updated_at=?", (self.now - 1,))
+        self.state.commit()
+        self.deploy()
+        self.add_new_ingest()
+        before = [tuple(row) for row in self.connection.execute("SELECT * FROM pipeline_job_transitions")]
+        self.assertEqual(4, len(before))
+        self.assertEqual("DISARMED", self.recover()["status"])
+        self.assertEqual(before, [tuple(row) for row in self.connection.execute("SELECT * FROM pipeline_job_transitions")])
+        self.assertEqual(self.before_files, {p: p.read_bytes() for p in self.before_files})
+
+    def test_ingest_exemption_refuses_wrong_source_and_actor(self):
+        self.connection.execute("UPDATE ai_candidate_queue SET updated_at=?", (self.now - 1,))
+        self.state.commit()
+        self.deploy()
+        self.add_new_ingest(evidence={"source": "manual"})
+        self.assert_refused("planned_change_new_work_or_evidence_changed")
+
+    def test_ingest_exemption_refuses_processing_transition(self):
+        self.connection.execute("UPDATE ai_candidate_queue SET updated_at=?", (self.now - 1,))
+        self.state.commit()
+        self.deploy()
+        self.add_new_ingest()
+        job_id = self.connection.execute("SELECT job_id FROM pipeline_jobs LIMIT 1").fetchone()[0]
+        with mock.patch("pipeline_state.time.time", return_value=self.now + 3):
+            self.state.pipeline_jobs().transition_job(
+                job_id, "SUBTITLE_DETECTION", reason_code="processing_started",
+                evidence={"source": "filesystem_event"}, confidence=1.0, actor="worker")
+        self.state.commit()
+        self.assert_refused("planned_change_new_work_or_evidence_changed")
+
     def deploy_followup(self):
         self.deploy()
         gate = gate_by_id(self.connection, self.old_gate)

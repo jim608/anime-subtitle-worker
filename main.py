@@ -368,7 +368,7 @@ def _scan_and_process(
         )
         logger.info("Shutdown already requested; skipping scan cycle.")
         return 0
-    if _deployment_hold_active(worker.config):
+    if _deployment_hold_active(worker.config) or _reconciliation_hold_active(worker.config):
         update_ai_scheduler_state(
             worker.config,
             state="deployment_hold",
@@ -1229,7 +1229,7 @@ def _auto_run_once(
     if _shutdown_requested(shutdown_event):
         logger.info("Shutdown already requested; skipping integrated auto cycle.")
         return
-    if _deployment_hold_active(config):
+    if _deployment_hold_active(config) or _reconciliation_hold_active(config):
         update_ai_scheduler_state(
             config,
             state="deployment_hold",
@@ -1899,6 +1899,8 @@ def _execute_control_command(config, logger, action: str, target: str, parameter
         ) + "\n"
 
         def publish_canary_pause() -> None:
+            if _reconciliation_hold_active(config):
+                raise RuntimeError('reconciliation_admission_hold')
             atomic_write_text(_ai_control_path(config), pause_payload)
 
         with _AI_REVIEW_REMEDIATION_HANDOFF_LOCK:
@@ -1989,6 +1991,9 @@ def _execute_control_command(config, logger, action: str, target: str, parameter
 
     if normalized in {"system.ai_queue_pause", "system.ai_queue_resume"}:
         from safe_files import atomic_write_text
+
+        if _reconciliation_hold_active(config):
+            return {'action': normalized, 'applied': False, 'reason_code': 'reconciliation_controlled_recovery_required'}
 
         paused = normalized.endswith("pause")
         now = time.time()
@@ -6351,7 +6356,7 @@ def _background_ai_scan_loop(
     dispatch_count = 0
     first_dispatch = True
     while not shutdown_event.is_set():
-        if _deployment_hold_active(config):
+        if _deployment_hold_active(config) or _reconciliation_hold_active(config):
             if shutdown_event.wait(1.0):
                 break
             continue
@@ -6456,7 +6461,7 @@ def _background_ai_ledger_backfill_loop(
         ),
     )
     while not shutdown_event.is_set():
-        if _deployment_hold_active(config):
+        if _deployment_hold_active(config) or _reconciliation_hold_active(config):
             if shutdown_event.wait(min(1.0, float(interval))):
                 break
             continue
@@ -6802,7 +6807,7 @@ def _background_mikan_enqueue_loop(config, logger, shutdown_event: threading.Eve
     worker = MikanWorker(config, logger)
     next_full_run_at = 0.0
     while not shutdown_event.is_set():
-        if _deployment_hold_active(config):
+        if _deployment_hold_active(config) or _reconciliation_hold_active(config):
             if shutdown_event.wait(1.0):
                 break
             continue
@@ -6857,7 +6862,7 @@ def _background_mikan_completed_loop(config, logger, shutdown_event: threading.E
 
     while not shutdown_event.is_set():
         try:
-            if _deployment_hold_active(config):
+            if _deployment_hold_active(config) or _reconciliation_hold_active(config):
                 set_extraction_pressure_pause(False)
                 if shutdown_event.wait(1.0):
                     break
@@ -7107,6 +7112,11 @@ def _ai_control_path(config) -> Path:
 def _deployment_hold_path(config) -> Path:
     work_path = getattr(config, "work_path", None)
     return Path(work_path) / "deployment_hold.json" if work_path else Path("/__deployment_hold_disabled__")
+
+
+def _reconciliation_hold_active(config) -> bool:
+    from m2_production_recovery import reconciliation_admission_held
+    return reconciliation_admission_held(config)
 
 
 def _deployment_hold_active(config) -> bool:

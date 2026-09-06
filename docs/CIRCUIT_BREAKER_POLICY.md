@@ -1,5 +1,29 @@
 # M2 Circuit Breaker Policy
 
+## Authorized current-state reconciliation (2026-09-06)
+
+The user explicitly authorized a new reconciliation boundary after the failed
+planned handoff. The original receipt/Gate/backups remain immutable and their
+historical preservation is **UNPROVEN**, not PASS. This is not a retry of that receipt.
+
+`pause-reconciliation` persists admission hold in existing control state.
+`prepare-reconciliation` requires a paused idle boundary, the original Queue
+membership digest, disposition of identity differences, complete current Queue
+coverage, and immutable source holds in the existing recovery database.
+Unexplained revisions and removals remain quarantined/pending obligations.
+New hashes describe current bytes only; incompatible old checkpoints are not resumed.
+
+Normal/recovery claims and Worker/official publication reject held source paths.
+Filesystem events remain durable during maintenance but cannot promote into Queue.
+`recover --reconciliation-record ... --reconciliation-record-sha256 ...` uses
+the controlled breaker lifecycle, matching actual runtime and fresh fault tests.
+Changes after sealing are refused, never silently absorbed. Resume additionally
+requires ARMED matching Gate, unchanged holds/Queue/checkpoints/output records,
+and a durable controlled recovery event. No direct latch deletion is authorized.
+
+Production execution and final record/Gate IDs remain pending below; implementation
+tests alone do not establish ARMED or successful recovery.
+
 ## Verified recovery boundary and next deployment constraint (2026-09-05)
 
 The exact collision/quality-pause recovery completed on Worker `60d6b236...`,

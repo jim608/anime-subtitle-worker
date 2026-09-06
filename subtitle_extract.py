@@ -376,6 +376,9 @@ def _publish_official_subtitle_set(
 ) -> None:
     """Validate and atomically publish one complete official subtitle set."""
 
+    from m2_production_recovery import require_source_not_held
+    require_source_not_held(config, output_video)
+
     if not publications:
         return
     from subtitle_quality import analyze_subtitle_file

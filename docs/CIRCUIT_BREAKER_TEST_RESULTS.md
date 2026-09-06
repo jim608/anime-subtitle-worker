@@ -1,5 +1,17 @@
 # M2 Circuit Breaker Test Results
 
+## Authorized reconciliation candidate (2026-09-06; not yet production closeout)
+
+Server-isolated verification: **405 tests PASS**, 13 targeted/shared-boundary
+modules. Source mount read-only, network disabled, no Production media mounts.
+Full log: `/logs/m2-recovery-unblock-20260905T064508843990Z/server-parser-planned-tests-20260906T113242073200Z.log`.
+
+Coverage includes held normal/recovery claims and publication refusal, safe peer
+dispatch, persistent missing obligations, atomic rollback/idempotent restart,
+new-difference refusal, unchanged old receipt, controlled recovery/new Gate/resume,
+and durable filesystem event deferral across restart. These are isolated tests;
+actual deployment, fresh running-image 7/7 FI and real claim evidence are pending.
+
 ## Verified second recovery runtime (2026-09-05)
 
 Deployment `20260905T083811Z-380719` runs Worker

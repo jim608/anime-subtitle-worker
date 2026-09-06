@@ -81,19 +81,26 @@ def _set_durable_claim_control(
     paused: bool,
     requested_by: str,
     now: float | None = None,
+    release_reconciliation: bool = False,
 ) -> dict[str, Any]:
     """Atomically persist the operator claim latch and verify the written state."""
 
     timestamp = time.time() if now is None else float(now)
     if not math.isfinite(timestamp) or timestamp <= 0:
         raise RuntimeContractError("claim_control_timestamp_invalid")
+    path = Path(str(config.work_path)) / "ai_control.json"
+    previous = _read_json(path) if path.exists() else {}
+    if not isinstance(previous, dict):
+        raise RuntimeContractError('claim_control_invalid')
     payload = {
         "paused": bool(paused),
         "requested_at": _utc_timestamp(timestamp),
         "updated_at": timestamp,
         "requested_by": _safe_code(requested_by, "m2_guardrail_runtime"),
     }
-    path = Path(str(config.work_path)) / "ai_control.json"
+    if previous.get('reconciliation_hold') is True:
+        payload['reconciliation_id'] = previous.get('reconciliation_id')
+        payload['reconciliation_hold'] = not release_reconciliation
     atomic_write_text(
         path,
         json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
@@ -115,6 +122,91 @@ def _set_durable_claim_control(
         "updated_at": timestamp,
         "requested_by": str(payload["requested_by"]),
     }
+
+
+def pause_reconciliation_admission(config: Any, reconciliation_id: str, *, now: float | None = None) -> dict[str, Any]:
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', reconciliation_id):
+        raise RuntimeContractError('reconciliation_id_invalid')
+    path = Path(config.work_path) / 'ai_control.json'
+    previous = _read_json(path) if path.exists() else {}
+    if previous and previous.get('reconciliation_hold') and previous.get('reconciliation_id') != reconciliation_id:
+        raise RuntimeContractError('another_reconciliation_hold_active')
+    _set_durable_claim_control(config, paused=True, requested_by='m2-authorized-reconciliation', now=now)
+    payload = _read_json(path)
+    payload.update({'reconciliation_hold': True, 'reconciliation_id': reconciliation_id})
+    atomic_write_text(path, json.dumps(payload, sort_keys=True) + '\n')
+    if _read_json(path) != payload:
+        raise RuntimeContractError('reconciliation_hold_not_durable')
+    return payload
+
+
+def prepare_reconciliation_local(config: Any, reconciliation_id: str, request: Mapping[str, Any],
+                                 *, now: float | None = None) -> dict[str, Any]:
+    """Seal a NEW current-state boundary; never retry or rewrite the failed receipt."""
+    from m2_production_recovery import persist_authorized_reconciliation
+    from m2_production_observation import require_durable_claim_pause
+    from m2_observation_store import gate_by_id, active_gate
+    from scan_state import ScanStateStore
+    require_durable_claim_pause(config)
+    control = _read_json(Path(config.work_path) / 'ai_control.json')
+    if not control or control.get('reconciliation_hold') is not True or control.get('reconciliation_id') != reconciliation_id:
+        raise RuntimeContractError('reconciliation_admission_not_held')
+    timestamp = time.time() if now is None else float(now)
+    origin = request.get('old_receipt') or {}
+    old_path = Path(str(origin.get('path') or '')).resolve()
+    log_root = Path(str(getattr(config, 'log_path', config.work_path))).resolve()
+    if (not old_path.is_relative_to(log_root) or not old_path.is_file()
+        or 'sha256:' + sha256_file(old_path) != origin.get('sha256')):
+        raise RuntimeContractError('reconciliation_old_receipt_reference_invalid')
+    old_receipt = _read_json(old_path)
+    members = request.get('original_queue_members')
+    if not isinstance(members, list) or not isinstance(old_receipt, dict):
+        raise RuntimeContractError('reconciliation_original_membership_missing')
+    digest = hashlib.sha256()
+    for row in members:
+        if not isinstance(row, list) or len(row) != 2:
+            raise RuntimeContractError('reconciliation_original_membership_invalid')
+        digest.update(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode() + b'\n')
+    if (len(members) != old_receipt['snapshot']['queue_count']
+        or 'sha256:' + digest.hexdigest() != old_receipt['snapshot']['queue_identity_sha256']):
+        raise RuntimeContractError('reconciliation_original_membership_unproven')
+    store = ScanStateStore.from_config(config)
+    try:
+        connection = store.observation_connection
+        connection.execute('BEGIN IMMEDIATE')
+        _require_planned_change_idle(connection, config, timestamp)
+        gate = gate_by_id(connection, str(request.get('old_gate_id') or ''))
+        if not gate or gate.get('status') != 'INVALIDATED_BY_RUNTIME_CHANGE' or active_gate(connection):
+            raise RuntimeContractError('reconciliation_old_gate_not_invalidated')
+        if gate != request.get('old_gate'):
+            raise RuntimeContractError('reconciliation_old_gate_changed')
+        snapshot = _planned_change_snapshot(connection, gate['gate_id'])
+        if snapshot != request.get('verified_snapshot'):
+            raise RuntimeContractError('reconciliation_unclassified_snapshot_difference')
+        old_members = dict(members)
+        current_members = dict(connection.execute('SELECT path,mtime_ns FROM ai_candidate_queue'))
+        difference_paths = {p for p in set(old_members) | set(current_members)
+                            if old_members.get(p) != current_members.get(p)}
+        classified = {str(Path(item['path']).resolve()) for item in request.get('differences', [])}
+        if not difference_paths.issubset(classified):
+            raise RuntimeContractError('reconciliation_undisposed_queue_difference')
+        record = persist_authorized_reconciliation(connection, reconciliation_id=reconciliation_id,
+                    request=request, verified_snapshot=snapshot, now=timestamp)
+        _validate_planned_snapshot(connection, record)
+        store.commit()
+    except BaseException:
+        store.rollback()
+        raise
+    finally:
+        store.close()
+    path = log_root / f'm2-reconciliation-{reconciliation_id}.json'
+    if path.exists() and _read_json(path) != record:
+        raise RuntimeContractError('reconciliation_export_conflict')
+    if not path.exists():
+        atomic_write_text(path, json.dumps(record, ensure_ascii=False, sort_keys=True) + '\n')
+    return {'reconciliation_id': reconciliation_id, 'receipt_path': str(path),
+            'receipt_sha256': 'sha256:' + sha256_file(path), 'claims_paused': True,
+            'source_holds': len(record['hold_inventory']), 'status': 'PREPARED'}
 
 
 def configuration_fingerprint(config: Any) -> str:
@@ -937,8 +1029,14 @@ def gate_claim_eligible(
     return True, "eligible"
 
 
+_UNCLAIMED_SCAN_ARRIVAL_SQL = (
+    "updated_at>? AND status='queued' AND source='scan' AND attempts=0 "
+    "AND COALESCE(running_at,0)=0 AND force_ai=0"
+)
+
+
 def _durable_recovery_snapshot(
-    connection: sqlite3.Connection, *, queue_exclusions: Sequence[str] = (),
+    connection: sqlite3.Connection, *, queued_scan_after: float | None = None,
 ) -> dict[str, Any]:
     """Hash durable identities that recovery is forbidden to change."""
 
@@ -958,11 +1056,12 @@ def _durable_recovery_snapshot(
             count += 1
         return count, "sha256:" + digest.hexdigest()
 
-    queue_filter = (" WHERE path NOT IN (" + ",".join("?" for _ in queue_exclusions) + ")"
-                    if queue_exclusions else "")
+    queue_filter = (" WHERE NOT (" + _UNCLAIMED_SCAN_ARRIVAL_SQL + ")"
+                    if queued_scan_after is not None else "")
+    queue_values = (queued_scan_after,) if queued_scan_after is not None else ()
     queue_count, queue_identity = digest_rows(
         "SELECT path,mtime_ns FROM ai_candidate_queue" + queue_filter + " ORDER BY path COLLATE NOCASE",
-        tuple(queue_exclusions),
+        queue_values,
     )
     checkpoint_count, checkpoint_identity = digest_rows(
         """
@@ -984,7 +1083,7 @@ def _durable_recovery_snapshot(
         str(row[0]): int(row[1])
         for row in connection.execute(
             "SELECT status,COUNT(1) FROM ai_candidate_queue" + queue_filter + " GROUP BY status",
-            tuple(queue_exclusions),
+            queue_values,
         ).fetchall()
     }
     return {
@@ -999,10 +1098,10 @@ def _durable_recovery_snapshot(
 
 
 def _planned_change_snapshot(
-    connection: sqlite3.Connection, gate_id: str, *, queue_exclusions: Sequence[str] = (),
+    connection: sqlite3.Connection, gate_id: str, *, queued_scan_after: float | None = None,
 ) -> dict[str, Any]:
     """Freeze durable work and append-only activity, never alter queue policy."""
-    snapshot = _durable_recovery_snapshot(connection, queue_exclusions=queue_exclusions)
+    snapshot = _durable_recovery_snapshot(connection, queued_scan_after=queued_scan_after)
     activity = {}
     for table, timestamp in (
         ("ai_delivery_attempts", "updated_at"),
@@ -1039,33 +1138,92 @@ def _planned_change_snapshot(
     return snapshot
 
 
+def _validate_new_ingest_transitions(connection: sqlite3.Connection, cutoff: float) -> dict[str, Any]:
+    """Prove appended transitions belong only to new, never-claimed ingestion."""
+    allowed = {
+        ("", "DISCOVERED", "media_discovered"),
+        ("DISCOVERED", "STABILIZING", "ingest_stabilization_started"),
+        ("STABILIZING", "ANALYZING", "ingest_analysis_started"),
+        ("ANALYZING", "QUEUED", "ingest_validation_passed"),
+    }
+    digest = hashlib.sha256()
+    count = 0
+    rows = connection.execute(
+        "SELECT t.transition_id,t.from_state,t.to_state,t.reason_code,t.actor,"
+        "t.stage_attempt_id,t.evidence_json,t.created_at,j.canonical_path,j.created_at,"
+        "j.state,j.active_stage_attempt_id,"
+        "EXISTS(SELECT 1 FROM pipeline_stage_attempts s WHERE s.job_id=t.job_id) "
+        "FROM pipeline_job_transitions t LEFT JOIN pipeline_jobs j ON j.job_id=t.job_id "
+        "WHERE t.created_at>? ORDER BY t.transition_id", (cutoff,),
+    )
+    for row in rows:
+        try:
+            evidence = json.loads(row[6])
+            valid = (
+                (row[1] or "", row[2], row[3]) in allowed
+                and row[4] == "ingest" and not row[5]
+                and row[9] is not None and row[9] > cutoff
+                and row[10] in {"DISCOVERED", "STABILIZING", "ANALYZING", "QUEUED"}
+                and not row[11] and not row[12]
+                and isinstance(evidence, dict)
+                and evidence.get("source") == "filesystem_event"
+                and evidence.get("canonical_path") == row[8]
+                and bool(evidence.get("media_revision"))
+            )
+        except (ValueError, TypeError):
+            valid = False
+        if not valid:
+            raise RuntimeContractError("planned_change_new_work_or_evidence_changed")
+        digest.update(json.dumps(list(row), separators=(",", ":")).encode() + b"\n")
+        count += 1
+    return {"new_unclaimed_ingest_transitions": count,
+            "new_ingest_evidence_sha256": "sha256:" + digest.hexdigest()}
+
+
 def _validate_planned_snapshot(connection: sqlite3.Connection, receipt: Mapping[str, Any]) -> dict[str, Any]:
     """Preserve the exact old Queue while allowing proven unclaimed scan arrivals."""
+    if receipt.get('contract') == 'm2-authorized-reconciliation-v1':
+        current = _planned_change_snapshot(connection, receipt['request']['old_gate_id'])
+        holds = [list(row) for row in connection.execute(
+            'SELECT * FROM m2_recovery_source_holds ORDER BY canonical_path')]
+        if current != receipt['snapshot'] or holds != receipt['hold_inventory']:
+            raise RuntimeContractError('reconciliation_new_difference_requires_disposition')
+        return {'scope': 'verified_reconciliation_boundary', 'historical_preservation': 'UNPROVEN',
+                'source_holds_preserved': len(holds)}
     expected = receipt["snapshot"]
     current = _planned_change_snapshot(connection, receipt["gate"]["gate_id"])
     if current == expected:
         return {"late_unclaimed_queue_arrivals": 0}
     delta = current["queue_count"] - expected["queue_count"]
-    if not 0 < delta <= 20:
+    if delta < 0:
         raise RuntimeContractError("planned_change_new_work_or_evidence_changed")
     # Discovery time may precede a slow read-only source proof. The commit's
     # updated_at, not added_at, identifies the post-snapshot arrival window.
+    cutoff = float(receipt["prepared_at_epoch"])
     rows = connection.execute(
         "SELECT path,mtime_ns,added_at,updated_at FROM ai_candidate_queue "
-        "WHERE updated_at>? AND status='queued' AND source='scan' AND attempts=0 "
-        "AND COALESCE(running_at,0)=0 AND force_ai=0 ORDER BY path COLLATE NOCASE LIMIT 21",
-        (float(receipt["prepared_at_epoch"]),),
-    ).fetchall()
-    paths = [str(row[0]) for row in rows]
-    if len(rows) != delta or _planned_change_snapshot(
-        connection, receipt["gate"]["gate_id"], queue_exclusions=paths,
-    ) != expected:
+        "WHERE " + _UNCLAIMED_SCAN_ARRIVAL_SQL + " ORDER BY path COLLATE NOCASE",
+        (cutoff,),
+    )
+    arrival_count = 0
+    arrival_digest = hashlib.sha256()
+    for row in rows:
+        arrival_digest.update(json.dumps(list(row), separators=(",", ":")).encode() + b"\n")
+        arrival_count += 1
+    normalized = _planned_change_snapshot(
+        connection, receipt["gate"]["gate_id"], queued_scan_after=cutoff,
+    )
+    ingest = _validate_new_ingest_transitions(connection, cutoff)
+    normalized["activity"]["pipeline_job_transitions"] = list(connection.execute(
+        "SELECT COUNT(*),COALESCE(MAX(created_at),0) FROM pipeline_job_transitions "
+        "WHERE created_at<=?", (cutoff,),
+    ).fetchone())
+    if arrival_count != delta or normalized != expected:
         raise RuntimeContractError("planned_change_new_work_or_evidence_changed")
     # No rows are removed or rewritten: filtering is only an identity proof.
     # Checkpoints, output ledger, claims/events and cohort must still match.
     return {"late_unclaimed_queue_arrivals": delta,
-            "late_queue_identity_sha256": "sha256:" + hashlib.sha256(
-                json.dumps([list(row) for row in rows], separators=(",", ":")).encode()).hexdigest()}
+            "late_queue_identity_sha256": "sha256:" + arrival_digest.hexdigest(), **ingest}
 
 
 def _require_planned_change_idle(connection: sqlite3.Connection, config: Any, now: float) -> None:
@@ -1149,6 +1307,22 @@ def prepare_runtime_change(
 
 
 def _planned_change_receipt(config: Any, root_cause: Mapping[str, Any]) -> dict[str, Any]:
+    if root_cause.get('mode') == 'authorized_reconciliation':
+        path = Path(str(root_cause.get('planned_change_receipt') or '')).resolve()
+        log_root = Path(str(getattr(config, 'log_path', config.work_path))).resolve()
+        if (not path.is_relative_to(log_root) or not path.name.startswith('m2-reconciliation-')
+            or not path.is_file() or not 0 < path.stat().st_size <= 32 * 1024 * 1024
+            or 'sha256:' + sha256_file(path) != root_cause.get('planned_change_receipt_sha256')):
+            raise RuntimeContractError('reconciliation_record_invalid')
+        record = _read_json(path)
+        request = record.get('request', {}) if isinstance(record, dict) else {}
+        if (not isinstance(record, dict) or record.get('contract') != 'm2-authorized-reconciliation-v1'
+            or record.get('historical_preservation') != 'UNPROVEN'
+            or record.get('old_handoff_disposition') != 'FAILED_PRESERVATION_NOT_PROVEN'
+            or not request.get('authorization')
+            or request.get('old_gate_id') != root_cause.get('expected_old_gate_id')):
+            raise RuntimeContractError('reconciliation_authorization_or_origin_invalid')
+        return record
     path = Path(str(root_cause.get("planned_change_receipt") or "")).resolve()
     log_root = Path(str(getattr(config, "log_path", config.work_path))).resolve()
     if (not path.is_relative_to(log_root) or not path.is_file()
@@ -1175,6 +1349,38 @@ def _planned_change_incident(
 
     root_cause = evidence["root_cause"]
     receipt = _planned_change_receipt(config, root_cause)
+    if root_cause.get('mode') == 'authorized_reconciliation':
+        require_durable_claim_pause(config)
+        _require_planned_change_idle(connection, config, now)
+        request = receipt['request']
+        stored = connection.execute(
+            'SELECT evidence_json FROM m2_recovery_reconciliations WHERE reconciliation_id=?',
+            (receipt['reconciliation_id'],),
+        ).fetchone()
+        if not stored or json.loads(stored[0]) != receipt:
+            raise RuntimeContractError('reconciliation_durable_record_mismatch')
+        if evidence['worker_commit_sha'] != request.get('expected_new_worker_sha'):
+            raise RuntimeContractError('reconciliation_runtime_sha_mismatch')
+        origin = request['runtime_identity']
+        if any(evidence.get(key) != origin.get(key) for key in (
+            'worker_commit_sha', 'worker_container_id', 'worker_source_revision', 'worker_image_id',
+            'worker_runtime_instance_fingerprint', 'webui_commit_sha', 'webui_source_revision',
+            'configuration_fingerprint', 'decision')):
+            raise RuntimeContractError('reconciliation_frozen_policy_changed')
+        if breaker != request.get('breaker'):
+            raise RuntimeContractError('reconciliation_breaker_evidence_changed')
+        gate = gate_by_id(connection, request['old_gate_id'])
+        if gate != request.get('old_gate') or active_gate(connection) is not None:
+            raise RuntimeContractError('reconciliation_old_gate_changed')
+        prepared = float(receipt['created_at_epoch'])
+        fault = evidence['fault_results']
+        if not 0 < float(fault.get('container_started_at_epoch') or 0) <= prepared < float(fault.get('started_at_epoch') or 0) <= float(fault.get('finished_at_epoch') or 0) <= now:
+            raise RuntimeContractError('reconciliation_fault_evidence_not_fresh')
+        preservation = _validate_planned_snapshot(connection, receipt)
+        return {'planned_snapshot_sha256': 'sha256:' + hashlib.sha256(
+                    json.dumps(receipt['snapshot'], sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
+                'reconciliation_id': receipt['reconciliation_id'], 'old_gate_id': request['old_gate_id'],
+                'historical_preservation': 'UNPROVEN', 'queue_preservation': preservation}
     require_durable_claim_pause(config)
     _require_planned_change_idle(connection, config, now)
     old = receipt["runtime"]["baseline"]
@@ -1760,7 +1966,7 @@ def _prepare_pending_recovery_resume(
     affected_stage = _safe_code(root_cause.get("affected_stage"), "stage_missing")
     failure_code = _safe_code(root_cause.get("failure_code"), "failure_code_missing")
     expected_old_gate = str(root_cause.get("expected_old_gate_id") or "")
-    planned_mode = root_cause.get("mode") == "planned_runtime_change"
+    planned_mode = root_cause.get("mode") in {"planned_runtime_change", "authorized_reconciliation"}
     if expected_reason != ("runtime_change" if planned_mode else "repeated_identical_stage_failure") or not expected_old_gate:
         raise RuntimeContractError("pending_recovery_root_cause_mismatch")
     from m2_production_recovery import breaker_streak_eligible, classify_failure
@@ -1770,7 +1976,7 @@ def _prepare_pending_recovery_resume(
         receipt = _planned_change_receipt(config, root_cause)
         followup = root_cause.get("expected_deployment_handoff")
         expected_sha = (followup.get("expected_final_worker_sha") if isinstance(followup, Mapping)
-                        else receipt.get("expected_new_worker_sha"))
+                        else receipt.get("expected_new_worker_sha") or (receipt.get('request') or {}).get('expected_new_worker_sha'))
         if worker_commit != expected_sha:
             raise RuntimeContractError("planned_change_new_sha_mismatch")
     elif collision_mode:
@@ -1861,7 +2067,7 @@ def _prepare_pending_recovery_resume(
     ):
         raise RuntimeContractError("pending_collision_evidence_mismatch")
     if planned_mode and (
-        recovery_log.get("recovery_mode") != "planned_runtime_change"
+        recovery_log.get("recovery_mode") != root_cause.get('mode')
         or recovery_log.get("planned_deployment_handoff") != root_cause.get("expected_deployment_handoff")
         or recovery_log.get("planned_change_receipt_sha256") != root_cause.get("planned_change_receipt_sha256")
         or not isinstance(recovery_log.get("completion_runtime"), Mapping)
@@ -2050,7 +2256,7 @@ def recover_runtime_local(
     )
     affected_stage = _safe_code(root_cause.get("affected_stage"), "stage_missing")
     failure_code = _safe_code(root_cause.get("failure_code"), "failure_code_missing")
-    planned_mode = root_cause.get("mode") == "planned_runtime_change"
+    planned_mode = root_cause.get("mode") in {"planned_runtime_change", "authorized_reconciliation"}
     if expected_reason != ("runtime_change" if planned_mode else "repeated_identical_stage_failure"):
         raise RuntimeContractError("unsupported_breaker_recovery_reason")
     from m2_production_recovery import (
@@ -2202,7 +2408,7 @@ def recover_runtime_local(
                 or (expected_old_gate and invalidated.get("gate_id") != expected_old_gate)
             ):
                 raise RuntimeContractError("active_gate_missing_for_recovery")
-        recovery = {"scope": "planned_runtime_change" if planned_mode else "exact_incident_only",
+        recovery = {"scope": root_cause.get('mode') if planned_mode else "exact_incident_only",
                     "historical_reconciliation_skipped": True,
                     "requeued": 0, "job_states_changed": 0} if (collision_mode or planned_mode) else reconcile_historical_jobs(
             connection,
@@ -2299,10 +2505,11 @@ def recover_runtime_local(
             })
         if planned_mode:
             recovery_evidence.update({
-                "recovery_mode": "planned_runtime_change",
+                "recovery_mode": root_cause.get('mode'),
                 "planned_deployment_handoff": root_cause.get("expected_deployment_handoff"),
                 "source_identity_preserved": None,
                 "source_integrity_verification": "not_reprobed_no_media_mutation_operations",
+                "historical_preservation": 'UNPROVEN' if root_cause.get('mode') == 'authorized_reconciliation' else None,
                 "planned_change_receipt_sha256": root_cause["planned_change_receipt_sha256"],
                 "completion_runtime": {key: evidence[key] for key in (
                     "worker_commit_sha", "worker_source_revision", "worker_runtime_code_revision",
@@ -2447,11 +2654,46 @@ def resume_claims_local(
         or observation.get("gate_id") != gate_id
     ):
         raise RuntimeContractError("claim_resume_observation_not_ready")
+    control_path = Path(config.work_path) / 'ai_control.json'
+    prior_control = _read_json(control_path) or {}
+    release_reconciliation = prior_control.get('reconciliation_hold') is True
+    if release_reconciliation:
+        from scan_state import ScanStateStore
+        store = ScanStateStore.from_config(config)
+        try:
+            connection = store.observation_connection
+            row = connection.execute(
+                'SELECT evidence_json FROM m2_recovery_reconciliations WHERE reconciliation_id=?',
+                (prior_control.get('reconciliation_id'),),
+            ).fetchone()
+            if not row:
+                raise RuntimeContractError('reconciliation_release_record_missing')
+            record = json.loads(row[0])
+            if state.get('baseline', {}).get('worker_commit_sha') != record['request'].get('expected_new_worker_sha'):
+                raise RuntimeContractError('reconciliation_release_runtime_mismatch')
+            holds = [list(row) for row in connection.execute(
+                'SELECT * FROM m2_recovery_source_holds ORDER BY canonical_path')]
+            if holds != record['hold_inventory']:
+                raise RuntimeContractError('reconciliation_release_holds_changed')
+            current = _durable_recovery_snapshot(connection)
+            if any(record['snapshot'].get(key) != value for key, value in current.items()):
+                raise RuntimeContractError('reconciliation_release_new_difference')
+            recovery_events = connection.execute(
+                "SELECT payload_json FROM m2_recovery_events WHERE recovery_id='__circuit_breaker__' "
+                "AND event_type='CONTROLLED_BREAKER_RECOVERY' AND created_at>=? ORDER BY created_at DESC LIMIT 10",
+                (record['created_at_epoch'],),
+            ).fetchall()
+            if not any(json.loads(row[0]).get('incident', {}).get('reconciliation_id') == record['reconciliation_id']
+                       for row in recovery_events):
+                raise RuntimeContractError('reconciliation_controlled_recovery_not_recorded')
+        finally:
+            store.close()
     control = _set_durable_claim_control(
         config,
         paused=False,
         requested_by="m2-controlled-breaker-recovery-complete",
         now=timestamp,
+        release_reconciliation=release_reconciliation,
     )
     return {
         "status": "ARMED",
@@ -2634,7 +2876,7 @@ def recover_runtime_on_host(
         runner=run,
     )
     dispatch = {"dispatched": False, "reason_code": "planned_runtime_change_preserves_recovery_lane"} if (
-        (root_cause_evidence or {}).get("mode") == "planned_runtime_change"
+        (root_cause_evidence or {}).get("mode") in {"planned_runtime_change", "authorized_reconciliation"}
     ) else _run_json(
         [
             docker_binary,
@@ -3333,6 +3575,16 @@ def _parser() -> argparse.ArgumentParser:
     recover.add_argument("--state-path", default="")
     recover.add_argument("--planned-change-receipt", default="")
     recover.add_argument("--planned-change-receipt-sha256", default="")
+    recover.add_argument('--reconciliation-record', default='')
+    recover.add_argument('--reconciliation-record-sha256', default='')
+
+    reconciliation_pause = subparsers.add_parser('pause-reconciliation', help='Pause admission for authorized reconciliation')
+    reconciliation_pause.add_argument('--config', required=True)
+    reconciliation_pause.add_argument('--reconciliation-id', required=True)
+    reconciliation_prepare = subparsers.add_parser('prepare-reconciliation', help='Seal a verified current-state reconciliation record')
+    reconciliation_prepare.add_argument('--config', required=True)
+    reconciliation_prepare.add_argument('--reconciliation-id', required=True)
+    reconciliation_prepare.add_argument('--request-file', required=True)
 
     prepare = subparsers.add_parser("prepare-runtime-change", help="Bind a paused, idle ARMED Gate to one necessary deployment")
     prepare.add_argument("--config", required=True)
@@ -3384,6 +3636,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         elif args.command == "recover":
             planned = None
+            if args.reconciliation_record or args.reconciliation_record_sha256:
+                if (not args.reconciliation_record or not args.reconciliation_record_sha256
+                    or args.planned_change_receipt or args.planned_change_receipt_sha256):
+                    raise RuntimeContractError('reconciliation_record_invalid')
+                planned = {'mode': 'authorized_reconciliation',
+                           'planned_change_receipt': args.reconciliation_record,
+                           'planned_change_receipt_sha256': args.reconciliation_record_sha256}
             if args.planned_change_receipt or args.planned_change_receipt_sha256:
                 if not args.planned_change_receipt or not args.planned_change_receipt_sha256:
                     raise RuntimeContractError("planned_change_receipt_invalid")
@@ -3409,6 +3668,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 runtime_state_path_override=args.state_path,
                 root_cause_evidence=planned,
             )
+        elif args.command == 'pause-reconciliation':
+            from config import load_config
+            result = pause_reconciliation_admission(load_config(args.config), args.reconciliation_id)
+        elif args.command == 'prepare-reconciliation':
+            from config import load_config
+            request = _read_json(Path(args.request_file))
+            if not isinstance(request, dict):
+                raise RuntimeContractError('reconciliation_request_invalid')
+            result = prepare_reconciliation_local(load_config(args.config), args.reconciliation_id, request)
         elif args.command == "prepare-runtime-change":
             from config import load_config
 

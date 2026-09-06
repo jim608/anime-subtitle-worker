@@ -1,5 +1,21 @@
 # M2 Production Observation
 
+## Authorized reconciliation preparation (2026-09-06)
+
+The failed parser handoff is retained, not retried as a successful preservation
+receipt. Last attested actual Worker is `1d6a8fa417642c48f85effcb792dfa40e8d36fbb`,
+image `sha256:cadbb83117cba5af7d37794a389e8783f4ba37bb9e3392a2829c937d1de05714`;
+WebUI remains `7bd36c30fb07e393eba71760a164246d267c5b16`.
+The runtime is DEGRADED, claims paused, and the old 08:46 Gate remains invalidated.
+
+The user authorized logical isolation of 27 unproven source revisions and other
+unexplained differences, then a NEW verified current-state reconciliation baseline.
+The original receipt is `/logs/m2-planned-runtime-change-parser-boundary-20260905T1416.json`.
+No old Gate results may enter its replacement. No replacement Gate is claimed yet.
+Formal new subtitle delivery remains **0**; the verified existing Galaxy sidecar
+is not a new publication. Final deployed SHA, reconciliation ID, isolation counts,
+and actual new claim/checkpoint evidence must be added after controlled execution.
+
 ## Verified recovery deployment and bounded cases (2026-09-05 09:07 UTC)
 
 The second safe deployment, `20260905T083811Z-380719`, actually runs Worker
