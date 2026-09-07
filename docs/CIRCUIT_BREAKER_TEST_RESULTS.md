@@ -1,5 +1,17 @@
 # M2 Circuit Breaker Test Results
 
+## ASR diagnostic-loss repair candidate (2026-09-07; not deployed)
+
+- Exact two-block regression first reproduced accepted diagnostics deletion.
+- 10 targeted ASR tests PASS; 139 shared Worker/ASR review tests PASS.
+- Server-isolated 149 tests PASS; actual container terminated after SRT replace
+  and before diagnostics commit, then restarted and restored the original pair.
+  Unmocked structural quality gate and repeated postprocess passed; zero ASR reruns.
+- Evidence: `/logs/m2-asr-postprocess-isolated-20260907T134201658435Z/`.
+- Restricted incident-recovery and existing reconciliation/guardrail tests:
+  73 local tests PASS. Server candidate/actual-image validation still required
+  for the subsequently added recovery boundary. Production breaker remains latched.
+
 ## Actual sidecar-discovery image and handoff (2026-09-06 22:40 UTC)
 
 Worker `d508b599291978cc5f6ab786c560823ea755e249`, WebUI

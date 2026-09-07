@@ -1,5 +1,21 @@
 # M2 Production Observation
 
+## Confirmed diagnostic-loss cause and candidate repair (2026-09-07)
+
+The earlier stage-history hypothesis below is superseded: actual `app.log` at
+02:18:40 shows `merged_fragments=1`, after which the old postprocessor deleted
+accepted ASR diagnostics. Exact probe `completion-asr-evidence-1788770251578998479.json`
+confirms missing `/work/asr_diagnostics/b3abcb7babc1bdf31876.json` and failed
+hallucination evidence. The 411-block SRT still exists; current hashes do not
+recreate the missing historical acceptance record.
+
+Candidate repair retains/restores the original SRT/diagnostics pair and revalidates
+transformed bytes without changing cleanup, ASR, translation, QC or model rules.
+Server-isolated tests and real container exit/start continuation passed under
+`/logs/m2-asr-postprocess-isolated-20260907T134201658435Z/` (149 tests).
+This is candidate evidence, not a deployed fix or additional formal delivery.
+Runtime remains d508 / TRIPPED until a separately recorded controlled handoff.
+
 ## Current incident: incorrect completion intercepted (2026-09-07)
 
 The earlier ARMED closeout below is historical. A subsequent actual check found

@@ -6596,6 +6596,11 @@ class VideoWorker:
         hold = asr_transcription_hold_path(srt_path, self.config)
         if not hold.is_file():
             return False
+        from asr_postprocess import recover_asr_postprocess
+
+        if recover_asr_postprocess(srt_path, self.config):
+            self.logger.info("Restored accepted ASR checkpoint after interrupted postprocess: %s", srt_path)
+            return True
         self.logger.warning(
             "Invalidating interrupted ASR commit before cache reuse: "
             "video=%s role=%s srt=%s hold=%s",
@@ -7446,11 +7451,12 @@ class VideoWorker:
                 SrtBlock(index=index, timing=block.timing, text=block.text)
                 for index, block in enumerate(cleaned_blocks, start=1)
             ]
-            write_srt(ja_srt, cleaned_blocks)
-            asr_diagnostics_path(ja_srt, self.config).unlink(missing_ok=True)
-            asr_transcription_hold_path(ja_srt, self.config).unlink(
-                missing_ok=True
-            )
+            from asr_postprocess import commit_asr_postprocess
+
+            if not commit_asr_postprocess(ja_srt, cleaned_blocks, self.config, self.logger):
+                # Preserve compatibility only for non-M2 legacy inputs that
+                # never claimed a hash-bound ASR acceptance record.
+                write_srt(ja_srt, cleaned_blocks)
             self.logger.info(
                 "Post-processed Japanese SRT: %s changed=%s removed=%s merged_fragments=%s remaining=%s",
                 ja_srt,

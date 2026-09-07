@@ -1,5 +1,18 @@
 # M2 Circuit Breaker Policy
 
+## Restricted ASR postprocess incident recovery (candidate, 2026-09-07)
+
+Authorized reconciliation may explicitly identify `asr_postprocess_diagnostics_loss`
+for `incorrect_completion` at `m2_strict_completion`. It is not a generic breaker
+override. Existing durable pause, idle/lease, exact runtime, fresh seven-breaker FI,
+immutable reconciliation, Queue/checkpoint/output preservation and new-Gate rules
+remain mandatory. Additionally require hash-verified actual-image regression logs,
+tested code identity, real container restart, unchanged quality gate and retained
+review-required incident under a persistent source hold. Unrelated new trips,
+missing evidence, unheld incident or changed request must refuse recovery.
+Historical missing ASR diagnostics are not reconstructed as past acceptance;
+the incident remains review-required, excluded from claims and publication.
+
 ## Verified owned deployment mode (2026-09-06 22:40 UTC)
 
 The existing safe updater now supports optional `RECONCILIATION_HOLD_ID`.

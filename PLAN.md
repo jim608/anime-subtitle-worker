@@ -3,7 +3,9 @@
 ## Current blocker (2026-09-07)
 
 - Actual d508 runtime subsequently TRIPPED on incorrect_completion; no reset or further deployment performed.
-- Original strict precommit stage-history rejection remains unreproduced; isolated actual-environment replay and exact single-job evidence retained.
+- Confirmed cause: `_postprocess_ja_srt` merged one short fragment and deleted the previously accepted ASR diagnostics. Missing hash-bound hallucination evidence then caused strict completion rejection. The earlier stage-history hypothesis was not the original cause.
+- Candidate fix preserves an immutable pre-transform pair, revalidates using existing quality rules, commits bound diagnostics and restores the pair after interruption. Targeted tests and actual isolated-container restart passed; not yet deployed.
+- Controlled reconciliation extension is restricted to this exact incident, requires persistent source hold and actual-image regression proof, and preserves the prior receipt/Gate. No generic breaker override.
 - Source E1 still lacks actual torrent/extraction evidence; Goal remains incomplete.
 - Preserve current Gate/63 holds, output artifacts and checkpoints. See latest observation incident and work/M2_UNBLOCK_HANDOFF.md; earlier ARMED closeout is historical.
 
