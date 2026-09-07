@@ -48,6 +48,9 @@ def resolve_mikan_series_mappings(
     cached_only: bool = False,
     deadline_monotonic: float | None = None,
 ) -> list[dict[str, object]]:
+    # One operation-scoped identity snapshot, never a lifetime path cache.
+    # Repeated metadata replacements must not resolve every path for every item.
+    resolved_paths: dict[str, str] = {}
     mappings: list[dict[str, object]] = []
     for configured in config.mikan_series_path_mappings:
         mapping = dict(configured)
@@ -66,20 +69,20 @@ def resolve_mikan_series_mappings(
         return mappings
 
     protected_paths = {
-        _mapping_path_key(mapping)
+        _mapping_path_key(mapping, resolved_paths=resolved_paths)
         for mapping in mappings
         if "path" in mapping and _mapping_is_protected(mapping)
     }
     cache_path = _resolve_cache_path(config)
     cache = _load_cache(cache_path, config=config)
-    mappings = _suppress_invalidated_unlocked_metadata(mappings, cache, config)
+    mappings = _suppress_invalidated_unlocked_metadata(mappings, cache, config, resolved_paths=resolved_paths)
     mappings.extend(_season_scoped_cached_mappings(cache, metadata_mappings, config))
     if cached_only:
         cached_mappings = _cached_mappings_from_cache(cache, config, protected_paths)
         if cached_mappings:
             logger.info("Mikan auto-match cached-only mappings loaded: count=%s", len(cached_mappings))
         for cached_mapping in cached_mappings:
-            mappings = _replace_unlocked_metadata_mapping(mappings, cached_mapping)
+            mappings = _replace_unlocked_metadata_mapping(mappings, cached_mapping, resolved_paths=resolved_paths)
         return _deduplicate_mappings(mappings)
 
     matched_cache_hits = 0
@@ -125,7 +128,7 @@ def resolve_mikan_series_mappings(
         cached = cache.get(series_key)
         if _valid_cached_mapping(cached, config):
             cached_mapping = _cached_mapping_from_entry(cached)
-            mappings = _replace_unlocked_metadata_mapping(mappings, cached_mapping)
+            mappings = _replace_unlocked_metadata_mapping(mappings, cached_mapping, resolved_paths=resolved_paths)
             matched_cache_hits += 1
             continue
         if _valid_cached_miss(cached, config):
@@ -176,11 +179,11 @@ def resolve_mikan_series_mappings(
             _save_cache(cache_path, cache, config=config)
         if result.get("status") != "matched":
             if _cache_miss_invalidates_unlocked_metadata(result):
-                mappings = _remove_unlocked_metadata_mapping(mappings, series_key)
+                mappings = _remove_unlocked_metadata_mapping(mappings, series_key, resolved_paths=resolved_paths)
             new_misses += 1
             continue
         matched_mapping = dict(result["mapping"])
-        mappings = _replace_unlocked_metadata_mapping(mappings, matched_mapping)
+        mappings = _replace_unlocked_metadata_mapping(mappings, matched_mapping, resolved_paths=resolved_paths)
         new_matches += 1
 
     if cache_changed:
@@ -617,12 +620,18 @@ def _unique_tokens(tokens: list[str]) -> list[str]:
     return result
 
 
-def _mapping_path_key(mapping: dict[str, object]) -> str:
-    path = Path(str(mapping.get("path") or ""))
+def _mapping_path_key(mapping: dict[str, object], *, resolved_paths: dict[str, str] | None = None) -> str:
+    raw = str(mapping.get("path") or "")
+    if resolved_paths is not None and raw in resolved_paths:
+        return resolved_paths[raw]
+    path = Path(raw)
     try:
-        return str(path.resolve()).casefold()
+        key = str(path.resolve()).casefold()
     except OSError:
-        return str(path).casefold()
+        key = str(path).casefold()
+    if resolved_paths is not None:
+        resolved_paths[raw] = key
+    return key
 
 
 def _mapping_is_protected(mapping: dict[str, object]) -> bool:
@@ -636,13 +645,15 @@ def _mapping_is_protected(mapping: dict[str, object]) -> bool:
 def _remove_unlocked_metadata_mapping(
     mappings: list[dict[str, object]],
     path: str,
+    *,
+    resolved_paths: dict[str, str] | None = None,
 ) -> list[dict[str, object]]:
-    path_key = _mapping_path_key({"path": path})
+    path_key = _mapping_path_key({"path": path}, resolved_paths=resolved_paths)
     return [
         mapping
         for mapping in mappings
         if not (
-            _mapping_path_key(mapping) == path_key
+            _mapping_path_key(mapping, resolved_paths=resolved_paths) == path_key
             and str(mapping.get("identity_source") or "").strip().casefold() == "series_metadata"
             and not _mapping_is_protected(mapping)
         )
@@ -652,9 +663,11 @@ def _remove_unlocked_metadata_mapping(
 def _replace_unlocked_metadata_mapping(
     mappings: list[dict[str, object]],
     replacement: dict[str, object],
+    *,
+    resolved_paths: dict[str, str] | None = None,
 ) -> list[dict[str, object]]:
     return [
-        *_remove_unlocked_metadata_mapping(mappings, str(replacement.get("path") or "")),
+        *_remove_unlocked_metadata_mapping(mappings, str(replacement.get("path") or ""), resolved_paths=resolved_paths),
         replacement,
     ]
 
@@ -672,11 +685,13 @@ def _suppress_invalidated_unlocked_metadata(
     mappings: list[dict[str, object]],
     cache: dict[str, object],
     config: AppConfig,
+    *,
+    resolved_paths: dict[str, str] | None = None,
 ) -> list[dict[str, object]]:
     result = list(mappings)
     for path, cached in cache.items():
         if _valid_cached_miss(cached, config) and _cache_miss_invalidates_unlocked_metadata(cached):
-            result = _remove_unlocked_metadata_mapping(result, path)
+            result = _remove_unlocked_metadata_mapping(result, path, resolved_paths=resolved_paths)
     return result
 
 

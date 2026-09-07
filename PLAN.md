@@ -1,5 +1,19 @@
 # Incremental Delivery Plan
 
+## Download preparation repair candidate (2026-09-07 18:46 UTC)
+
+- Actual cached-only preparation profile: 44.909s, 340,464 `Path.resolve` calls,
+  exceeding the 30s source-discovery slice before useful source search.
+- Candidate uses operation-scoped resolved path keys, refreshed next operation;
+  matching, manual protection, season rules and failure budgets are unchanged.
+- Frozen real-cache replay: 465 ordered mappings exactly identical (SHA256
+  `75c8908472982ff26a8fc921c74c204c15986aea315abe47f806bc35b4662028`),
+  old image 28.824s vs candidate 0.345s. No network or Production writes.
+- Evidence `/logs/m2-mapping-preparation-parity-20260907T184635249598Z/`.
+- Local 261 relevant tests plus one added identity-refresh/fallback test PASS.
+  Candidate not yet deployed; next actual runtime change requires existing safe
+  planned-change/reconciliation handoff, preserving all 64 current holds.
+
 ## Current recovery boundary (2026-09-07 18:30 UTC)
 
 - ASR evidence repair deployed: `6c925858703bce48f9e5763ac48eddab2f3e441d`; safe deployment `20260907T135509Z-2106168` completed with EXIT=0 and no Production DB rollback.

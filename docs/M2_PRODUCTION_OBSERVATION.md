@@ -1,5 +1,22 @@
 # M2 Production Observation
 
+## Source preparation time-budget defect (candidate verified, not deployed)
+
+Bounded cached-index profiling, with no source search, measured 44.909 seconds
+and approximately 340,000 redundant path resolutions in metadata suppression
+and replacement. This alone exceeds the 30-second discovery slice; repeated
+deadline yields are not evidence of unavailable external sources.
+
+An operation-scoped path-key cache preserves the same selection algorithm and
+refreshes identity resolution next operation. Server isolated replay using the
+same frozen real cache produced exactly the same 465 mappings in the same order:
+old image 28.824 seconds, candidate 0.345 seconds. Evidence:
+`/logs/m2-mapping-preparation-parity-20260907T184635249598Z/`.
+The two earlier isolated fixture attempts failed while opening readonly WAL,
+before comparison; they remain retained. The successful fixture uses an explicit
+runtime read-only export of cached inputs, not writable Production DB access.
+This is not yet actual download, extraction, or formal-publication proof.
+
 ## ASR evidence repair deployed and controlled recovery (2026-09-07 18:30 UTC)
 
 Worker `6c925858703bce48f9e5763ac48eddab2f3e441d`; WebUI remains
