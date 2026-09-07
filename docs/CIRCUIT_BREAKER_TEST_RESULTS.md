@@ -1,5 +1,19 @@
 # M2 Circuit Breaker Test Results
 
+## Actual 6c92585 image and formal recovery (2026-09-07 18:30 UTC)
+
+- Safe updater: 1,893 Worker tests + 231 WebUI/deployment tests PASS; EXIT=0,
+  deployment `20260907T135509Z-2106168`; no Production DB rollback.
+- Actual new Worker image: 222 targeted/shared tests PASS, plus actual container
+  exit after SRT replacement and restart continuation; quality gate and idempotency
+  PASS. `/logs/m2-asr-postprocess-isolated-20260907T135811202515Z/`.
+- Fresh seven-breaker isolation suite **7/7 PASS**, no Production resources affected:
+  `/logs/m2-guardrail-fi-20260907T183052308766Z-d2a2df4d/{result.json,events.jsonl}`.
+- Exact controlled recovery returned ARMED; `/logs/m2-production-recovery-20260907T183055524357Z-efe09d73.json`.
+- Live hold check: original 63 rows preserved, incident added (64); 64/64 formal
+  publication guards reject and zero held post-start claims. Successive normal
+  claims and one new source-detection checkpoint proven, not new subtitle delivery.
+
 ## ASR diagnostic-loss repair candidate (2026-09-07; not deployed)
 
 - Exact two-block regression first reproduced accepted diagnostics deletion.

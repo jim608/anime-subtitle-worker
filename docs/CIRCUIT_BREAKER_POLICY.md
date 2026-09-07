@@ -1,6 +1,6 @@
 # M2 Circuit Breaker Policy
 
-## Restricted ASR postprocess incident recovery (candidate, 2026-09-07)
+## Restricted ASR postprocess incident recovery (deployed, 2026-09-07)
 
 Authorized reconciliation may explicitly identify `asr_postprocess_diagnostics_loss`
 for `incorrect_completion` at `m2_strict_completion`. It is not a generic breaker

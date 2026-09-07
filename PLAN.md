@@ -1,6 +1,14 @@
 # Incremental Delivery Plan
 
-## Current blocker (2026-09-07)
+## Current recovery boundary (2026-09-07 18:30 UTC)
+
+- ASR evidence repair deployed: `6c925858703bce48f9e5763ac48eddab2f3e441d`; safe deployment `20260907T135509Z-2106168` completed with EXIT=0 and no Production DB rollback.
+- Formal controlled recovery `m2breakerrec_6d49295784be4c6cac661410efe09d73` returned ARMED; new Gate `m2-gate-20260907T183058455437Z-0bb33976e8`, initialized 0/20. No old member results transferred and no Gate pass claimed.
+- Reconciliation `m2-recon-asr-evidence-20260907`: 63 original holds preserved plus one diagnostic-loss incident = 64. 7,122 current queued identities in recoverable scope; 6,882 other states retained. These are not completed/delivered counts.
+- Three subsequent actual normal claims observed; the third produced a new valid SUBTITLE_DETECTION checkpoint before policy review. No held claim; 64/64 real publication guards reject held paths.
+- Download E1 still has no actual torrent/extraction/import. One bounded cached-index preparation profile is in progress to diagnose repeated source-discovery deadline exhaustion. Full Goal remains incomplete.
+
+## Superseded incident diagnosis (2026-09-07 before recovery)
 
 - Actual d508 runtime subsequently TRIPPED on incorrect_completion; no reset or further deployment performed.
 - Confirmed cause: `_postprocess_ja_srt` merged one short fragment and deleted the previously accepted ASR diagnostics. Missing hash-bound hallucination evidence then caused strict completion rejection. The earlier stage-history hypothesis was not the original cause.

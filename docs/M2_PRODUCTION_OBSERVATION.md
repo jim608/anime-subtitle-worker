@@ -1,5 +1,46 @@
 # M2 Production Observation
 
+## ASR evidence repair deployed and controlled recovery (2026-09-07 18:30 UTC)
+
+Worker `6c925858703bce48f9e5763ac48eddab2f3e441d`; WebUI remains
+`175a02a7bad46e0b6fa2372c59f39e8dd272911e`. Actual image
+`sha256:02829d1f7e49f93f8acdb74a6ee0887fddacd9d4eb586326187b4476d0d81cd4`;
+source revision `7e0f58d9c0b8cbaefee4e1f88fd2a12738f194c2059f9f417a696227576da9ea`.
+Safe deployment `20260907T135509Z-2106168` completed (EXIT=0), retaining backup.
+
+The first reconciliation attempt correctly refused incomplete old/current identity
+fields and rolled back its transaction. Only the handoff script was corrected;
+the failed evidence/log was retained, with no second deployment or receipt rewrite.
+Formal recovery `m2breakerrec_6d49295784be4c6cac661410efe09d73` then returned ARMED.
+Record `m2-recon-asr-evidence-20260907` links immutable incident snapshot
+`/logs/m2-asr-evidence-repair-20260907/snapshot.json` and prior sidecar reconciliation.
+Its receipt SHA256 is `595034a809b8855d45225124be21496f0ff68f13c5a5f452a4525f0721c890c1`.
+
+New Gate `m2-gate-20260907T183058455437Z-0bb33976e8` started at
+`2026-09-07T18:30:58.455437Z`, baseline `m2-guardrail-v1:4ce441d3821900d5d72035c2`,
+initialized **0/20**. Existing configuration fingerprint and decision schema 1
+remain unchanged. The previous 20 frozen members are preserved under their old
+Gate, invalidated for actual runtime change, never backfilled or credited here.
+
+63 original holds plus one ASR-diagnostic-loss incident are retained (64 total).
+The original 27 UNKNOWN source revisions remain held. Reconciliation retains
+7,122 eligible queued identities and 6,882 other Queue states; it does not prove
+historical media continuity or count these as completed deliveries.
+
+Bounded live evidence `claim-evidence-1788805996829855181.json` records three
+successive actual claims after admission resumed. First two remain review-required
+because prior source-decision attempt references are untrustworthy; the third,
+`aiobl_546becf680cdbc61bc7e36f24cd640e899c00059492b100df8feb7135a13f702`,
+started at epoch `1788805973.8662744`, reached actual SUBTITLE_DETECTION, wrote a
+new hash-valid checkpoint `27b51633f8a164147aa5559f6ea24730bd836119384dffcd0d770535195a2003`,
+heartbeat `1788805975.9592638`, then entered policy review. Source size/mtime match
+its Pipeline identity. No new-runtime historical Recovery-lane claim is yet proven.
+All 64 real publish guards reject holds; no held post-Gate claims observed.
+
+Evidence root: `/logs/m2-asr-evidence-repair-20260907/`. Current-round new downloads,
+extractions and validated formal deliveries remain **0/0/0**; the earlier separately
+verified AI delivery is historical. Goal is not complete and M3 has not started.
+
 ## Confirmed diagnostic-loss cause and candidate repair (2026-09-07)
 
 The earlier stage-history hypothesis below is superseded: actual `app.log` at
