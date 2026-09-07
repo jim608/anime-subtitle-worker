@@ -1,5 +1,12 @@
 # Incremental Delivery Plan
 
+## Current blocker (2026-09-07)
+
+- Actual d508 runtime subsequently TRIPPED on incorrect_completion; no reset or further deployment performed.
+- Original strict precommit stage-history rejection remains unreproduced; isolated actual-environment replay and exact single-job evidence retained.
+- Source E1 still lacks actual torrent/extraction evidence; Goal remains incomplete.
+- Preserve current Gate/63 holds, output artifacts and checkpoints. See latest observation incident and work/M2_UNBLOCK_HANDOFF.md; earlier ARMED closeout is historical.
+
 ## External-sidecar discovery repair (2026-09-06; deployed, bounded source acceptance ongoing)
 
 - [x] Real source metadata reproduces rejection of MP4 releases explicitly carrying Chinese external subtitles.

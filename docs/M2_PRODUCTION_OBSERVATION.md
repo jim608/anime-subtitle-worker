@@ -1,5 +1,36 @@
 # M2 Production Observation
 
+## Current incident: incorrect completion intercepted (2026-09-07)
+
+The earlier ARMED closeout below is historical. A subsequent actual check found
+Worker `d508b599291978cc5f6ab786c560823ea755e249` **TRIPPED** at epoch
+`1788747703.630479`, reason `incorrect_completion`, stage `m2_strict_completion`.
+The existing Gate remains `m2-gate-20260906T224005061938Z-5b93117971`; its ordinal
+20 member was intercepted as NEEDS_REVIEW, not accepted. No Gate pass is claimed.
+
+Affected obligation: `aiobl_ab70e90a81944ab6da0e9767a3f1d2a6a86ec6b9ccb7efd9ff22a5c7fce5b4ea`.
+The child published a manifest, but parent strict completion rejected incomplete
+evidence. Current persisted Pipeline state is QC, delivery is review_required.
+The source's current size/mtime/filesystem fingerprint matches its Pipeline job;
+that does not by itself explain or resolve the strict-history failure.
+
+An online consistency snapshot and actual-image, network-isolated replay were
+performed with Production mounts read-only. Replays must inherit actual runtime
+environment: default-container environment produced an invalid fixture manifest
+result and unrelated idempotency conflict. With runtime environment aligned,
+manifest hashes/parse/QC and reconstructed formal stage history can validate;
+the original precommit history failure is **not yet reproduced or repaired**.
+No completion rewrite, breaker reset, runtime change or new deployment was made
+during this diagnosis. Published artifacts are not counted as verified delivery.
+
+The exact No-Rin E1 source request remains durable with no matching torrent or
+extraction job observed. The source process is alive and recovery slices rotate;
+this is not end-to-end download acceptance. Full incident and isolated replay
+evidence remains in `external-sidecar-handoff-20260906/` under the log root below:
+`incorrect-completion-stages.log`, `completion-isolated-prelude.log`,
+`source-dispatch-probe-1788751537202512262.json`, and
+`source-status-1788751569801940162.json`.
+
 ## External-sidecar runtime handoff (2026-09-06 22:40 UTC)
 
 Worker runtime: `d508b599291978cc5f6ab786c560823ea755e249`; WebUI runtime:
