@@ -893,6 +893,125 @@ class MikanWorker:
             "reason": reason,
         }
 
+    def revalidate_recorded_completion(
+        self, target: MikanReplacementTarget, *, expected_entry_sha256: str,
+        source_identity: dict[str, Any], request_id: str, authorization_ref: str,
+    ) -> dict[str, Any]:
+        """Reopen one reviewed historical completion through normal discovery.
+
+        The archived entry and discoverable retry intent are one pending-state
+        write, not a second queue. No download or publication occurs here.
+        Callers must supply the reviewed current identity and original revision;
+        a newly computed hash proves only current identity, not past continuity.
+        """
+        from m2_production_recovery import require_source_not_held
+        from scan_state import scan_state_path
+        from subtitle_paths import has_ai_finished_subtitle, has_finished_subtitle
+
+        if not isinstance(authorization_ref, str) or not authorization_ref.strip():
+            raise MikanWorkerError("completion_revalidation_authorization_missing")
+        if not getattr(self.config, "mikan_enabled", False):
+            raise MikanWorkerError("completion_revalidation_discovery_disabled")
+        queue_lock = self._acquire_queue_lock("completion_revalidation", required=False)
+        if queue_lock is None:
+            raise MikanWorkerError("completion_revalidation_queue_busy")
+        video_lock = state_lock = None
+        try:
+            mappings = [m for m in self._series_mappings(cached_only=True)
+                        if int(m.get("bangumi_id") or 0) == target.bangumi_id]
+            videos = _target_videos_from_episode_index(self.config, mappings, target.episode)
+            if len(videos) != 1:
+                raise MikanWorkerError("completion_revalidation_target_not_unique")
+            video = videos[0]
+            if str(video.resolve()) != source_identity.get("canonical_path"):
+                raise MikanWorkerError("completion_revalidation_target_changed")
+            require_source_not_held(self.config, video)
+            video_lock = VideoLock(video)
+            if not video_lock.acquire():
+                raise MikanWorkerError("completion_revalidation_video_busy")
+            state_lock = self._acquire_state_lock_for_enqueue(
+                "completion_revalidation", required=False)
+            if state_lock is None:
+                raise MikanWorkerError("completion_revalidation_state_busy")
+            pending = _load_pending(self.pending_path)
+            entry = _pending_entry(target.bangumi_id, target.episode, pending)
+            result = _revalidated_completed_entry(entry,
+                expected_entry_sha256=expected_entry_sha256,
+                request_id=request_id, source_identity=source_identity)
+            if result == entry:
+                return {"request_id": request_id, "status": "already_recorded", "queued": 0}
+            ownership = sqlite3.connect(scan_state_path(self.config).resolve().as_uri()
+                                        + "?mode=ro", uri=True, timeout=5)
+            try:
+                if (ownership.execute("SELECT 1 FROM ai_candidate_queue WHERE path=? AND status='running'",
+                                      (str(video),)).fetchone()
+                        or ownership.execute("SELECT 1 FROM ai_job_state WHERE path=? AND status='running'",
+                                             (str(video),)).fetchone()):
+                    raise MikanWorkerError("completion_revalidation_ai_owner_active")
+            finally:
+                ownership.close()
+            if (has_ai_finished_subtitle(video, self.config)
+                    or has_finished_subtitle(video, self.config)
+                    or _target_has_required_chinese_subtitles(video, verify_config=self.config)):
+                raise MikanWorkerError("completion_revalidation_valid_output_exists")
+            hashes = _pending_entry_release_hashes(entry)
+            # Failed sources can still own partial/reusable data. Include them
+            # in the read-only check; never clear their exclusion/retry evidence.
+            for value in entry.get("failed_info_hashes") or []:
+                candidate = str(value).strip().casefold()
+                if not re.fullmatch(r"[0-9a-f]{40}", candidate):
+                    raise MikanWorkerError("completion_revalidation_download_identity_unknown")
+                hashes.add(candidate)
+            if not hashes:
+                raise MikanWorkerError("completion_revalidation_download_identity_unknown")
+            jobs, available = _target_review_extract_jobs(self.config, hashes)
+            if not available or any(not jobs.get(h) for h in hashes):
+                raise MikanWorkerError("completion_revalidation_extract_evidence_unavailable")
+            for rows in jobs.values():
+                for job in rows:
+                    if job["status"] not in {"success", "replaced", "failed", "cancelled"}:
+                        raise MikanWorkerError("completion_revalidation_extract_not_terminal")
+                    raw_path = job["torrent"].get("content_path")
+                    mapped = map_remote_path(raw_path, self.config.qbit_path_mappings)
+                    if mapped is None:
+                        raise MikanWorkerError("completion_revalidation_download_mapping_unknown")
+                    if mapped.exists():
+                        raise MikanWorkerError("completion_revalidation_reuse_download_first")
+            qbit = self._qbit()
+            response = qbit._get_with_retry(qbit.base_url + "/api/v2/torrents/info",
+                params={"hashes": "|".join(sorted(hashes))}, attempts=1)
+            response.raise_for_status()
+            torrents = response.json()
+            if not isinstance(torrents, list) or torrents:
+                raise MikanWorkerError("completion_revalidation_existing_download_or_invalid_response")
+            before = video.stat()
+            digest = sha256_file(video)
+            after = video.stat()
+            if ((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                    != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+                    or after.st_size != source_identity["size"]
+                    or after.st_mtime_ns != source_identity["mtime_ns"]
+                    or digest != source_identity["sha256"]):
+                raise MikanWorkerError("completion_revalidation_source_changed")
+            require_source_not_held(self.config, video)
+            result["completion_revalidation"].update({
+                "authorization_ref": authorization_ref.strip(),
+                "recorded_at": _utc_now().isoformat(),
+                "resume_via": "existing_known_episode_discovery",
+                "checked_download_hashes": sorted(hashes),
+            })
+            # Preserve the same dictionary location expected by _pending_entry.
+            entry.clear()
+            entry.update(result)
+            _save_pending(self.pending_path, pending)
+            return {"request_id": request_id, "status": "recorded", "queued": 0}
+        finally:
+            if state_lock is not None:
+                state_lock.release()
+            if video_lock is not None:
+                video_lock.release()
+            queue_lock.release()
+
     def request_replacement_enqueue(
         self,
         targets: list[MikanReplacementTarget],
@@ -4115,6 +4234,54 @@ class MikanWorker:
 
     def _reconcile_verified_history_outputs(self, bangumi_id, episodes, *, season_hint=None, operation, state_required):
         pending = _load_pending(self.pending_path)
+        # An authorization to reopen one revision is not permission to download
+        # for a later mapping/source revision. This check also covers deferred
+        # and replacement enqueue paths through _release_can_be_queued.
+        from m2_production_recovery import RecoveryError, require_source_not_held
+        for episode in episodes:
+            entry = _pending_entry(bangumi_id, episode, pending)
+            review = entry.get("completion_revalidation")
+            if not isinstance(review, dict) or _pending_is_terminal_success(entry):
+                continue
+            reason = ""
+            try:
+                mappings = [m for m in self._series_mappings(cached_only=True)
+                            if int(m.get("bangumi_id") or 0) == bangumi_id]
+                videos = _target_videos_from_episode_index(self.config, mappings, episode, season_hint=season_hint)
+                identity = review["source_identity"]
+                if len(videos) != 1 or str(videos[0].resolve()) != identity["canonical_path"]:
+                    reason = "revalidation_target_changed"
+                else:
+                    require_source_not_held(self.config, videos[0])
+                    stat = videos[0].stat()
+                    if stat.st_size != identity["size"] or stat.st_mtime_ns != identity["mtime_ns"]:
+                        reason = "revalidation_source_revision_changed"
+                    else:
+                        digest = sha256_file(videos[0])
+                        after = videos[0].stat()
+                        if (digest != identity["sha256"]
+                            or (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+                            != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)):
+                            reason = "revalidation_source_checksum_changed"
+            except RecoveryError as exc:
+                reason = str(exc)
+            except (OSError, KeyError, TypeError, ValueError):
+                reason = "revalidation_source_evidence_unavailable"
+            if reason:
+                lock = self._acquire_state_lock_for_enqueue(operation, required=state_required)
+                if lock is not None:
+                    try:
+                        current = _load_pending(self.pending_path)
+                        live = _pending_entry(bangumi_id, episode, current)
+                        evidence = live.get("completion_revalidation")
+                        if (isinstance(evidence, dict)
+                                and evidence.get("request_id") == review.get("request_id")
+                                and evidence.get("blocked_reason") != reason):
+                            evidence.update(blocked_reason=reason, blocked_at=_utc_now().isoformat())
+                            _save_pending(self.pending_path, current)
+                    finally:
+                        lock.release()
+                return False
         # Historical failed downloads can outlive a later successful subtitle
         # import. Revalidate those indexed targets before starting any torrent.
         historical = [episode for episode in episodes
@@ -5712,7 +5879,8 @@ def _known_retry_episodes_for_bangumi(
         if retry_until > current.timestamp():
             continue
         known_failure = bool(
-            entry.get("no_candidate_at")
+            entry.get("completion_revalidation")
+            or entry.get("no_candidate_at")
             or entry.get("no_candidate_retry_count")
             or entry.get("candidate_review_reason")
             or entry.get("failed_urls")
@@ -9853,6 +10021,61 @@ def _release_seen_is_retryable(release: MikanRelease, pending: dict[str, Any]) -
         if release.info_hash and release.info_hash in _pending_retryable_info_hashes(entry):
             return True
     return False
+
+
+def _revalidated_completed_entry(
+    entry: dict[str, Any],
+    *,
+    expected_entry_sha256: str,
+    request_id: str,
+    source_identity: dict[str, Any],
+) -> dict[str, Any]:
+    """Build an archival transition for the guarded revalidation consumer.
+
+    This does not persist, enqueue, or authorize revalidation. The consumer must
+    hold existing locks and verify current source identity, missing valid output,
+    no live ownership and no reusable download before committing this result.
+    Historical extraction rows and retry/seen evidence are never rewritten.
+    """
+    if not re.fullmatch(r"[0-9a-f]{64}", str(request_id or "")):
+        raise MikanWorkerError("completion_revalidation_request_id_invalid")
+    if not re.fullmatch(r"[0-9a-f]{64}", str(expected_entry_sha256 or "")):
+        raise MikanWorkerError("completion_revalidation_revision_invalid")
+    prior = entry.get("completion_revalidation")
+    if isinstance(prior, dict):
+        if (prior.get("request_id") == request_id
+                and prior.get("prior_entry_sha256") == expected_entry_sha256
+                and prior.get("source_identity") == source_identity):
+            return json.loads(json.dumps(entry))  # replay never resets new progress
+        raise MikanWorkerError("completion_revalidation_already_recorded")
+    canonical = json.dumps(entry, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    if hashlib.sha256(canonical.encode("utf-8")).hexdigest() != expected_entry_sha256:
+        raise MikanWorkerError("completion_revalidation_entry_changed")
+    if not _pending_is_terminal_success(entry):
+        raise MikanWorkerError("completion_revalidation_not_historical_success")
+    if (entry.get("download_recovery") or {}).get("decision") != "KEEP_RECORDED_COMPLETE_NOT_REVERIFIED":
+        raise MikanWorkerError("completion_revalidation_not_reviewed_history")
+    if _pending_has_active_release_fields(entry) or _pending_has_deferred_release_fields(entry):
+        raise MikanWorkerError("completion_revalidation_download_active")
+    if (not isinstance(source_identity, dict)
+            or not str(source_identity.get("canonical_path") or "")
+            or type(source_identity.get("size")) is not int or source_identity["size"] <= 0
+            or type(source_identity.get("mtime_ns")) is not int or source_identity["mtime_ns"] <= 0
+            or not re.fullmatch(r"[0-9a-f]{64}", str(source_identity.get("sha256") or ""))):
+        raise MikanWorkerError("completion_revalidation_source_identity_invalid")
+    result = json.loads(canonical)
+    result["completion_revalidation"] = {
+        "contract": "m2-completed-download-revalidation-v1",
+        "request_id": request_id,
+        "prior_entry_sha256": expected_entry_sha256,
+        "prior_entry": json.loads(canonical),
+        "source_identity": json.loads(json.dumps(source_identity)),
+        "historical_continuity": "UNKNOWN",
+        "reason_code": "current_valid_output_missing_after_review",
+    }
+    for field in ("completed_at", "last_extracted_at", "last_extracted_count", "total_extracted_count"):
+        result.pop(field, None)
+    return result
 
 
 def _mark_pending(

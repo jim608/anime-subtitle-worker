@@ -141,6 +141,22 @@ def pause_reconciliation_admission(config: Any, reconciliation_id: str, *, now: 
     return payload
 
 
+def _receipt_preserves_settled_gate(gate: Any, receipt: Mapping[str, Any]) -> bool:
+    """A finished cohort is retained verbatim, never invalidated or reopened.
+
+    Only callers that already authenticate the controlled-change receipt may use
+    this exception. It does not authorize recovery from a generic breaker trip.
+    """
+    original = receipt.get('gate') or (receipt.get('request') or {}).get('old_gate')
+    if (not isinstance(gate, Mapping) or gate != original or gate.get('status') != 'SETTLED'
+        or gate.get('target_size') != 20 or gate.get('enrolled_count') != 20
+        or gate.get('settled_count') != 20):
+        return False
+    payload = gate.get('summary_payload_json')
+    return (isinstance(payload, str) and bool(payload)
+            and hashlib.sha256(payload.encode('utf-8')).hexdigest() == gate.get('summary_sha256'))
+
+
 def prepare_reconciliation_local(config: Any, reconciliation_id: str, request: Mapping[str, Any],
                                  *, now: float | None = None) -> dict[str, Any]:
     """Seal a NEW current-state boundary; never retry or rewrite the failed receipt."""
@@ -177,7 +193,9 @@ def prepare_reconciliation_local(config: Any, reconciliation_id: str, request: M
         connection.execute('BEGIN IMMEDIATE')
         _require_planned_change_idle(connection, config, timestamp)
         gate = gate_by_id(connection, str(request.get('old_gate_id') or ''))
-        if not gate or gate.get('status') != 'INVALIDATED_BY_RUNTIME_CHANGE' or active_gate(connection):
+        if (not gate or active_gate(connection)
+            or (gate.get('status') != 'INVALIDATED_BY_RUNTIME_CHANGE'
+                and not _receipt_preserves_settled_gate(gate, old_receipt))):
             raise RuntimeContractError('reconciliation_old_gate_not_invalidated')
         if gate != request.get('old_gate'):
             raise RuntimeContractError('reconciliation_old_gate_changed')
@@ -1325,10 +1343,11 @@ def prepare_runtime_change(
         connection = store.observation_connection
         connection.execute("BEGIN IMMEDIATE")
         _require_planned_change_idle(connection, config, timestamp)
-        validate_active_runtime(connection, prior)
-        gate = active_gate(connection)
+        gate = validate_active_runtime(connection, prior)
         if not gate or gate["gate_id"] != expected_old_gate_id:
             raise RuntimeContractError("planned_change_active_gate_mismatch")
+        if gate.get('status') == 'SETTLED' and not _receipt_preserves_settled_gate(gate, {'gate': gate}):
+            raise RuntimeContractError('planned_change_settled_summary_unproven')
         snapshot = _planned_change_snapshot(connection, expected_old_gate_id)
         existing = _read_json(path)
         if path.exists():
@@ -1440,7 +1459,9 @@ def _planned_change_receipt(config: Any, root_cause: Mapping[str, Any]) -> dict[
     if (not isinstance(receipt, dict) or receipt.get("contract") != PLANNED_CHANGE_CONTRACT
         or not isinstance(receipt.get("runtime"), dict) or not isinstance(receipt.get("gate"), dict)
         or receipt["gate"].get("gate_id") != root_cause.get("expected_old_gate_id")
-        or receipt["runtime"].get("status") != "ARMED" or receipt["gate"].get("status") != "ACTIVE"
+        or receipt["runtime"].get("status") != "ARMED"
+        or (receipt["gate"].get("status") != "ACTIVE"
+            and not _receipt_preserves_settled_gate(receipt["gate"], receipt))
         or not isinstance(receipt.get("breaker"), dict) or receipt["breaker"].get("tripped") is not False):
         raise RuntimeContractError("planned_change_receipt_gate_mismatch")
     return receipt
@@ -1602,7 +1623,8 @@ def _planned_change_incident(
         raise RuntimeContractError("planned_change_fault_evidence_not_fresh")
     queue_preservation = _validate_planned_snapshot(connection, receipt)
     gate = gate_by_id(connection, receipt["gate"]["gate_id"])
-    if not gate or active_gate(connection) is not None or gate.get("status") != INVALIDATED_RUNTIME:
+    if (not gate or active_gate(connection) is not None
+        or (gate.get("status") != INVALIDATED_RUNTIME and not _receipt_preserves_settled_gate(gate, receipt))):
         raise RuntimeContractError("planned_change_old_gate_not_invalidated")
     mutable = {"status", "invalidated_at", "invalidation_reason", "invalidation_evidence_json", "updated_at"}
     if any(gate.get(key) != value for key, value in receipt["gate"].items() if key not in mutable):
@@ -1626,9 +1648,21 @@ def _planned_change_incident(
             or float(fault["container_started_at_epoch"]) <= handoff["first_attested_at"]):
             raise RuntimeContractError("planned_change_followup_runtime_not_proven")
     try:
-        invalidation = json.loads(gate["invalidation_evidence_json"])
-        expected, actual = invalidation["expected"], invalidation["actual"]
-        if handoff is None and (not prepared < float(fault["container_started_at_epoch"]) <= float(gate["invalidated_at"]) <= float(latest["observed_at"]) <= now
+        if _receipt_preserves_settled_gate(gate, receipt):
+            # There is deliberately no invalidation row for a settled cohort.
+            # Above checks attest every new runtime identity, frozen policy,
+            # fresh fault suite and exact old receipt/snapshot. Bind the new
+            # container lifetime to the durable drift trip without rewriting
+            # the immutable old Gate to manufacture invalidation evidence.
+            if handoff is not None or not prepared < float(fault["container_started_at_epoch"]) <= float(latest["observed_at"]) <= now:
+                raise ValueError("settled deployment drift lifetime mismatch")
+            invalidation = None
+        else:
+            invalidation = json.loads(gate["invalidation_evidence_json"])
+            if not isinstance(invalidation, Mapping):
+                raise ValueError("runtime invalidation evidence missing")
+        expected, actual = (invalidation["expected"], invalidation["actual"]) if invalidation else ({}, {})
+        if invalidation is not None and handoff is None and (not prepared < float(fault["container_started_at_epoch"]) <= float(gate["invalidated_at"]) <= float(latest["observed_at"]) <= now
             or invalidation.get("reason_code") != "live_worker_container_identity_mismatch"
             or actual.get("reason_code") != "live_worker_container_identity_mismatch"
             or actual.get("container_identity") != evidence["worker_container_identity"]
@@ -2281,7 +2315,9 @@ def _prepare_pending_recovery_resume(
     store = ScanStateStore.from_config(config)
     try:
         old_gate = gate_by_id(store.observation_connection, expected_old_gate)
-        if not isinstance(old_gate, Mapping) or old_gate.get("status") != INVALIDATED_RUNTIME:
+        if (not isinstance(old_gate, Mapping)
+            or (old_gate.get("status") != INVALIDATED_RUNTIME
+                and not (planned_mode and _receipt_preserves_settled_gate(old_gate, receipt)))):
             raise RuntimeContractError("pending_recovery_old_gate_not_invalidated")
         current_active = active_gate(store.observation_connection)
         if prior_runtime.get("status") == "DISARMED" and current_active is not None:
@@ -2355,7 +2391,7 @@ def _prepare_pending_recovery_resume(
         "old_worker_sha": str(recovery_log.get("old_worker_sha") or ""),
         "new_worker_sha": worker_commit,
         "old_gate_id": expected_old_gate,
-        "old_gate_status": "INVALIDATED_BY_RUNTIME_CHANGE",
+        "old_gate_status": str(old_gate.get("status") or ""),
         "breaker_before": "TRIPPED",
         "breaker_after": "ARMED_PENDING_NEW_GATE",
         "log_path": str(resume_log_path),
@@ -2608,7 +2644,9 @@ def recover_runtime_local(
             invalidated = latest_gate(connection)
             if (
                 not isinstance(invalidated, Mapping)
-                or invalidated.get("status") != INVALIDATED_RUNTIME
+                or (invalidated.get("status") != INVALIDATED_RUNTIME
+                    and not (planned_mode and _receipt_preserves_settled_gate(
+                        invalidated, _planned_change_receipt(config, root_cause))))
                 or (expected_old_gate and invalidated.get("gate_id") != expected_old_gate)
             ):
                 raise RuntimeContractError("active_gate_missing_for_recovery")

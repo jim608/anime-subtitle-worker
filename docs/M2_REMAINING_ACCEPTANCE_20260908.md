@@ -1,5 +1,101 @@
 # M2 remaining acceptance — 2026-09-08
 
+## Combined candidate ready for safe deployment preparation
+
+Final combined candidate targeted suite:122/122 PASS, exit0, server evidence
+`/logs/m2-resumed-acceptance-20260908/combined-revalidation-uJ60ID/full.log`.
+Mounted only candidate source/tests on existing image, read-only root, tmpfs,
+no network and no Production data mounts. Mikan dispatch now also verifies the
+current checksum, not only metadata. Planned and authorized reconciliation tests
+cover a genuinely settled20-member failed fixture, receipt/summary preservation,
+idempotent recovery and a new empty Gate; shared frozen-observation regressions pass.
+
+The reproducible SETTLED handoff defect below is fixed in candidate code:
+preparation accepts a verified finished cohort, drift still persists a breaker,
+and only authenticated controlled-change receipts may recover while retaining
+the exact old SETTLED row and summary. Generic breaker recovery is not broadened.
+Old evidence is never rewritten as ACTIVE/INVALIDATED/PASS. Earlier failed logs
+are retained (settled-handoff-fix-DM2P46 and b0erfU);103tests first passed in lPJLjW.
+
+Not yet deployed or used on Production. Next: owned safe-idle preparation using
+the verified SETTLED-capable coordinator, safe-update-stack, actual image/fault
+attestation, controlled reconciliation and one real download/extraction delivery.
+Preserve68holds, UNPROVEN, source/valid outputs and old Gate. M2 remains incomplete.
+
+## Deployment blocker reproduced; dispatch guard completed
+
+Candidate Mikan reconciliation now rechecks the authorized target path, size/mtime
+and source hold before later ordinary/replacement/deferred enqueue. A changed or
+held source is refused and its blocked reason persists inside the existing archived
+revalidation record without clearing retry/backoff or old completion evidence.
+14 focused tests PASS on actual-image isolated candidate mounts:
+`/logs/m2-resumed-acceptance-20260908/dispatch-revalidation-4ZhbRN/full.log` (exit0).
+Earlier nyU8qF failure showed the generic candidate-review writer would classify
+these reasons as ambiguity; that writer was not reused. No Production invocation.
+
+Safe deployment has a newly reproduced code blocker, not merely a busy worker:
+`prepare_runtime_change` requires active_gate, while the actual old Gate is SETTLED.
+An isolated real20-member fixture (2FAILED/18NEEDS_REVIEW), settled via normal
+record_terminal_evidence, reproduces planned_change_active_gate_mismatch and proves
+the old gate/summary remain unchanged. Characterization test PASS is NOT a fix.
+Evidence `/logs/m2-resumed-acceptance-20260908/settled-handoff-repro-qH3WZy/`.
+
+Next: minimally extend controlled planned/reconciliation recovery to retain an
+exact receipt-bound SETTLED gate and immutable summary. Review preparation,
+receipt validation, reconciliation, recovery and replay together; they currently
+expect ACTIVE/INVALIDATED status at several boundaries. Do not mutate SETTLED to
+ACTIVE/INVALIDATED just to satisfy those checks or copy results into a new Gate.
+No admission pause, deployment, Gate mutation or new formal subtitle this turn.
+
+## Guarded revalidation and runtime checkpoint — 2026-09-08 14:11 UTC
+
+Implemented `MikanWorker.revalidate_recorded_completion`: one reviewed target,
+existing queue/video/state locks, revision-bound full prior entry archive and
+current source checksum, unique cached target, source holds, active AI ownership,
+valid output, exact historical/failed download hashes and extraction records.
+Existing torrent or mapped content refuses reopening so reuse is required first.
+Archive and retry intent share one pending write; existing known-episode discovery
+resumes it after restart, retaining backoff, failure exclusions and terminal guards.
+No parallel Queue/request consumer was introduced. Historical continuity stays UNKNOWN.
+
+Server isolated candidate-image tests: 17/17 PASS, exit0. Includes real temporary
+file locks/pending storage, SQLite-authoritative replay, fresh Python-process
+rediscovery twice after simulated post-commit interruption, refusal paths and five
+existing replacement/terminal regressions. External source/output/qB inspection
+boundaries in new tests are stubbed; this is NOT real download/publication proof
+or a Docker restart acceptance. Log:
+`/logs/m2-resumed-acceptance-20260908/guarded-revalidation-GxlNBC/full.log` (+exit.txt).
+Earlier failed fixture-normalization test remains in guarded-revalidation-Vak4dZ.
+
+Read-only runtime proof at1788876700:
+`/logs/m2-resumed-acceptance-20260908/revalidation-runtime-IgaM5m/`.
+Worker738e96eafec66a6f62db31b9247cd58bf0aec6df, WebUI175a02a7bad46e0b6fa2372c59f39e8dd272911e,
+ARMED/runtime_baseline_match, same container/image and frozen Gate121706 (18review,2failed).
+Successor7769498c4a8b45879a3f1734cc2e3b00 is TRANSLATING, queue running,
+translation heartbeat1788876700.477003, batch60/78. No forced stop or deployment.
+Next: complete entry/locking review and necessary integration verification, then
+safe owned deployment/handoff and one real accepted download/extraction publication.
+Code is not deployed or used on Production. Formal new download/extraction subtitles0;
+M2 incomplete; M3 evidence reused separately, not counted toward this acceptance.
+
+## Archival transition implementation checkpoint — 2026-09-08
+
+Added a non-wired pure transition helper and five focused tests. Server isolation
+using deployed image e34372dc6ae9f1e28b293ce6f9dd61414f7c0b292ad32588f43dcd2613f1c617
+passed 5/5 (exit 0), with no network or Production data mounts. Evidence:
+`/logs/m2-resumed-acceptance-20260908/completion-revalidation-pzBzIi/full.log`
+and `exit.txt`. Tests cover complete historical snapshot preservation, unchanged
+input/failure evidence, stale revision refusal, active/unreviewed history refusal,
+missing fingerprint refusal, and serialized replay preserving subsequent progress.
+
+This is NOT a durable consumer, real restart integration test, authorization
+entry, or formal publication acceptance. No Production state was reopened and
+no deployment occurred. The guarded existing-request consumer still needs current
+source/output/hold/lease/reusable-download checks under existing locks, durable
+intent/replay integration and related failure-path tests before any deployment.
+M2 remains incomplete; formal download/extraction additions remain 0. Retain the
+settled frozen Gate FAIL and all quarantine/preservation evidence.
+
 ## Reopen safety preconditions checked — 2026-09-08 13:56 UTC
 
 Exact3 targets2565:12,3085:13,3932:3 exist and are not held. Production

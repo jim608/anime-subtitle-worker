@@ -2,6 +2,25 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+Candidate code now fixes both controlled historical completion revalidation and
+receipt-bound SETTLED Gate handoff. Combined targeted122tests PASS; not deployed.
+Next owned safe deployment/reconciliation followed by real download/extraction
+formal publication proof. Old failed Gate/summary stay immutable, no backfill.
+
+Next deployment prerequisite: reproduced ACTIVE-only planned-change failure after
+legitimate SETTLED20/20. Preserve settled FAIL/summary; extend receipt-bound
+controlled handoff, not the Gate membership/status. Characterization evidence:
+settled-handoff-repro-qH3WZy. Mikan post-reopen source/hold recheck14tests PASS,
+dispatch-revalidation-4ZhbRN. Not deployed; no formal download/extraction delivery.
+
+2026-09-08 14:11UTC: guarded single-target historical revalidation implemented,
+not deployed. Archive+retry intent persist in existing pending store, normal
+known-episode discovery resumes;17 targeted/isolation/regression tests PASS.
+Real qB/source/output acceptance and safe runtime deployment still outstanding.
+Live Worker738e96e/ARMED; successor7769498c translating with heartbeat; no forced
+restart. Gate121706 remains settled FAIL, no new formal download/extraction output.
+Evidence and remaining safety review: M2_REMAINING_ACCEPTANCE latest section.
+
 13:52UTC three exact old targets have2/8/1 episode candidates but are blocked
 before comparison by historical terminal-success markers, not active/backoff.
 Existing archival reopen helper has no caller. Preserve history; next verify

@@ -100,6 +100,55 @@ class PlannedRuntimeChangeTests(unittest.TestCase):
             with self.subTest(overrides=overrides), self.assertRaisesRegex(runtime.RuntimeContractError, "gate_or_new_sha_invalid"):
                 self.prepare(**overrides)
 
+    def settle_failed_cohort(self):
+        from m2_observation_store import record_terminal_evidence
+        claims = [('frozen-attempt', 'frozen-job')]
+        for number in range(19):
+            claim, job = f'failed-attempt-{number}', f'failed-job-{number}'
+            enroll_claim(self.connection, self.old, claim_identity=claim,
+                         gate_job_identity=job, input_fingerprint=f'source-{number}',
+                         claimed_at=self.now - 9, processing_strategy='OTHER',
+                         eligible=True, eligibility_reason='eligible', now=self.now - 9)
+            claims.append((claim, job))
+        for number, (claim, job) in enumerate(claims):
+            record_terminal_evidence(self.connection, claim_identity=claim,
+                gate_job_identity=job,
+                outcome={'terminal_status': 'FAILED' if number < 2 else 'NEEDS_REVIEW',
+                         'reason_code': 'fixture_not_strict_verified', 'processing_strategy': 'OTHER'},
+                qualification={'qualified': False, 'evidence': {}, 'missing_evidence': ['strict_evidence'],
+                               'reason_codes': ['fixture_not_strict_verified']}, now=self.now - 1)
+        self.state.commit()
+        before = gate_by_id(self.connection, self.old_gate)
+        self.assertEqual(before['status'], 'SETTLED')
+        self.assertEqual(before['settled_count'], 20)
+        self.assertTrue(before['summary_payload_json'])
+        return before
+
+    def test_settled_failed_gate_is_preserved_through_controlled_handoff(self):
+        """A finished failed cohort is not invalidated, reopened or copied."""
+        before = self.settle_failed_cohort()
+        self.deploy()
+        receipt_bytes = Path(self.prepared['receipt_path']).read_bytes()
+        result = self.recover()
+        self.assertEqual(result['status'], 'DISARMED')
+        self.assertEqual(self.recover()['old_gate_status'], 'SETTLED')
+        self.assertEqual(before, gate_by_id(self.connection, self.old_gate))
+        new = runtime.initialize_gate(self.config, self.evidence,
+                                     source_revision_file=self.fixture.revision, now=self.now + 11)
+        self.assertNotEqual(new['gate']['gate_id'], self.old_gate)
+        self.assertEqual(active_gate(self.connection)['enrolled_count'], 0)
+        self.assertEqual(receipt_bytes, Path(self.prepared['receipt_path']).read_bytes())
+        self.assertEqual(before, gate_by_id(self.connection, self.old_gate))
+
+    def test_settled_receipt_requires_exact_complete_summary(self):
+        gate = self.settle_failed_cohort()
+        receipt = {'gate': dict(gate)}
+        self.assertTrue(runtime._receipt_preserves_settled_gate(gate, receipt))
+        for change in ({'summary_sha256': 'f'*64}, {'settled_count': 19},
+                       {'summary_payload_json': ''}, {'status': 'ACTIVE'}):
+            with self.subTest(change=change):
+                self.assertFalse(runtime._receipt_preserves_settled_gate({**gate, **change}, receipt))
+
     def test_prepare_requires_existing_durable_pause(self):
         (self.fixture.work / "ai_control.json").unlink()
         with self.assertRaisesRegex(observation.ObservationStateError, "ai_claim_pause_missing"):

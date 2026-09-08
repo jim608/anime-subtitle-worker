@@ -1377,7 +1377,12 @@ def _persist_runtime_drift_invalidation(
             with immediate_transaction(connection):
                 gate = sqlite_active_gate(connection)
                 if gate is None:
-                    return False
+                    gate = sqlite_latest_gate(connection)
+                    if gate is None or gate.get('status') != 'SETTLED':
+                        return False
+                    # Runtime drift still needs durable breaker evidence after
+                    # a cohort finishes. invalidate_active_gate below is a no-op
+                    # for SETTLED: keep its frozen rows and summary unchanged.
                 from m2_guardrail_runtime import runtime_guardrail_status
 
                 current = runtime_guardrail_status(config)

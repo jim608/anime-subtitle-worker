@@ -9,10 +9,14 @@ import test_m2_planned_runtime_change as planned_tests
 
 
 class AuthorizedReconciliationTests(unittest.TestCase):
+    settled_origin = False
+
     def setUp(self):
         self.f = planned_tests.PlannedRuntimeChangeTests()
         self.f.setUp()
         self.addCleanup(self.f.doCleanups)
+        if self.settled_origin:
+            self.f.settle_failed_cohort()
         self.f.deploy()
         self.now = self.f.now
         self.config = self.f.config
@@ -66,6 +70,7 @@ class AuthorizedReconciliationTests(unittest.TestCase):
         result = runtime.recover_runtime_local(self.config, evidence,
             source_revision_file=self.f.fixture.revision, now=self.now + 10)
         self.assertEqual('DISARMED', result['status'])
+        self.assertEqual(self.request['old_gate'], gate_by_id(self.connection, self.f.old_gate))
         self.assertEqual(self.original_bytes, Path(self.f.prepared['receipt_path']).read_bytes())
         runtime.initialize_gate(self.config, evidence, source_revision_file=self.f.fixture.revision, now=self.now + 11)
         resumed = runtime.resume_claims_local(self.config, source_revision_file=self.f.fixture.revision, now=self.now + 12)
@@ -88,6 +93,10 @@ class AuthorizedReconciliationTests(unittest.TestCase):
         self.request['differences'] = self.request['differences'][:1]
         with self.assertRaisesRegex(runtime.RuntimeContractError, 'reconciliation_undisposed_queue_difference'):
             self.prepare()
+
+
+class SettledAuthorizedReconciliationTests(AuthorizedReconciliationTests):
+    settled_origin = True
 
 
 if __name__ == '__main__':

@@ -1,5 +1,22 @@
 # M2 Production Observation
 
+Candidate-only update: controlled runtime change can retain receipt-bound SETTLED
+Gate evidence unchanged; real fixture tests prove new Gate starts empty. Combined
+122tests PASS at `/logs/m2-resumed-acceptance-20260908/combined-revalidation-uJ60ID/`.
+No Production deployment, Gate change, or new download/extraction delivery yet.
+
+## Latest bounded runtime check — 2026-09-08 14:11 UTC
+
+Worker738e96eafec66a6f62db31b9247cd58bf0aec6df and
+WebUI175a02a7bad46e0b6fa2372c59f39e8dd272911e remain deployed;
+guardrail ARMED/runtime_baseline_match. Container and image unchanged.
+Gate m2-gate-20260908T121706917079Z-5900a7525f retained with18NEEDS_REVIEW/2FAILED;
+no enrollment, reset or historical backfill. Its recorded FAIL is not acceptance.
+Successor7769498c4a8b45879a3f1734cc2e3b00 running TRANSLATING with fresh heartbeat.
+Evidence `/logs/m2-resumed-acceptance-20260908/revalidation-runtime-IgaM5m/`.
+Candidate revalidation code only tested in isolation (17PASS); not deployed or
+invoked on Production. New formal download/extraction deliveries0. M2 incomplete.
+
 ## Current runtime and Gate (2026-09-08 11:10 UTC)
 
 Worker `5f379e877ce59cb3207927e38aad2f6735b76287`, WebUI
