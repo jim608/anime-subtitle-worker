@@ -1,5 +1,26 @@
 # M2 remaining acceptance — 2026-09-08
 
+## Reproduced writer-upgrade defect — candidate, not deployed
+
+A two-connection isolated WAL test reproduced database is locked at the
+PipelineJobStore._savepoint read-then-write boundary: deferred BEGIN admits
+a read snapshot while another writer commits; that snapshot cannot upgrade.
+Existing busy_timeout does not repair stale snapshots. Candidate changes only
+self-owned transaction entry to BEGIN IMMEDIATE before reads. Caller-owned
+transactions are neither replaced nor committed. Tests additionally prove
+outer rollback remains authoritative and nested failure preserves outer work.
+
+Red reproduction failed before the change; local24 Pipeline tests and server261
+related tests passed (Pipeline, ScanState, source analysis, Worker, model request
+state/recovery). Server test used deployed image with readonly candidate/no
+network/no Production media. Evidence:
+/logs/m3-sqlite-diagnostic-20260908T1137/writer-reservation-regression.log and
+.exit0. This is a proven isolated defect, not yet proven to explain the earlier
+Production failures: bounded lock excerpts still contain only pre-deploy errors.
+No runtime deployment/Gate change/output addition in this patch. Next safety
+handoff must preserve existing holds/evidence, then validate real execution.
+
+
 ## Diagnostic deployment closeout — 2026-09-08 11:47 UTC
 
 Worker runtime **3f800c8e5cd9a20110f14e8631dc8d380b988f02** is deployed,

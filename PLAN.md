@@ -2,6 +2,11 @@
 
 ## Active Goal — M3 authorized (2026-09-08)
 
+Pending writer-upgrade fix: isolated two-connection WAL reproduced database lock
+in PipelineJobStore._savepoint. Self-owned BEGIN IMMEDIATE candidate preserves
+caller transactions;24 local/261 server related testsPASS. Not yet deployed;
+actual prior Production root attribution remains unproven. See M3 recovery doc.
+
 11:47UTC: diagnostic runtime3f800c8 safely deployed;216 actual-image tests,
 freshFI7/7, official recoveryARMED/admission resumed/67holds. New frozen Gate
 m2-gate-20260908T114539007821Z-7a4995553b; old evidence retained. Two actual

@@ -919,7 +919,11 @@ class PipelineJobStore:
     def _savepoint(self) -> Iterator[None]:
         started_transaction = not self._conn.in_transaction
         if started_transaction:
-            self._conn.execute("BEGIN")
+            # These savepoints protect read-validate-write operations. Reserve
+            # the writer before reading: a deferred WAL snapshot cannot upgrade
+            # after another writer commits (SQLITE_BUSY_SNAPSHOT), regardless
+            # of busy_timeout. Never commit or replace a caller's transaction.
+            self._conn.execute("BEGIN IMMEDIATE")
         name = f"pipeline_{uuid.uuid4().hex}"
         self._conn.execute(f"SAVEPOINT {name}")
         try:

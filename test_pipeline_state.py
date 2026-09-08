@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+from contextlib import closing
 import json
 import os
 from pathlib import Path
 import sqlite3
 import tempfile
 import time
+import threading
 import unittest
 from unittest import mock
 
@@ -27,6 +29,70 @@ from scan_state import ScanStateStore
 
 
 class PipelineJobStoreTest(unittest.TestCase):
+    def test_savepoint_does_not_commit_callers_transaction(self) -> None:
+        conn = self.store._conn
+        conn.execute("CREATE TABLE owner_probe(value INTEGER)")
+        self.store.commit()
+        conn.execute("INSERT INTO owner_probe VALUES (1)")
+        with self.store._savepoint():
+            conn.execute("INSERT INTO owner_probe VALUES (2)")
+        self.assertTrue(conn.in_transaction)
+        self.store.rollback()
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM owner_probe").fetchone()[0], 0)
+
+    def test_failed_nested_savepoint_preserves_outer_work(self) -> None:
+        conn = self.store._conn
+        conn.execute("CREATE TABLE owner_probe(value INTEGER)")
+        self.store.commit()
+        conn.execute("INSERT INTO owner_probe VALUES (1)")
+        with self.assertRaisesRegex(ValueError, "isolated failure"):
+            with self.store._savepoint():
+                conn.execute("INSERT INTO owner_probe VALUES (2)")
+                raise ValueError("isolated failure")
+        self.assertTrue(conn.in_transaction)
+        self.assertEqual(conn.execute("SELECT value FROM owner_probe").fetchall(), [(1,)])
+        self.store.rollback()
+
+    def test_savepoint_serializes_writer_before_read_snapshot(self) -> None:
+        self.store._conn.execute("CREATE TABLE contention_probe(value INTEGER)")
+        self.store._conn.execute("INSERT INTO contention_probe VALUES (0)")
+        self.store.commit()
+        writer_ready = threading.Event()
+        release_writer = threading.Event()
+        writer_done = threading.Event()
+        errors = []
+
+        def competing_writer():
+            try:
+                with closing(sqlite3.connect(self.database, timeout=2)) as conn:
+                    with conn:
+                        conn.execute("UPDATE contention_probe SET value=1")
+                        writer_ready.set()
+                        # The corrected boundary waits before reading; release
+                        # autonomously too, avoiding a test-only deadlock.
+                        release_writer.wait(0.3)
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                writer_done.set()
+
+        writer = threading.Thread(target=competing_writer)
+        writer.start()
+        try:
+            self.assertTrue(writer_ready.wait(2))
+            with self.store._savepoint():
+                self.store._conn.execute("SELECT value FROM contention_probe").fetchone()
+                release_writer.set()
+                self.assertTrue(writer_done.wait(2))
+                self.store._conn.execute("UPDATE contention_probe SET value=value+1")
+            self.store.commit()
+            self.assertEqual(self.store._conn.execute("SELECT value FROM contention_probe").fetchone()[0], 2)
+        finally:
+            release_writer.set()
+            writer.join(2)
+        self.assertFalse(writer.is_alive())
+        self.assertEqual(errors, [])
+
     def setUp(self) -> None:
         self.tempdir = tempfile.TemporaryDirectory()
         self.root = Path(self.tempdir.name)
