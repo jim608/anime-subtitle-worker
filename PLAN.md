@@ -2,6 +2,11 @@
 
 ## Active Goal — M3 authorized (2026-09-08)
 
+13:19UTC requirement/evidence matrix saved in
+docs/M3_ACCEPTANCE_AUDIT_20260908.md. Existing server test results and real
+restart receipts inspected; no full rerun. Actual runtime ARMED/68holds/Gate
+unchanged. Duplicate-ingress E2E scope remains distinct from verified predicates.
+
 13:16UTC real published target retained manifest digest resolves to exact prepared
 and provider-confirmed lineage; request watermark/Gate/time ordering verified.
 Finished/terminal-reprocess predicates PASS; no duplicate trigger attempted.

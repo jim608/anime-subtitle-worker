@@ -1,5 +1,10 @@
 # M3 — configured model recovery
 
+Current requirement-by-requirement audit:
+[M3_ACCEPTANCE_AUDIT_20260908.md](M3_ACCEPTANCE_AUDIT_20260908.md).
+It separates verified implementation/runtime/publication, isolated fault evidence,
+real-state deduplication predicates, and remaining acceptance scope.
+
 ## Retained exact lineage and deduplication predicates — 2026-09-08 13:16 UTC
 
 For the succeeded9f5394... job, intermediate CN SRT is absent after completion.
