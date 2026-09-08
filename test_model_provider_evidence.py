@@ -2,7 +2,8 @@ from copy import deepcopy
 import unittest
 
 from model_provider_evidence import (ModelProviderEvidenceError, direct_endpoint_descriptor,
-                                     capture_provider_binding, validate_provider_binding)
+                                     capture_provider_binding, validate_provider_binding,
+                                     prove_provider_restart_after_sender_exit)
 
 
 class ModelProviderEvidenceTest(unittest.TestCase):
@@ -65,6 +66,55 @@ class ModelProviderEvidenceTest(unittest.TestCase):
                          self.url + '?token=fixture', self.url + '#fragment'):
             with self.assertRaises(ModelProviderEvidenceError):
                 direct_endpoint_descriptor(endpoint)
+
+    def restart_fixture(self):
+        old = self.capture()
+        changed = deepcopy(self.inspection)
+        changed['State']['StartedAt'] = '2026-01-02T00:00:00Z'
+        new = self.capture(changed)
+        request = dict(provider_binding=old, sender_id='d'*32, token='fixture-token',
+                       endpoint=old['endpoint_sha256'], runtime_sha256='e'*64,
+                       created_at=1767225610.0)
+        exit_proof = dict(request, sender_exited_no_later_than=1767225620.0,
+                          returncode=1, timeout_reaped=False)
+        return request, exit_proof, new
+
+    def test_restart_after_reaped_sender_proves_order_without_mutating_inputs(self):
+        request, exit_proof, new = self.restart_fixture()
+        before = deepcopy((request, exit_proof, new))
+        proof = prove_provider_restart_after_sender_exit(request, exit_proof, new, endpoint=self.url)
+        self.assertEqual('same_provider_restarted_after_sender_exit', proof['reason_code'])
+        self.assertEqual(before, (request, exit_proof, new))
+        self.assertEqual(proof, prove_provider_restart_after_sender_exit(request, exit_proof, new,
+                                                                        endpoint=self.url))
+
+    def test_restart_before_sender_exit_and_invalid_clocks_cannot_release(self):
+        for exited in (1767312000.0, 1767312001.0, 0, float('nan'), True):
+            request, exit_proof, new = self.restart_fixture()
+            exit_proof['sender_exited_no_later_than'] = exited
+            with self.subTest(exited=exited), self.assertRaisesRegex(ModelProviderEvidenceError, 'order_unproven'):
+                prove_provider_restart_after_sender_exit(request, exit_proof, new, endpoint=self.url)
+
+    def test_other_sender_or_unbound_history_cannot_supply_proof(self):
+        for field, value in [('token', 'other'), ('sender_id', 'f'*32),
+                             ('runtime_sha256', 'f'*64), ('returncode', None)]:
+            request, exit_proof, new = self.restart_fixture()
+            exit_proof[field] = value
+            with self.subTest(field=field), self.assertRaises(ModelProviderEvidenceError):
+                prove_provider_restart_after_sender_exit(request, exit_proof, new, endpoint=self.url)
+        request, exit_proof, new = self.restart_fixture()
+        request.pop('provider_binding')
+        with self.assertRaisesRegex(ModelProviderEvidenceError, 'original_binding_missing'):
+            prove_provider_restart_after_sender_exit(request, exit_proof, new, endpoint=self.url)
+
+    def test_replacement_container_or_unchanged_generation_is_not_termination(self):
+        request, exit_proof, new = self.restart_fixture()
+        changed = deepcopy(self.inspection)
+        changed['Id'] = 'f'*64
+        changed['State']['StartedAt'] = new['started_at']
+        for binding in (self.capture(changed), request['provider_binding']):
+            with self.assertRaises(ModelProviderEvidenceError):
+                prove_provider_restart_after_sender_exit(request, exit_proof, binding, endpoint=self.url)
 
 
 if __name__ == '__main__':

@@ -109,3 +109,52 @@ def validate_provider_binding(binding: Mapping[str, Any], *, endpoint: str) -> d
     if reconstructed != dict(binding):
         raise ModelProviderEvidenceError('provider_binding_endpoint_mismatch')
     return dict(binding)
+
+
+def prove_provider_restart_after_sender_exit(request: Mapping[str, Any],
+                                            sender_exit: Mapping[str, Any],
+                                            current_binding: Mapping[str, Any], *,
+                                            endpoint: str) -> dict[str, Any]:
+    """Validate ordering only; caller must obtain fresh authoritative host evidence.
+
+    This does not mutate receipts, authorize dispatch, or certify output quality.
+    Replacement containers are intentionally unsupported: starting a new container
+    does not prove the old one stopped. Historical unbound requests stay unknown.
+    """
+    original = request.get('provider_binding')
+    if not isinstance(original, Mapping):
+        raise ModelProviderEvidenceError('provider_original_binding_missing')
+    old = validate_provider_binding(original, endpoint=endpoint)
+    new = validate_provider_binding(current_binding, endpoint=endpoint)
+    if (old['container_id'] != new['container_id'] or old['image_id'] != new['image_id']):
+        raise ModelProviderEvidenceError('provider_same_container_restart_unproven')
+    sender_id = request.get('sender_id')
+    token = request.get('token')
+    runtime = request.get('runtime_sha256')
+    if (not isinstance(sender_id, str) or not re.fullmatch('[0-9a-f]{32}', sender_id)
+            or not isinstance(runtime, str) or not re.fullmatch('[0-9a-f]{64}', runtime)
+            or not isinstance(token, str) or not token
+            or sender_exit.get('sender_id') != sender_id or sender_exit.get('token') != token
+            or sender_exit.get('runtime_sha256') != runtime
+            or sender_exit.get('provider_binding') != original
+            or sender_exit.get('endpoint') != request.get('endpoint')
+            or request.get('endpoint') != old['endpoint_sha256']):
+        raise ModelProviderEvidenceError('provider_sender_exit_binding_mismatch')
+    reaped = sender_exit.get('timeout_reaped')
+    code = sender_exit.get('returncode')
+    if type(reaped) is not bool or (reaped and code is not None) or (not reaped and type(code) is not int):
+        raise ModelProviderEvidenceError('provider_sender_exit_unproven')
+    created = request.get('created_at')
+    exited = sender_exit.get('sender_exited_no_later_than')
+    if any(type(value) not in (int, float) or not math.isfinite(value) for value in (created, exited)):
+        raise ModelProviderEvidenceError('provider_restart_order_unproven')
+    old_start = datetime.fromisoformat(old['started_at'].replace('Z', '+00:00')).timestamp()
+    new_start = datetime.fromisoformat(new['started_at'].replace('Z', '+00:00')).timestamp()
+    if not 0 < old_start <= created <= exited < new_start:
+        raise ModelProviderEvidenceError('provider_restart_order_unproven')
+    return {'contract': 'm3-provider-restart-order-v1', 'token': token,
+            'sender_id': sender_id, 'sender_exited_no_later_than': exited,
+            'previous_binding_sha256': old['binding_sha256'],
+            'current_binding_sha256': new['binding_sha256'],
+            'provider_started_at': new['started_at'],
+            'reason_code': 'same_provider_restarted_after_sender_exit'}

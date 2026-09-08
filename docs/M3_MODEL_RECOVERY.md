@@ -30,6 +30,18 @@ restart, deployment, arm, recovery or Gate mutation occurred for this increment.
 
 ### Existing scope
 
+The next candidate adds `prove_provider_restart_after_sender_exit`, a pure
+ordering validator, not an ownership-release entry point. It requires the exact
+request token/sender/runtime/endpoint and original provider binding, supervised
+sender-exit evidence, and the same container/image with a start generation
+strictly after sender exit. A replacement container does not prove termination
+of the original; unbound history, unchanged generations and invalid clocks fail.
+The caller must still obtain fresh authoritative host evidence. This helper is
+not yet wired to controlled recovery or live drift enforcement and authorizes no
+dispatch, request settlement or QC result by itself. Local related suite: 48 PASS,
+`/logs/m3-baseline-20260908T070237Z/provider-restart-order-local.log` (Windows
+execution with log on the server share, not server-runtime verification).
+
 Build on the existing ASR/translation entry points, model configuration,
 resource admission and persistent stage/checkpoint stores. Do not create a
 parallel queue or lower output QC to make a fallback appear successful.
