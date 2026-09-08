@@ -1,5 +1,16 @@
 # M2 Circuit Breaker Policy
 
+## Current deployment boundary (2026-09-08 06:33 UTC)
+
+The previously tested final-ASR evidence repair is deployed in Worker
+`a4829a5298304f9e2dc20dd02ecde883ea53ec23`. No policy/QC/schema relaxation.
+Reconciliation `m2-recon-fragment-20260908T0620` retained 67 holds, 1255 retry
+counters and all prior UNPROVEN evidence. A valid DISPATCHED but unclaimed
+historical job was retained, not cleared to manufacture idle. Formal recovery
+returned ARMED and released its own hold only after verification. New Gate uses
+the new runtime; no old cohort score transfer. Full
+[evidence and remaining blockers](M2_REMAINING_ACCEPTANCE_20260908.md).
+
 ## 2026-09-08 05:10 UTC boundary clarification
 
 Final ASR rejection evidence and durable fragment repair-budget candidate

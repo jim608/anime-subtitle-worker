@@ -1,5 +1,18 @@
 # M2 Production Observation
 
+## Current runtime and Gate (2026-09-08 06:33 UTC)
+
+Actual Worker `a4829a5298304f9e2dc20dd02ecde883ea53ec23`, WebUI unchanged
+`175a02a7bad46e0b6fa2372c59f39e8dd272911e`; Breaker ARMED.
+Controlled recovery completed with 67 holds intact. Old Gate was preserved and
+invalidated for runtime change, not passed. New Gate
+`m2-gate-20260908T062814708431Z-4a4b7a2546`, start `2026-09-08T06:28:14.708431Z`,
+baseline `m2-guardrail-v1:6a39511185854d6d968c637b`, initialized 0/20;
+latest fixed cohort 1/20, settled 1/20, strict-verified 0. Observer enabled.
+Actual next claims/stages verified; download formal acceptance remains externally blocked.
+Details: [current acceptance record](M2_REMAINING_ACCEPTANCE_20260908.md).
+M2 not accepted; earlier pending-deployment entries below are historical.
+
 ## Latest bounded acceptance update (2026-09-08 05:10 UTC)
 
 [Evidence and remaining work](M2_REMAINING_ACCEPTANCE_20260908.md): one new formal

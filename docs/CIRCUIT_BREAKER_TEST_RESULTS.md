@@ -1,5 +1,21 @@
 # M2 Circuit Breaker Test Results
 
+## Deployed image verification (2026-09-08 06:33 UTC)
+
+Actual Worker `a4829a5298304f9e2dc20dd02ecde883ea53ec23`, image
+`sha256:4497656bc63ada24a4f76d721c81af07a8150d037382314be97c180558ba3849`:
+312 related tests and isolated actual-image crash/restart PASS, including final-ASR
+rejection/repair-budget regression. Evidence:
+`/logs/m2-asr-postprocess-isolated-20260908T062524107986Z/`.
+Fresh breakers 7/7 PASS, production resources unaffected by injection:
+`/logs/m2-guardrail-fi-20260908T062807894290Z-c5c155cd/`.
+Existing safe updater also passed Worker 1929 / WebUI 231 tests. A host-helper
+CANARY_READY-only assertion failed after a successful historical reconciliation;
+its log is retained. Evidence-bound continuation preserved the valid unclaimed
+DISPATCHED job and completed recovery, without repeating committed revalidation.
+See [closeout](M2_REMAINING_ACCEPTANCE_20260908.md); none of these tests means the
+new frozen Gate or download formal-publication acceptance has passed.
+
 ## 2026-09-08 candidate evidence (not deployed)
 
 `de6759499eaa0576dc9b9affd2f842109781d4c5`: final-ASR rejection baseline reproduced;

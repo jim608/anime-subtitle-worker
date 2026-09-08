@@ -1,5 +1,18 @@
 # Incremental Delivery Plan
 
+## Current M2 acceptance status (2026-09-08 06:33 UTC)
+
+**M2 incomplete; M3 not started.** Previously pending repair is now actually
+deployed as `a4829a5298304f9e2dc20dd02ecde883ea53ec23`; safe deployment and formal
+controlled recovery completed, Breaker ARMED. New actual-image 312 related tests
+and isolated restart PASS; fresh breakers 7/7 PASS. All 67 holds preserved.
+New frozen Gate initialized 0/20; latest 1/20, strict-verified 0, no old scores copied.
+AI recovery and the next normal task actually claimed and entered stages.
+Download E2 trial: 1 torrent added, 0 completed downloads/extractions/formal outputs;
+existing bounded `did not start` recovery retained failed hash and re-requested alternatives.
+See [actual deployment and bounded acceptance](docs/M2_REMAINING_ACCEPTANCE_20260908.md).
+Earlier deferral sections below are historical, not the current runtime state.
+
 ## Latest bounded acceptance update (2026-09-08 05:10 UTC)
 
 See [remaining acceptance evidence](docs/M2_REMAINING_ACCEPTANCE_20260908.md).
