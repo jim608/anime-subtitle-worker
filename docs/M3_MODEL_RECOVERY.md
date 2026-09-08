@@ -5,6 +5,24 @@ its frozen cohort, held sources and UNPROVEN preservation claims are unchanged.
 
 ## Scope
 
+## Cross-process observation writer serialization (candidate)
+
+Provider-bound Gate initialization and evidence refresh now share one nonblocking
+kernel-owned writer lock in the existing work directory. Windows uses byte-range
+locking; Linux uses `flock`. A busy writer fails closed with a bounded reason code.
+The lock inode is retained, never removed or reclaimed based on age/PID. The OS
+releases ownership when its process exits, including fixture termination.
+
+Real spawned-process tests verify writer exclusion, both public entry points
+refusing before mutation, and reacquisition after the disposable owner exits.
+The initial Windows fixture hung because cleanup reused synchronization with a
+terminated child; only the identified local test process was stopped, and the
+fixture now uses a child-local wait object. Corrected Windows related suite: 31
+PASS; server Linux related suite: 66 PASS (`provider-writer-lock-server.log`).
+Final entry-point assertions: `provider-writer-lock-final-server.log`. No
+Production process, lock or runtime was changed. Autonomous scheduling and the
+post-response publication confirmation remain required.
+
 ## Bounded host observation publisher (candidate, not deployed)
 
 `m2_guardrail_runtime.py provider-refresh --model-provider-container NAME` now

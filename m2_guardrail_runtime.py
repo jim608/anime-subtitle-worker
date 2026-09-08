@@ -16,6 +16,7 @@ from typing import Any, Callable, Mapping, Sequence
 import uuid
 
 from safe_files import atomic_write_text, sha256_file
+from model_provider_evidence import serialize_provider_observation
 
 
 RUNTIME_SCHEMA_VERSION = 1
@@ -781,6 +782,7 @@ def _verified_fault_log_events(path: Path) -> set[str]:
     return verified
 
 
+@serialize_provider_observation(bound_only=True)
 def initialize_gate(
     config: Any,
     evidence: Mapping[str, Any],
@@ -2833,6 +2835,7 @@ def provider_observation_context(config: Any) -> dict[str, Any]:
             'model_provider_endpoint':redacted_endpoint_descriptor(str(config.translator_base_url))}
 
 
+@serialize_provider_observation()
 def refresh_provider_observation_local(config: Any, evidence: Mapping[str, Any]) -> dict[str, Any]:
     """Update host evidence only. Never arm a Gate or release admission/requests."""
     from model_provider_evidence import validate_provider_binding, validate_provider_observation, ModelProviderEvidenceError

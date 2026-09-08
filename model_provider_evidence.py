@@ -4,10 +4,14 @@ This module captures identity only. A binding is never a cancellation receipt.
 No service restart, request release, Queue write, or Docker mutation occurs here.
 """
 from datetime import datetime
+from contextlib import contextmanager
+from functools import wraps
 import hashlib
 import ipaddress
 import json
 import math
+import os
+from pathlib import Path
 import re
 import time
 from typing import Any, Mapping, Sequence
@@ -15,7 +19,54 @@ from urllib.parse import urlsplit
 
 
 class ModelProviderEvidenceError(RuntimeError):
-    pass
+    def __init__(self, reason_code: str):
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+
+
+@contextmanager
+def provider_observation_lock(work_path: Path):
+    """Kernel-owned, non-blocking writer lock; persistent inode is never removed."""
+    path = Path(work_path) / 'm3-provider-observation.lock'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('a+b') as handle:
+        if os.name == 'nt':
+            import msvcrt
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b'0')
+                handle.flush()
+            handle.seek(0)
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                raise ModelProviderEvidenceError('provider_observation_writer_busy') from exc
+        else:
+            import fcntl
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                raise ModelProviderEvidenceError('provider_observation_writer_busy') from exc
+        try:
+            yield
+        finally:
+            if os.name == 'nt':
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def serialize_provider_observation(*, bound_only=False):
+    def decorate(function):
+        @wraps(function)
+        def guarded(config, evidence, *args, **kwargs):
+            if bound_only and evidence.get('model_provider') is None:
+                return function(config, evidence, *args, **kwargs)
+            with provider_observation_lock(Path(config.work_path)):
+                return function(config, evidence, *args, **kwargs)
+        return guarded
+    return decorate
 
 
 PROVIDER_OBSERVATION_MAX_AGE = 90.0

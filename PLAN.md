@@ -9,6 +9,11 @@ relabeled PASS or mixed with future M3 runtime results.
 
 ### M3 — Configured model fallback and resource-aware recovery
 
+Gate initialization and provider refresh now serialize across processes through
+a nonblocking kernel-owned lock; no lock deletion/PID-age reclaim. Real process
+exit/reacquisition verified on Windows and Linux; Linux related 66 PASS.
+Autonomous publisher lifecycle and post-response confirmation remain open.
+
 Bounded host `provider-refresh` publisher is implemented; it preserves observed
 continuity gaps and cannot arm/resume. Autonomous scheduling, single-writer
 handoff and post-response confirmation still block Production deployment.

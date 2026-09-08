@@ -1,9 +1,20 @@
 from copy import deepcopy
 import unittest
+import multiprocessing
+from pathlib import Path
+import tempfile
+import threading
 
 from model_provider_evidence import (ModelProviderEvidenceError, direct_endpoint_descriptor,
                                      capture_provider_binding, validate_provider_binding,
                                      prove_provider_restart_after_sender_exit)
+
+
+def _hold_provider_writer(directory, ready):
+    from model_provider_evidence import provider_observation_lock
+    with provider_observation_lock(Path(directory)):
+        ready.set()
+        threading.Event().wait(15)
 
 
 class ModelProviderEvidenceTest(unittest.TestCase):
@@ -115,6 +126,37 @@ class ModelProviderEvidenceTest(unittest.TestCase):
         for binding in (self.capture(changed), request['provider_binding']):
             with self.assertRaises(ModelProviderEvidenceError):
                 prove_provider_restart_after_sender_exit(request, exit_proof, binding, endpoint=self.url)
+
+    def test_writer_lock_crosses_processes_and_releases_on_process_exit(self):
+        from model_provider_evidence import provider_observation_lock
+        context = multiprocessing.get_context('spawn')
+        with tempfile.TemporaryDirectory() as directory:
+            ready = context.Event()
+            process = context.Process(target=_hold_provider_writer, args=(directory, ready))
+            process.start()
+            try:
+                self.assertTrue(ready.wait(10), 'fixture writer did not acquire lock')
+                with self.assertRaisesRegex(ModelProviderEvidenceError, 'writer_busy'):
+                    with provider_observation_lock(Path(directory)):
+                        self.fail('concurrent writer entered')
+                from types import SimpleNamespace
+                from m2_guardrail_runtime import initialize_gate, refresh_provider_observation_local
+                config = SimpleNamespace(work_path=Path(directory))
+                for writer in (initialize_gate, refresh_provider_observation_local):
+                    with self.assertRaisesRegex(ModelProviderEvidenceError, 'writer_busy'):
+                        writer(config, {'model_provider':{}})
+                self.assertEqual(['m3-provider-observation.lock'], sorted(path.name for path in Path(directory).iterdir()))
+                process.terminate()  # only this disposable fixture process
+                process.join(10)
+                self.assertFalse(process.is_alive())
+                with provider_observation_lock(Path(directory)):
+                    self.assertTrue((Path(directory)/'m3-provider-observation.lock').exists())
+                self.assertTrue((Path(directory)/'m3-provider-observation.lock').exists())
+            finally:
+                if process.is_alive():
+                    process.terminate()
+                    process.join(10)
+                process.close()
 
 
 if __name__ == '__main__':
