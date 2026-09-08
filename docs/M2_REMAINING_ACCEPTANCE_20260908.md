@@ -1,5 +1,10 @@
 # M2 remaining acceptance — 2026-09-08
 
+M3 deterministic repair-lineage candidate: 210 server related tests PASS in
+`logs/m3-baseline-20260908T070237Z/provider-deterministic-lineage-server.log`.
+No Production deployment, formal subtitle addition or Gate change; not M2
+download/extraction acceptance evidence.
+
 M3 publication-wait classification candidate: 375 server related tests PASS in
 `logs/m3-baseline-20260908T070237Z/provider-publication-retry-server.log`.
 Existing attempt limit/backoff retained; no Production deployment, Gate change or

@@ -355,9 +355,17 @@ class VideoWorkerTest(unittest.TestCase):
                 for path in (staged.ai_ja_ass, staged.ai_zh_cn_ass, staged.ai_zh_tw_ass):
                     path.write_bytes(b'staged-output')
                 return 3
+            parent = {'token':'fixture-parent', 'output_sha256':sha256_file(paths.zh_cn_srt)}
+            diagnostics = [{'path':str(paths.zh_cn_srt), 'fixture':'deterministic-repair'}]
+            def remediate(*args, **kwargs):
+                paths.zh_cn_srt.write_bytes(b'repaired-checkpoint')
+                return diagnostics
+            worker._stage_state = SimpleNamespace(pipeline_jobs=lambda:SimpleNamespace(_conn='fixture-connection'))
             with (
                 patch.object(worker, '_enforce_asr_publication_gate'),
-                patch.object(worker, '_remediate_prepublication_srts'),
+                patch.object(worker, '_require_model_output_lineage', return_value=parent),
+                patch.object(worker, '_remediate_prepublication_srts', side_effect=remediate),
+                patch('model_request_state.record_model_output_derivation') as derive,
                 patch.object(worker, '_export_ai_ass', side_effect=export),
                 patch.object(worker, '_quality_check_ai_outputs', return_value=[]),
                 patch.object(worker, '_confirm_model_output_for_publication',
@@ -367,6 +375,9 @@ class VideoWorkerTest(unittest.TestCase):
                 with self.assertRaisesRegex(ModelProviderEvidenceError, 'provider_changed'):
                     worker._publish_ai_ass(video, paths)
                 confirm.assert_called_once_with(video, paths.zh_cn_srt)
+                derive.assert_called_once()
+                self.assertEqual(parent['token'], derive.call_args.kwargs['parent_token'])
+                self.assertEqual(diagnostics, derive.call_args.kwargs['diagnostics'])
                 replace.assert_not_called()
             self.assertEqual(b'read-only-source', video.read_bytes())
             self.assertEqual(b'preserved-checkpoint', paths.zh_cn_srt.read_bytes())

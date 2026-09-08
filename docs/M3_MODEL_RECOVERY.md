@@ -5,6 +5,31 @@ its frozen cohort, held sources and UNPROVEN preservation claims are unchanged.
 
 ## Scope
 
+## Deterministic prepublication repair lineage (candidate)
+
+AI publication now captures exact immutable parent lineage before deterministic
+SRT remediation. If zh-CN bytes change, the existing Pipeline event store records
+a child `MODEL_OUTPUT_PREPARED`, retaining the parent token, runtime/provider,
+request watermark and full repair evidence plus its hash. The supplied diagnostic
+chain must connect the parent's recorded content hash through every repair to the
+candidate hash, identify applied rules, and end with successful QC recheck.
+Unknown parents, different paths, broken hash chains, failed QC or intervening
+inference requests are refused. No historical preparation record is rewritten.
+
+The child is still `publication_verified:false` and needs a newer provider
+observation through the existing publication barrier. Worker compares actual
+output bytes; the state primitive alone is not a filesystem or QC attestation.
+This covers deterministic prepublication remediation, not model-based targeted
+retranslation or existing formal ASS restyling, which remain open.
+
+Server related suites: 210 PASS in
+`logs/m3-baseline-20260908T070237Z/provider-deterministic-lineage-server.log`.
+SQLite tests cover parent retention, exact-chain rejection, new-connection replay,
+immutability and inference-history change. Worker integration verifies derivation
+is invoked before confirmation/replacement and that confirmation refusal restores
+the cache while preserving source and prior formal outputs. Production deployment
+and formal subtitle additions: none.
+
 ## Publication wait recovery classification (candidate)
 
 The exact Worker failure `model_output_provider_confirmation_pending` now maps

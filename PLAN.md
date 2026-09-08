@@ -9,6 +9,11 @@ relabeled PASS or mixed with future M3 runtime results.
 
 ### M3 — Configured model fallback and resource-aware recovery
 
+Deterministic prepublication QC repairs now create immutable child SRT preparation
+lineage from a verified parent and continuous diagnostic hash chain. Server 210
+related tests PASS. Model-based targeted repair and existing ASS restyling still
+need lineage review; this candidate is not deployed or formally accepted.
+
 Publication observation-wait timeout now uses exact existing transient timeout
 recovery, with configured budget/backoff preserved and no broadened treatment of
 provider drift or unknown ownership. Server related suite 375 PASS. Remaining

@@ -5283,7 +5283,8 @@ class VideoWorker:
         staging_root: Path | None = None
         staged_outputs: list[Path] = []
         try:
-            self._remediate_prepublication_srts(
+            parent_lineage = self._require_model_output_lineage(video, paths.zh_cn_srt)
+            remediation = self._remediate_prepublication_srts(
                 video,
                 paths,
                 source_language=source_language,
@@ -5329,6 +5330,11 @@ class VideoWorker:
                 discard_on_failure=False,
                 persist_reports=False,
             )
+            if parent_lineage is not None and sha256_file(paths.zh_cn_srt) != parent_lineage['output_sha256']:
+                from model_request_state import record_model_output_derivation
+                record_model_output_derivation(self._stage_state.pipeline_jobs()._conn,
+                    parent_token=parent_lineage['token'], output_path=paths.zh_cn_srt,
+                    output_sha256=sha256_file(paths.zh_cn_srt), diagnostics=remediation)
             self._confirm_model_output_for_publication(video, paths.zh_cn_srt)
             self._replace_ai_outputs_with_rollback(video, staged_outputs, destinations)
             self._persist_validated_quality_reports(reports, destinations)

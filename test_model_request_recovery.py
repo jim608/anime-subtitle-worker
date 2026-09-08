@@ -259,6 +259,55 @@ class ModelRequestRecoveryTest(unittest.TestCase):
             baseline.pop('model_provider')
             self.assertIsNone(worker._require_model_output_lineage(video, output))
 
+    def test_deterministic_derivation_preserves_parent_and_requires_complete_hash_chain(self):
+        import sqlite3
+        from contextlib import closing
+        from model_request_state import ModelRequestContext, record_model_output_derivation, find_model_output_lineage
+        self.settle(self.prepare())
+        stage = self.make_stage('derived-source')
+        output = self.root/'derived.srt'
+        context = ModelRequestContext(self.database, stage['stage_attempt_id'], 'c'*64, 2,
+                                      provider_binding=self.args['provider_binding'])
+        parent = context.record_output_lineage(endpoint=self.url, output_path=output, output_sha256='a'*64)
+        chain = [{'path':str(output), 'input_sha256':'a'*64, 'output_sha256':'b'*64,
+                  'applied_rules':['fixture_mechanical_repair'], 'recheck':{'has_failures':False}}]
+        def derive(evidence=chain, token=parent['token'], path=output):
+            return record_model_output_derivation(self.store._conn, parent_token=token,
+                output_path=path, output_sha256='b'*64, diagnostics=evidence)
+        for evidence in ([], [{**chain[0], 'input_sha256':'d'*64}],
+                         [{**chain[0], 'recheck':{'has_failures':True}}]):
+            with self.assertRaises(ModelRequestStateError):
+                derive(evidence)
+        with self.assertRaisesRegex(ModelRequestStateError, 'parent_missing'):
+            derive(token='0'*64)
+        with self.assertRaisesRegex(ModelRequestStateError, 'path_mismatch'):
+            derive(path=self.root/'other.srt')
+        child = derive()
+        self.assertEqual(parent['token'], child['parent_token'])
+        self.assertEqual(parent['provider_binding'], child['provider_binding'])
+        self.assertFalse(child['publication_verified'])
+        self.assertFalse(child['replay'])
+        self.assertTrue(derive()['replay'])
+        with closing(sqlite3.connect(self.database)) as restarted:
+            replay = record_model_output_derivation(restarted, parent_token=parent['token'],
+                output_path=output, output_sha256='b'*64, diagnostics=chain)
+            self.assertTrue(replay['replay'])
+            self.assertEqual(child['token'], replay['token'])
+            with self.assertRaises(sqlite3.IntegrityError):
+                restarted.execute("UPDATE pipeline_stage_events SET payload_json='{}' "
+                    "WHERE event_type='MODEL_OUTPUT_PREPARED' AND json_extract(payload_json,'$.token')=?",
+                    (child['token'],))
+            restarted.rollback()
+        found = find_model_output_lineage(self.store._conn, job_id=stage['job_id'],
+            output_path=output, output_sha256='b'*64, execution_digest=parent['execution_digest'])
+        self.assertEqual(child['token'], found['token'])
+        original = find_model_output_lineage(self.store._conn, job_id=stage['job_id'],
+            output_path=output, output_sha256='a'*64, execution_digest=parent['execution_digest'])
+        self.assertEqual(parent['token'], original['token'])
+        context.reserve(endpoint=self.url, request={'repair':'new model work'}, model='fixture')
+        with self.assertRaisesRegex(ModelRequestStateError, 'inference_changed'):
+            derive()
+
     def test_publication_observation_wait_uses_existing_bounded_timeout_recovery(self):
         from main import _ai_failure_policy
         from scan_state import _legacy_failure_code

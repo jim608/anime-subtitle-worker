@@ -163,6 +163,53 @@ def find_model_output_lineage(conn: sqlite3.Connection, *, job_id: str, output_p
     return json.loads(row[0]) if row else None
 
 
+def record_model_output_derivation(conn: sqlite3.Connection, *, parent_token: str,
+                                   output_path: Path, output_sha256: str,
+                                   diagnostics: list[dict[str, Any]]) -> dict[str, Any]:
+    """Link deterministic QC repair to immutable preparation, never invent an ancestor."""
+    _digest(output_sha256)
+    path_digest = hashlib.sha256(str(Path(output_path).resolve()).encode('utf-8')).hexdigest()
+    with _transaction(conn):
+        row = conn.execute("""SELECT payload_json FROM pipeline_stage_events
+            WHERE event_type='MODEL_OUTPUT_PREPARED' AND json_extract(payload_json,'$.token')=?""",
+            (parent_token,)).fetchone()
+        if not row:
+            raise ModelRequestStateError('model_output_derivation_parent_missing')
+        parent = json.loads(row[0])
+        if parent['output_path_sha256'] != path_digest:
+            raise ModelRequestStateError('model_output_derivation_path_mismatch')
+        chain = [item for item in diagnostics if str(Path(item['path']).resolve()) == str(Path(output_path).resolve())]
+        digest = parent['output_sha256']
+        if not chain:
+            raise ModelRequestStateError('model_output_derivation_evidence_missing')
+        for item in chain:
+            if item.get('input_sha256') != digest or not item.get('applied_rules'):
+                raise ModelRequestStateError('model_output_derivation_chain_mismatch')
+            digest = item.get('output_sha256')
+            _digest(digest)
+        if digest != output_sha256 or chain[-1].get('recheck', {}).get('has_failures') is not False:
+            raise ModelRequestStateError('model_output_derivation_qc_unproven')
+        watermark = conn.execute("""SELECT COALESCE(MAX(rowid),0) FROM pipeline_stage_events
+            WHERE stage_attempt_id=? AND event_type IN
+            ('MODEL_REQUEST_RESERVED','MODEL_REQUEST_UNKNOWN','MODEL_REQUEST_SETTLED')
+            AND COALESCE(json_extract(payload_json,'$.operation_kind'),'INFERENCE')='INFERENCE'""",
+            (parent['stage_attempt_id'],)).fetchone()[0]
+        if watermark != parent['request_event_watermark']:
+            raise ModelRequestStateError('model_output_derivation_inference_changed')
+        evidence_digest = hashlib.sha256(_json(chain).encode('utf-8')).hexdigest()
+        key = hashlib.sha256(_json({'parent_token':parent_token, 'output_sha256':output_sha256,
+                                   'repair_evidence_sha256':evidence_digest}).encode('utf-8')).hexdigest()
+        prior = conn.execute("""SELECT payload_json FROM pipeline_stage_events
+            WHERE event_type='MODEL_OUTPUT_PREPARED' AND json_extract(payload_json,'$.token')=?""", (key,)).fetchone()
+        if prior:
+            return {**json.loads(prior[0]), 'replay':True}
+        result = {**parent, 'token':key, 'output_sha256':output_sha256, 'prepared_at':_timestamp(),
+            'parent_token':parent_token, 'derivation_kind':'deterministic_qc_remediation',
+            'repair_evidence_sha256':evidence_digest, 'repair_evidence':chain, 'publication_verified':False}
+        _event(conn, result, 'MODEL_OUTPUT_PREPARED')
+        return {**result, 'replay':False}
+
+
 def confirm_model_output_provider(conn: sqlite3.Connection, *, prepared_token: str,
                                   gate_baseline_version: str,
                                   observation: Mapping[str, Any]) -> dict[str, Any]:
