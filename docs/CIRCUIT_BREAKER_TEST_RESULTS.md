@@ -1,5 +1,15 @@
 # M2 Circuit Breaker Test Results
 
+## M3 deployed runtime validation (2026-09-08 11:04 UTC)
+
+Worker `5f379e877ce59cb3207927e38aad2f6735b76287`, image
+`sha256:d5757e05517f67da98b56976cdf14d04d962f0d5f884e5a7fae98041d50ff8f1`.
+Actual-image targeted tests 211 PASS. Fresh isolated breaker suite 7/7 PASS,
+Production resources affected false. Detail:
+`/logs/m2-guardrail-fi-20260908T110426747663Z-f04674dd/result.json` and `events.jsonl`.
+Official controlled recovery reports ARMED; `/logs/m3-runtime-handoff-20260908/recovery-closeout.json`.
+This is not a completed 20-job Gate or model-output production acceptance.
+
 ## Deployed image verification (2026-09-08 06:33 UTC)
 
 Actual Worker `a4829a5298304f9e2dc20dd02ecde883ea53ec23`, image

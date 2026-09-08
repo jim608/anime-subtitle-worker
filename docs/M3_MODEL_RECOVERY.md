@@ -5,6 +5,68 @@ its frozen cohort, held sources and UNPROVEN preservation claims are unchanged.
 
 ## Scope
 
+## Current deployed closeout — 2026-09-08 11:10 UTC
+
+M3 candidate **is now deployed**, but M3 model-output acceptance and M2 production
+acceptance remain incomplete. Earlier candidate/no-deploy notes below are history.
+
+- Worker runtime SHA: `5f379e877ce59cb3207927e38aad2f6735b76287`.
+- WebUI runtime SHA: `175a02a7bad46e0b6fa2372c59f39e8dd272911e`.
+- Worker image: `sha256:d5757e05517f67da98b56976cdf14d04d962f0d5f884e5a7fae98041d50ff8f1`.
+- Safe deployment `20260908T104945Z-351566`, exit 0; all old backups retained.
+- Actual-image targeted tests: 211 PASS; full candidate regression: 2023 PASS.
+- Fresh isolated breaker suite: 7/7 PASS, no Production resources affected.
+- Runtime status verified ARMED; host provider binding and cron observation active.
+
+The owned admission drain preserved existing work and 67 source holds. Sealing
+initially waited for actual idle; no running row or lock was cleared. The original
+planned receipt hash is
+`sha256:79079437ca0df8c69b81b53d7066481933a7fd442c799d235e98099f43c1dfef`.
+First reconciliation refused after 24 new transitions appeared. These were exactly
+12 unclaimed filesystem ingest jobs (DISCOVERED/STABILIZING), proven by the existing
+planned-snapshot validator with no Queue/checkpoint/output/cohort changes. The
+planned recovery mode itself also refused changed frozen policy, as it should.
+Neither rejection nor receipt was altered.
+
+Our own reconciliation hold was transferred while continuously paused to seal
+`m3-recon-model-recovery-20260908-late-ingest`, hash
+`sha256:8011f9db1e4e34df382293a7ee37898e8e21184dc65a3d3b079b60693cdcf96d`.
+It links the failed record and classified ingest evidence: 67 holds retained,
+7,097 recoverable identities, 6,932 retained other-state identities; no unexplained
+Queue identity differences. Historical preservation remains UNPROVEN.
+
+Official recovery succeeded with this record and fresh fault evidence; no direct
+latch/lock/DB edits. New frozen Gate:
+`m2-gate-20260908T110433538511Z-b43d836495`, start
+`2026-09-08T11:04:33.538511Z`, baseline
+`m2-guardrail-v1:e365b1132703b8cd1ae7e063`, initialized 0/20. Old Gate evidence retained.
+
+Pinned observer installed via the existing persistent Dynamix cron mechanism;
+other cron entries verified unchanged. Script SHA
+`3a6c1808bb12f80e53948b3aaadc1badcfc58080b62f18b0f0d55e15f8fb35c1`.
+At 11:06:24 UTC, the observation was automatically refreshed ~2.4 seconds earlier,
+well after arming. Host reboot itself was not performed or claimed as tested.
+
+Bounded live proof: cohort ordinal 1, claim hash
+`59f004457c47c8da924be9be3c4559bc6dd67b8ef19641a43e6a2ac5ccb6c71d`,
+claimed epoch 1788865803.455295, reached SUBTITLE_DETECTION then NEEDS_REVIEW.
+Checkpoint `7acf956cf9c4e6433fde94520c03559a97830e859915e99297cdded8ea9cc4b1`
+matches stored bytes. It remains a failed/review cohort member, not replaceable.
+The next pipeline job `1fc3bd293f5e4f86be7fc0cbb589d9ee` started ASR at epoch
+1788865828.8114753, with a verified source-decision checkpoint from detection.
+The first claim preceded the one-time scheduler wake request at 1788865806.5347097;
+do not attribute automatic continuation to that later command.
+
+Evidence root `/logs/m3-runtime-handoff-20260908/`: `safe-deploy.log`,
+`actual-runtime-before-recovery.json`, `actual-image-validation.log`,
+`late-fresh-fault.log`, `recovery-closeout.json`, `runtime-claim-closeout.json`,
+`runtime-post-wake.json`, `observer-installed.sha256`, and all failed attempt logs.
+Fault detail `/logs/m2-guardrail-fi-20260908T110426747663Z-f04674dd/`.
+
+Formal subtitle additions this handoff: **0**. Real model response/fallback and
+provider-confirmed formal output, M2 download/extraction acceptance, and frozen
+20-job completion remain unverified. Do not wait for all jobs or call M2 accepted.
+
 ## Complete candidate regression — 2026-09-08 10:42 UTC
 
 The full candidate suite completed in an isolated container using the deployed

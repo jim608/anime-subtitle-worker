@@ -1,5 +1,19 @@
 # M2 remaining acceptance — 2026-09-08
 
+## Current M3 handoff — 2026-09-08 11:10 UTC
+
+Worker 5f379e877ce59cb3207927e38aad2f6735b76287 / WebUI
+175a02a7bad46e0b6fa2372c59f39e8dd272911e deployed successfully; ARMED, 7/7 fresh
+isolated breakers, 67 source holds retained, preservation UNPROVEN. Existing
+provider observer now runs through persistent host cron. New Gate
+m2-gate-20260908T110433538511Z-b43d836495 starts 11:04:33.538511Z on baseline
+m2-guardrail-v1:e365b1132703b8cd1ae7e063, initialized 0/20; no old results transferred.
+First fixed member was actually claimed and reached source review with a hash-bound
+checkpoint; next job began ASR. Review member is not replaced. No new formal subtitle
+added, no download/extraction acceptance claim, no M2 acceptance or percentage SLO.
+Evidence: `/logs/m3-runtime-handoff-20260908/`, especially `runtime-post-wake.json`.
+Detailed successful and refused handoff boundaries are in docs/M3_MODEL_RECOVERY.md.
+
 M3 full candidate server regression: 2023 PASS, exit 0, retained at
 `logs/m3-baseline-20260908T070237Z/candidate-full-predeploy-final.log`.
 Only the host-observer test fixture's executable tempdir changed. No Production

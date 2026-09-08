@@ -9,6 +9,16 @@ relabeled PASS or mixed with future M3 runtime results.
 
 ### M3 — Configured model fallback and resource-aware recovery
 
+Current 2026-09-08 11:10 UTC: candidate 5f379e877ce59cb3207927e38aad2f6735b76287
+deployed by safe-update-stack; actual image 211 tests PASS, fresh breakers 7/7 PASS,
+runtime ARMED with pinned host observer automatically refreshing. Controlled
+reconciliation preserved 67 holds and UNPROVEN history, classifying 24 late ingest
+transitions before official recovery. New frozen Gate e365b1132703b8cd1ae7e063
+initialized 0/20; first automatic claim reached NEEDS_REVIEW and remains selected;
+next job started ASR. Formal added subtitles 0. Model-response/publication proof
+and M2 download/extraction/strict Gate acceptance remain open. No repeat deployment
+for this documentation-only closeout; earlier pending-deployment notes are history.
+
 Full candidate regression now passes: 2023 tests in the server isolated container
 (candidate-full-predeploy-final.log, exit 0). Fixed only executable shell fixture
 tempdir contamination from another suite's noexec /dev/shm. Fresh owned admission

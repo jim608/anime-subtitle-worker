@@ -1,6 +1,17 @@
 # M2 Production Observation
 
-## Current runtime and Gate (2026-09-08 06:33 UTC)
+## Current runtime and Gate (2026-09-08 11:10 UTC)
+
+Worker `5f379e877ce59cb3207927e38aad2f6735b76287`, WebUI
+`175a02a7bad46e0b6fa2372c59f39e8dd272911e`; ARMED, host provider observation VERIFIED.
+New Gate `m2-gate-20260908T110433538511Z-b43d836495`, start
+`2026-09-08T11:04:33.538511Z`, baseline `m2-guardrail-v1:e365b1132703b8cd1ae7e063`.
+Initialized 0/20 without transferring old evidence. Bounded closeout observed
+ordinal 1 claimed, terminal NEEDS_REVIEW, strict_verified=0; retained in the frozen
+cohort without replacement. Next pipeline job began ASR. Not a passed Gate or new
+subtitle delivery. No waiting for 20 jobs. Evidence `/logs/m3-runtime-handoff-20260908/`.
+
+## Historical runtime and Gate (2026-09-08 06:33 UTC)
 
 Actual Worker `a4829a5298304f9e2dc20dd02ecde883ea53ec23`, WebUI unchanged
 `175a02a7bad46e0b6fa2372c59f39e8dd272911e`; Breaker ARMED.
