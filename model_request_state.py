@@ -54,13 +54,8 @@ class ModelRequestContext:
         return conn
 
     def checkpoint_identity(self, *, endpoint: str) -> str:
-        if self.provider_binding is None:
-            return ''  # retain the explicit legacy/unbound checkpoint contract
-        from model_provider_evidence import validate_provider_binding
-        provider = validate_provider_binding(self.provider_binding, endpoint=endpoint)
-        _digest(self.runtime_sha256)
-        return hashlib.sha256(_json({'runtime_sha256':self.runtime_sha256,
-                                    'provider_binding':provider}).encode('utf-8')).hexdigest()
+        return model_execution_identity(runtime_sha256=self.runtime_sha256,
+                                        provider_binding=self.provider_binding, endpoint=endpoint)
 
     def record_output_lineage(self, *, endpoint: str, output_path: Path, output_sha256: str) -> dict[str, Any] | None:
         identity = self.checkpoint_identity(endpoint=endpoint)
@@ -140,6 +135,17 @@ class ModelRequestContext:
 
 def _json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+
+def model_execution_identity(*, runtime_sha256: str, provider_binding: Mapping[str, Any] | None,
+                             endpoint: str) -> str:
+    if provider_binding is None:
+        return ''
+    from model_provider_evidence import validate_provider_binding
+    provider = validate_provider_binding(provider_binding, endpoint=endpoint)
+    _digest(runtime_sha256)
+    return hashlib.sha256(_json({'runtime_sha256':runtime_sha256,
+                                'provider_binding':provider}).encode('utf-8')).hexdigest()
 
 
 def find_model_output_lineage(conn: sqlite3.Connection, *, job_id: str, output_path: Path,

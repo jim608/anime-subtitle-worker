@@ -5,6 +5,27 @@ its frozen cohort, held sources and UNPROVEN preservation claims are unchanged.
 
 ## Scope
 
+## Worker complete-cache admission (candidate)
+
+`_validate_translation_cache_chain` now invokes a read-only exact lineage check
+before any existing zh-CN cache can be reused or invalidated. For provider-bound
+baselines it requires verified runtime state, the exact source identity's formal
+job, actual SRT content/path hashes, and matching runtime/provider execution
+identity. It uses the same identity function as request/checkpoint creation.
+
+An unproven cache raises the existing `SourceSelectionReviewError` and remains
+on disk. Existing stage mapping records `source_selection_needs_review`, which
+the recovery taxonomy classifies as QUALITY_BLOCKED, not a generic system crash.
+No new queue or source mutation is involved. Explicit legacy baselines without a
+provider binding retain existing behavior, without acquiring M3 provenance.
+
+Composed Worker/SQLite tests verify valid lookup, missing/changed-provider rejection,
+cache/source preservation and the existing review classification. Server related
+suite: 207 PASS (`provider-worker-cache-guard-server.log`); final review integration
+is in `provider-worker-cache-review-final-server.log`. Publication waiting and
+confirmation consumption, plus repair-derived lineage, remain open. This is not
+a Production deployment or complete output-publication acceptance.
+
 ## Post-preparation provider confirmation primitive (candidate)
 
 `confirm_model_output_provider` loads immutable preparation evidence, requires a

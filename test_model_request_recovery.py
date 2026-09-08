@@ -193,6 +193,48 @@ class ModelRequestRecoveryTest(unittest.TestCase):
                 changed.record_output_lineage(**kwargs)
         self.assertFalse(context.record_output_lineage(**kwargs)['publication_verified'])
 
+    def test_worker_cache_guard_consumes_exact_lineage_without_deleting_unproven_cache(self):
+        from model_request_state import ModelRequestContext
+        from model_provider_evidence import ModelProviderEvidenceError
+        from worker import VideoWorker, SourceSelectionReviewError
+        self.prepare()
+        stage = self.make_stage('cache-source')
+        video = self.root/'cache-source.mkv'
+        output = self.root/'cache.zh-CN.srt'
+        output.write_bytes(b'fixture cache bytes')
+        baseline = {'model_provider':self.args['provider_binding'],
+                    'worker_runtime_code_revision':'code', 'configuration_fingerprint':'config'}
+        state = {'status':'ARMED', 'baseline':baseline, 'gate_baseline_version':'fixture-gate'}
+        identity = hashlib.sha256(json.dumps({'code':'code','config':'config'}, sort_keys=True).encode()).hexdigest()
+        context = ModelRequestContext(self.database, stage['stage_attempt_id'], identity, 2,
+                                      provider_binding=self.args['provider_binding'])
+        worker = object.__new__(VideoWorker)
+        worker.config = SimpleNamespace(m2_server_canary_observer_enabled=True, work_path=self.root,
+                                        translator_base_url=self.url)
+        worker._stage_state = SimpleNamespace(pipeline_jobs=lambda:self.store)
+        worker._pipeline_stage_inputs = lambda path: {'media_size':path.stat().st_size,
+                                                       'media_mtime_ns':path.stat().st_mtime_ns}
+        with patch('m2_guardrail_runtime.load_runtime_state', return_value=state), \
+             patch('m2_guardrail_runtime.runtime_guardrail_status', return_value={'status':'ARMED','state':state}):
+            with self.assertRaisesRegex(SourceSelectionReviewError, 'cache_lineage_unproven'):
+                worker._validate_translation_cache_chain(video, SimpleNamespace(zh_cn_srt=output))
+            self.assertEqual(b'fixture cache bytes', output.read_bytes())
+            proof = context.record_output_lineage(endpoint=self.url, output_path=output,
+                output_sha256=hashlib.sha256(output.read_bytes()).hexdigest())
+            self.assertEqual(proof['token'], worker._require_model_output_lineage(video, output)['token'])
+            baseline['model_provider'] = self.new
+            with self.assertRaisesRegex(SourceSelectionReviewError, 'cache_lineage_unproven'):
+                worker._require_model_output_lineage(video, output)
+            self.assertEqual(b'fixture cache bytes', output.read_bytes())
+            self.assertEqual(b'isolated-source', video.read_bytes())
+            self.assertEqual('source_selection_review', worker._stage_for_exception(
+                SourceSelectionReviewError('model_output_cache_lineage_unproven')))
+            from m2_production_recovery import classify_failure
+            self.assertEqual('QUALITY_BLOCKED', classify_failure('source_selection_review',
+                'source_selection_needs_review', 'model_output_cache_lineage_unproven'))
+            baseline.pop('model_provider')
+            self.assertIsNone(worker._require_model_output_lineage(video, output))
+
     def local_fixture(self):
         self.prepare()
         self.config = SimpleNamespace(m2_recovery_enabled=True, work_path=self.root,

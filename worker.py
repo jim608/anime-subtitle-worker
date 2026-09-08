@@ -4656,11 +4656,48 @@ class VideoWorker:
             raise SubtitleQualityError(summarize_quality_report(final_report))
         return bool(diagnostics)
 
+    def _require_model_output_lineage(self, video: Path, output: Path) -> dict[str, object] | None:
+        """Read-only cache authority check; never bless or discard unknown cache."""
+        if not bool(getattr(self.config, 'm2_server_canary_observer_enabled', False)):
+            return None
+        from m2_guardrail_runtime import load_runtime_state, runtime_guardrail_status
+        from model_provider_evidence import ModelProviderEvidenceError
+        from model_request_state import find_model_output_lineage, model_execution_identity
+        state = load_runtime_state(self.config)
+        if state is None:
+            raise ModelProviderEvidenceError('model_output_runtime_state_missing')
+        baseline = state.get('baseline', {})
+        provider = baseline.get('model_provider')
+        if provider is None:
+            return None  # explicit legacy baseline, not retroactive provenance
+        runtime = runtime_guardrail_status(self.config)
+        if runtime.get('status') not in {'ARMED','TRIPPED'} or runtime.get('state') != state:
+            raise ModelProviderEvidenceError('model_output_runtime_not_verified')
+        if self._stage_state is None:
+            raise ModelProviderEvidenceError('model_output_pipeline_authority_missing')
+        pipeline = self._stage_state.pipeline_jobs()
+        inputs = self._pipeline_stage_inputs(video)
+        job = pipeline.job_for_path(video, size=int(inputs['media_size']),
+                                    mtime_ns=int(inputs['media_mtime_ns']), create=False)
+        if not job:
+            raise ModelProviderEvidenceError('model_output_source_job_missing')
+        identity = json.dumps({'code':baseline['worker_runtime_code_revision'],
+                               'config':baseline['configuration_fingerprint']}, sort_keys=True)
+        execution = model_execution_identity(runtime_sha256=hashlib.sha256(identity.encode('utf-8')).hexdigest(),
+            provider_binding=provider, endpoint=str(self.config.translator_base_url))
+        proof = find_model_output_lineage(pipeline._conn, job_id=job['job_id'], output_path=output,
+                                         output_sha256=sha256_file(output), execution_digest=execution)
+        if proof is None:
+            raise SourceSelectionReviewError('model_output_cache_lineage_unproven')
+        return proof
+
     def _validate_translation_cache_chain(
         self,
         video: Path,
         paths: SubtitlePaths,
     ) -> None:
+        if paths.zh_cn_srt.is_file():
+            self._require_model_output_lineage(video, paths.zh_cn_srt)
         hold = translation_quality_hold_path(paths.zh_cn_srt)
         if hold.is_file():
             try:

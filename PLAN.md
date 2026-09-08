@@ -9,6 +9,11 @@ relabeled PASS or mixed with future M3 runtime results.
 
 ### M3 — Configured model fallback and resource-aware recovery
 
+Worker complete-cache admission now consumes exact provider/runtime SRT lineage
+before reusing cache. Unknown caches remain intact and use the existing source
+review category. Related server 207 PASS. Formal publication confirmation and
+repair-derived lineage remain required before deployment.
+
 Post-preparation provider confirmation state primitive now persists exact Gate /
 provider evidence newer than SRT preparation, rejects changed/pending inference,
 and preserves immutable replay. Worker publication consumption remains required;
