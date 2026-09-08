@@ -97,6 +97,49 @@ class ModelRequestRecoveryTest(unittest.TestCase):
         with self.assertRaisesRegex(ModelRequestStateError, 'invalid_outcome'):
             self.settle(request, 'PROVIDER_TERMINATED', {'recovery_record_sha256':'f'*64})
 
+    def test_srt_commit_lineage_is_hash_bound_immutable_and_not_publication(self):
+        from model_request_state import ModelRequestContext, find_model_output_lineage
+        from translator import SubtitleTranslator
+        from srt_utils import SrtBlock
+        import sqlite3
+        request = self.prepare()
+        self.settle(request)
+        context = ModelRequestContext(self.database, self.stage['stage_attempt_id'], 'c'*64, 2,
+                                      provider_binding=self.args['provider_binding'])
+        translator = object.__new__(SubtitleTranslator)
+        translator.config = SimpleNamespace(translator_base_url=self.url)
+        translator._request_context = context
+        translator._quality_events = []
+        output = self.root/'fixture.zh-CN.srt'
+        blocks = [SrtBlock(1, '00:00:01,000 --> 00:00:02,000', ['測試字幕'])]
+        translator._commit_translation_output(output, blocks, reason='fixture')
+        digest = hashlib.sha256(output.read_bytes()).hexdigest()
+        kwargs = dict(job_id=self.stage['job_id'], output_path=output, output_sha256=digest,
+                      execution_digest=context.checkpoint_identity(endpoint=self.url))
+        proof = find_model_output_lineage(self.store._conn, **kwargs)
+        self.assertIsNotNone(proof)
+        self.assertFalse(proof['publication_verified'])
+        self.store.close()
+        self.store = fixtures.PipelineJobStore(self.database)
+        self.assertEqual(proof, find_model_output_lineage(self.store._conn, **kwargs))
+        self.assertEqual(b'isolated-source', (self.root/'one.mkv').read_bytes())
+        self.assertEqual('RUNNING', self.store._get_attempt(self.stage['stage_attempt_id'])['status'])
+        self.assertIsNone(find_model_output_lineage(self.store._conn, **{**kwargs, 'output_sha256':'a'*64}))
+        self.assertIsNone(find_model_output_lineage(self.store._conn, **{**kwargs, 'job_id':'other'}))
+        self.assertIsNone(find_model_output_lineage(self.store._conn, **{**kwargs, 'execution_digest':'e'*64}))
+        self.assertTrue(context.record_output_lineage(endpoint=self.url, output_path=output, output_sha256=digest)['replay'])
+        for action in ("DELETE FROM pipeline_stage_events WHERE event_type='MODEL_OUTPUT_PREPARED'",
+                       "UPDATE pipeline_stage_events SET payload_json='{}' WHERE event_type='MODEL_OUTPUT_PREPARED'"):
+            with self.assertRaisesRegex(sqlite3.IntegrityError, 'lineage_immutable'):
+                self.store._conn.execute(action)
+            self.store._conn.rollback()
+        second = self.reserve(operation_id='operation-two')
+        self.settle(second)
+        later = context.record_output_lineage(endpoint=self.url, output_path=output, output_sha256=digest)
+        self.assertFalse(later['replay'])
+        self.assertNotEqual(proof['token'], later['token'])
+        self.assertGreater(later['request_event_watermark'], proof['request_event_watermark'])
+
     def local_fixture(self):
         self.prepare()
         self.config = SimpleNamespace(m2_recovery_enabled=True, work_path=self.root,

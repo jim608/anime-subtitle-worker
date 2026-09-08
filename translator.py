@@ -762,6 +762,10 @@ class SubtitleTranslator:
                     srt_sha256=planned_sha256,
                     reason=reason,
                 )
+            request_context = getattr(self, '_request_context', None)
+            if request_context is not None:
+                request_context.record_output_lineage(endpoint=str(self.config.translator_base_url),
+                    output_path=output, output_sha256=planned_sha256)
         except Exception as exc:
             fail_closed_translation_output(
                 output,

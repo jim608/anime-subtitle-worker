@@ -5,6 +5,29 @@ its frozen cohort, held sources and UNPROVEN preservation claims are unchanged.
 
 ## Scope
 
+## Complete SRT preparation lineage (candidate)
+
+Translator's existing guarded SRT commit now records `MODEL_OUTPUT_PREPARED` in
+the existing Pipeline event store before writing a provider-bound SRT cache. The
+record binds job/stage, destination digest, planned content digest, execution
+identity, provider binding and the model-request event watermark. It explicitly
+records `publication_verified: false`; preparation does not settle the job or
+prove output QC. Legacy/unbound output commits do not acquire retroactive proof.
+
+The append-only record is transactionally durable and replayable. A subsequent
+model request changes the watermark even if SRT bytes are identical, so it cannot
+reuse an older preparation time. Exact per-job lookup rejects wrong output bytes,
+path/execution identity or job. Composed Translator tests compare the planned hash
+to the actual written SRT, verify restart lookup and immutable events, and retain
+source content and RUNNING stage status.
+
+Server related suite: 204 PASS (`provider-srt-lineage-server.log`); final metadata
+and restart tests are in `provider-srt-lineage-final-server.log` under the M3
+evidence root. This is the lineage producer/lookup, not yet Worker cache-admission
+or publication enforcement. The latter must also wait for provider evidence newer
+than preparation and persist that confirmation before claiming formal acceptance.
+No Production deployment, source/output modification or Gate change occurred.
+
 ## Provider-bound translation checkpoint identity (candidate)
 
 Publication review found that batch checkpoint signatures previously contained

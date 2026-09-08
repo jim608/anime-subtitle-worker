@@ -9,6 +9,11 @@ relabeled PASS or mixed with future M3 runtime results.
 
 ### M3 — Configured model fallback and resource-aware recovery
 
+Complete SRT preparation now has hash-bound immutable Pipeline lineage including
+execution/provider identity and request watermark (204 related server tests PASS).
+Worker cache admission/publication consumption and post-preparation confirmation
+remain open. Preparation is not a delivered or QC-verified subtitle.
+
 Batch checkpoint signatures now include validated provider/runtime identity for
 bound M3 requests; same-identity resume is preserved and cross-provider batches
 are not restored. Final SRT-cache lineage and the publication confirmation barrier

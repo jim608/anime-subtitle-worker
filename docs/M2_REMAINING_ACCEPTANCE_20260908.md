@@ -2,6 +2,12 @@
 
 ## M3 isolation work boundary (2026-09-08 08:10 UTC)
 
+Subsequent M3 work added isolated provider restart proof, a not-installed host
+observation adapter, provider-bound batch checkpoints and complete-SRT preparation
+lineage. These remain candidate evidence, not Production deployment or formal
+subtitle delivery. M2 download/extraction and strict Gate acceptance are unchanged
+and incomplete; no fixture or preparation event is counted toward them.
+
 Subsequent provider-binding candidate tests also remain isolated: 258 related
 and 77 final targeted server tests passed (overlapping suites). Read-only provider
 identity capture did not arm/recover/redeploy production or recreate its Gate.

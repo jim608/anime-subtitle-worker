@@ -62,6 +62,41 @@ class ModelRequestContext:
         return hashlib.sha256(_json({'runtime_sha256':self.runtime_sha256,
                                     'provider_binding':provider}).encode('utf-8')).hexdigest()
 
+    def record_output_lineage(self, *, endpoint: str, output_path: Path, output_sha256: str) -> dict[str, Any] | None:
+        identity = self.checkpoint_identity(endpoint=endpoint)
+        if not identity:
+            return None
+        _digest(output_sha256)
+        path_digest = hashlib.sha256(str(Path(output_path).resolve()).encode('utf-8')).hexdigest()
+        conn = self._connection()
+        try:
+            with _transaction(conn):
+                stage = conn.execute('SELECT job_id,status,stage FROM pipeline_stage_attempts WHERE stage_attempt_id=?',
+                                     (self.stage_attempt_id,)).fetchone()
+                if not stage or stage[1] != 'RUNNING' or stage[2] != 'TRANSLATING':
+                    raise ModelRequestStateError('model_output_active_translation_required')
+                request_watermark = conn.execute("""SELECT COALESCE(MAX(rowid),0) FROM pipeline_stage_events
+                    WHERE stage_attempt_id=? AND event_type IN
+                    ('MODEL_REQUEST_RESERVED','MODEL_REQUEST_UNKNOWN','MODEL_REQUEST_SETTLED')""",
+                    (self.stage_attempt_id,)).fetchone()[0]
+                key = hashlib.sha256(_json({'stage_attempt_id':self.stage_attempt_id,
+                    'output_path_sha256':path_digest, 'output_sha256':output_sha256,
+                    'execution_digest':identity, 'request_event_watermark':request_watermark}).encode('utf-8')).hexdigest()
+                previous = conn.execute("""SELECT payload_json FROM pipeline_stage_events
+                    WHERE event_type='MODEL_OUTPUT_PREPARED' AND json_extract(payload_json,'$.token')=?""", (key,)).fetchone()
+                if previous:
+                    return {**json.loads(previous[0]), 'replay':True}
+                payload = {'contract':'m3-model-output-lineage-v1', 'token':key, 'job_id':stage[0],
+                    'stage_attempt_id':self.stage_attempt_id, 'output_path_sha256':path_digest,
+                    'output_sha256':output_sha256, 'execution_digest':identity,
+                    'request_event_watermark':request_watermark,
+                    'runtime_sha256':self.runtime_sha256, 'provider_binding':dict(self.provider_binding),
+                    'prepared_at':_timestamp(), 'publication_verified':False}
+                _event(conn, payload, 'MODEL_OUTPUT_PREPARED')
+                return {**payload, 'replay':False}
+        finally:
+            conn.close()
+
     def reserve(self, *, endpoint: str, request: Mapping[str, Any], model: str,
                 operation_kind: str = 'INFERENCE') -> dict[str, Any]:
         provider = None
@@ -91,6 +126,21 @@ class ModelRequestContext:
 
 def _json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+
+def find_model_output_lineage(conn: sqlite3.Connection, *, job_id: str, output_path: Path,
+                               output_sha256: str, execution_digest: str) -> dict[str, Any] | None:
+    """Exact per-job cache provenance lookup; preparation is not publication proof."""
+    _digest(output_sha256)
+    _digest(execution_digest)
+    path_digest = hashlib.sha256(str(Path(output_path).resolve()).encode('utf-8')).hexdigest()
+    row = conn.execute("""SELECT payload_json FROM pipeline_stage_events
+        WHERE job_id=? AND event_type='MODEL_OUTPUT_PREPARED'
+        AND json_extract(payload_json,'$.output_path_sha256')=?
+        AND json_extract(payload_json,'$.output_sha256')=?
+        AND json_extract(payload_json,'$.execution_digest')=? ORDER BY id DESC LIMIT 1""",
+        (job_id, path_digest, output_sha256, execution_digest)).fetchone()
+    return json.loads(row[0]) if row else None
 
 
 def pending_model_resource_request(database: Path, *, endpoint: str | None = None) -> dict[str, Any] | None:
@@ -160,6 +210,10 @@ def ensure_model_request_schema(conn: sqlite3.Connection) -> None:
             )
             BEGIN SELECT RAISE(ABORT,'model_request_ownership_unresolved'); END""")
     for action in ('DELETE', 'UPDATE'):
+        conn.execute(f"""CREATE TRIGGER IF NOT EXISTS m3_output_lineage_no_{action.lower()}
+            BEFORE {action} ON pipeline_stage_events
+            WHEN OLD.event_type='MODEL_OUTPUT_PREPARED'
+            BEGIN SELECT RAISE(ABORT,'model_output_lineage_immutable'); END""")
         conn.execute(f"""CREATE TRIGGER IF NOT EXISTS m3_request_receipt_no_{action.lower()}
                 BEFORE {action} ON pipeline_stage_events
                 WHEN OLD.event_type IN ('MODEL_REQUEST_RESERVED','MODEL_REQUEST_UNKNOWN','MODEL_REQUEST_SETTLED')
@@ -196,7 +250,7 @@ def _event(conn: sqlite3.Connection, request: Mapping[str, Any], kind: str) -> N
         (job_id,stage_attempt_id,event_type,stage,status,reason_code,evidence_json,confidence,payload_json,created_at)
         VALUES(?,?,?,?,?,?,?,?,?,?)""", (
         request['job_id'], request['stage_attempt_id'], kind, row[0], row[1],
-        kind.lower(), _json({'contract':'m3-model-request-v1','token':request['token']}),
+        kind.lower(), _json({'contract':request.get('contract','m3-model-request-v1'),'token':request['token']}),
         1.0, _json(request), _timestamp()))
 
 
