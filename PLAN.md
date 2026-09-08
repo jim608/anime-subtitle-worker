@@ -2,6 +2,12 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+13:52UTC three exact old targets have2/8/1 episode candidates but are blocked
+before comparison by historical terminal-success markers, not active/backoff.
+Existing archival reopen helper has no caller. Preserve history; next verify
+narrow controlled revalidation/reopen behavior before changes, no direct DB edits.
+See M2 remaining acceptance latest section; no new subtitle/deployment/Gate change.
+
 2026-09-08 13:49UTC: resumed M2; M3 engineering evidence remains accepted separately.
 Current frozen Gate121706 has automatically SETTLED20/20:18NEEDS_REVIEW,2FAILED,
 strict_verified0; server summary safety_gateFAIL. Preserve failed cohort/summary,

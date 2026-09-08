@@ -1,5 +1,31 @@
 # M2 remaining acceptance — 2026-09-08
 
+## Exact historical-success selection blocker — 2026-09-08 13:52 UTC
+
+Bounded existing-source searches for2565:12,3085:13,3932:3 returned respectively
+6/42/6 releases and2/8/1 episode candidates. All6 configured source searches
+succeeded per case; no release was selected or torrent added.
+Exact current selection predicates: active=false,deferred=false,
+terminal_success_short_circuit=true for all3. Their historical extracted counts
+12/1/1 and August27 completion timestamps remain recorded under
+KEEP_RECORDED_COMPLETE_NOT_REVERIFIED. Thus zero selection is NOT evidence of
+no suitable release or source outage: candidate filtering is never reached.
+
+Code inspection: _choose_release_for_episode rejects terminal history before
+release comparison. _mark_pending has an allow_completed_reopen branch that
+archives history, but no current caller supplies that option. The ordinary
+replacement request cannot overcome this terminal check. No completed fields
+were cleared; original history and failed/seen protections remain intact.
+Next: reproduce and verify a narrowly authorized historical-success revalidation
+path with exact target/source identity, missing valid output, no active ownership,
+immutable retained completion evidence and idempotency before any runtime change.
+Do not assume historical success was false merely because current files are absent.
+
+Logs /logs/m2-resumed-acceptance-20260908/:
+source-2565-check.log,source-3085-check.log,source-3932-check.log,
+three-selection-reasons.json and the timestamped source JSONs linked by each log.
+No code/config/deployment/Gate mutation; formal additions0 this turn.
+
 ## Resumed M2 and frozen Gate disposition — 2026-09-08 13:49 UTC
 
 Gate m2-gate-20260908T121706917079Z-5900a7525f automatically SETTLED20/20;
