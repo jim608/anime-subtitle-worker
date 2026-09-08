@@ -6283,10 +6283,16 @@ class VideoWorker:
                 database = self.config.work_path / database
             identity = json.dumps({'code': worker_runtime_code_revision(self.config),
                                    'config': configuration_fingerprint(self.config)}, sort_keys=True)
+            provider_binding = None
+            if bool(getattr(self.config, 'm2_server_canary_observer_enabled', False)):
+                from m2_guardrail_runtime import load_runtime_state
+                runtime_state = load_runtime_state(self.config)
+                provider_binding = (runtime_state or {}).get('baseline', {}).get('model_provider')
             self._translator._request_context = ModelRequestContext(
                 database, str(attempt['stage_attempt_id']),
                 hashlib.sha256(identity.encode('utf-8')).hexdigest(), self.config.max_retries,
-                str(getattr(self.config, 'translator_resource_scope', 'unverified')))
+                str(getattr(self.config, 'translator_resource_scope', 'unverified')),
+                provider_binding=provider_binding)
         return self._translator
 
     def _load_resource_launch_plan(self, video: Path) -> dict[str, object] | None:

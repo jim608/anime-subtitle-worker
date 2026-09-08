@@ -2,6 +2,11 @@
 
 ## M3 isolation work boundary (2026-09-08 08:10 UTC)
 
+Subsequent provider-binding candidate tests also remain isolated: 258 related
+and 77 final targeted server tests passed (overlapping suites). Read-only provider
+identity capture did not arm/recover/redeploy production or recreate its Gate.
+These results add no M2 formal subtitles and do not satisfy M2 acceptance.
+
 The explicitly authorized M3 candidate now has isolated model ownership,
 fallback/resource and real process/container restart evidence; see
 `docs/M3_MODEL_RECOVERY.md`. None of these fixtures count toward M2 formal AI,

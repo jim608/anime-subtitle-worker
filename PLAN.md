@@ -9,6 +9,13 @@ relabeled PASS or mixed with future M3 runtime results.
 
 ### M3 — Configured model fallback and resource-aware recovery
 
+Provider binding candidate: host arm/recover can attest an explicitly published
+Docker model provider and bind its stable generation to the Gate and request
+receipts. Server related tests 258 PASS, final targeted tests 77 PASS (overlap).
+Live provider drift enforcement, controlled UNKNOWN resolution and safe runtime
+deployment remain required. No production Gate change or formal delivery is
+claimed by these tests; see `docs/M3_MODEL_RECOVERY.md` for evidence.
+
 Initial isolated baseline: 118 resource-admission/runtime/Worker integration,
 translation-checkpoint and translator-parser tests PASS, exit 0.
 Evidence: `/logs/m3-baseline-20260908T070237Z/tests.log`.

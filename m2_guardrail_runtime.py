@@ -564,6 +564,11 @@ def probe_local_runtime(
     worker_source_revision = _read_source_revision(source_revision_file)
     live_runtime_code_revision = worker_runtime_code_revision(config)
     runtime_instance = worker_runtime_instance_fingerprint(config)
+    from model_provider_evidence import redacted_endpoint_descriptor, ModelProviderEvidenceError
+    try:
+        model_provider_endpoint = redacted_endpoint_descriptor(str(getattr(config, 'translator_base_url', '')))
+    except ModelProviderEvidenceError:
+        model_provider_endpoint = None
     fault_results = (
         validate_fault_results(
             config,
@@ -586,6 +591,7 @@ def probe_local_runtime(
             "runtime_instance_fingerprint"
         ],
         "configuration_fingerprint": configuration_fingerprint(config),
+        "model_provider_endpoint": model_provider_endpoint,
         "decision": decision,
         "guardrails": {
             "observer_enabled": bool(config.m2_server_canary_observer_enabled),
@@ -893,6 +899,13 @@ def initialize_gate(
         "decision_contract": decision["contract"],
         "eligibility_policy_version": ELIGIBILITY_POLICY_VERSION,
     }
+    if evidence.get('model_provider') is not None:
+        from model_provider_evidence import validate_provider_binding, ModelProviderEvidenceError
+        try:
+            baseline['model_provider'] = validate_provider_binding(
+                evidence['model_provider'], endpoint=str(config.translator_base_url))
+        except (ModelProviderEvidenceError, TypeError, ValueError) as exc:
+            raise RuntimeContractError('model_provider_binding_invalid') from exc
     baseline_version = _baseline_version(baseline)
     target = runtime_state_path(config, state_path_override)
     existing = _read_json(target)
@@ -2881,6 +2894,7 @@ def recover_runtime_on_host(
     webui_source_revision_file: str = "/app/.source-revision",
     runtime_state_path_override: str = "",
     root_cause_evidence: Mapping[str, Any] | None = None,
+    model_provider_container: str = "",
     runner: CommandRunner | None = None,
 ) -> dict[str, Any]:
     """Attest, recover, re-arm, and seed one recovery canary without waiting."""
@@ -2995,6 +3009,10 @@ def recover_runtime_on_host(
             "expected_old_gate_id": expected_old_gate_id,
         },
     }
+    expected_provider_binding = (
+        _capture_model_provider_binding(docker_binary, model_provider_container, probe_result, run)
+        if model_provider_container else None
+    )
     recover_command = [
         docker_binary,
         "exec",
@@ -3022,6 +3040,8 @@ def recover_runtime_on_host(
         docker_binary=docker_binary,
         worker_container=worker_name,
         webui_container=webui_name,
+        model_provider_container=model_provider_container,
+        expected_model_provider_binding=expected_provider_binding,
         expected_worker_commit_sha=worker_commit,
         expected_webui_commit_sha=webui_commit,
         fault_summary_path=fault_summary_path,
@@ -3093,6 +3113,8 @@ def arm_runtime_on_host(
     expected_worker_commit_sha: str,
     expected_webui_commit_sha: str,
     fault_summary_path: str,
+    model_provider_container: str = "",
+    expected_model_provider_binding: Mapping[str, Any] | None = None,
     worker_repo: str | Path = ".",
     webui_repo: str | Path = "../anime-subtitle-worker-webui",
     worker_config_path: str = "/app/config.yaml",
@@ -3103,6 +3125,8 @@ def arm_runtime_on_host(
 ) -> dict[str, Any]:
     """Verify and arm the live stack with one bounded host-side invocation."""
 
+    if expected_model_provider_binding is not None and not model_provider_container:
+        raise RuntimeContractError('model_provider_container_required')
     worker_name = _require_container_name(worker_container)
     webui_name = _require_container_name(webui_container)
     wanted_worker_commit = _require_sha(expected_worker_commit_sha, "worker_commit")
@@ -3218,6 +3242,11 @@ def arm_runtime_on_host(
             "worker_config_unchanged_since_start": True,
         },
     }
+    if model_provider_container:
+        evidence['model_provider'] = _capture_model_provider_binding(
+            docker_binary, model_provider_container, probe_result, run)
+        if expected_model_provider_binding is not None and evidence['model_provider'] != expected_model_provider_binding:
+            raise RuntimeContractError('model_provider_changed_during_recovery')
     initialize_command = [
         docker_binary,
         "exec",
@@ -3246,6 +3275,25 @@ def arm_runtime_on_host(
     if initialized.get("webui_runtime_sha") != webui_commit:
         raise RuntimeContractError("initialized_webui_baseline_mismatch")
     return initialized
+
+
+def _capture_model_provider_binding(docker_binary, container, probe, runner):
+    from model_provider_evidence import capture_provider_binding, ModelProviderEvidenceError
+    provider_name = _require_container_name(container)
+    inspection = _inspect_container(docker_binary, provider_name, runner)
+    addresses = _run_command(['hostname', '-I'], runner,
+                             reason_code='provider_host_addresses_unavailable').stdout.split()
+    descriptor = probe.get('model_provider_endpoint')
+    if not isinstance(descriptor, Mapping):
+        raise RuntimeContractError('model_provider_direct_endpoint_unproven')
+    try:
+        binding = capture_provider_binding(inspection, descriptor, addresses, observed_at=time.time())
+        again = _inspect_container(docker_binary, provider_name, runner)
+        if capture_provider_binding(again, descriptor, addresses, observed_at=time.time()) != binding:
+            raise RuntimeContractError('model_provider_changed_during_attestation')
+        return binding
+    except ModelProviderEvidenceError as exc:
+        raise RuntimeContractError(str(exc)) from exc
 
 
 def _local_guardrail_status(
@@ -3701,6 +3749,7 @@ def _parser() -> argparse.ArgumentParser:
     arm.add_argument("--docker", default="docker")
     arm.add_argument("--worker-container", default="anime-subtitle-worker")
     arm.add_argument("--webui-container", default="anime-subtitle-worker-webui")
+    arm.add_argument('--model-provider-container', default='')
     arm.add_argument("--expected-worker-commit-sha", required=True)
     arm.add_argument("--expected-webui-commit-sha", required=True)
     arm.add_argument("--worker-repo", default=".")
@@ -3718,6 +3767,7 @@ def _parser() -> argparse.ArgumentParser:
     recover.add_argument("--docker", default="docker")
     recover.add_argument("--worker-container", default="anime-subtitle-worker")
     recover.add_argument("--webui-container", default="anime-subtitle-worker-webui")
+    recover.add_argument('--model-provider-container', default='')
     recover.add_argument("--expected-worker-commit-sha", required=True)
     recover.add_argument("--expected-webui-commit-sha", required=True)
     recover.add_argument("--expected-old-gate-id", required=True)
@@ -3782,6 +3832,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 docker_binary=args.docker,
                 worker_container=args.worker_container,
                 webui_container=args.webui_container,
+                model_provider_container=args.model_provider_container,
                 expected_worker_commit_sha=args.expected_worker_commit_sha,
                 expected_webui_commit_sha=args.expected_webui_commit_sha,
                 fault_summary_path=args.fault_summary,
@@ -3811,6 +3862,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 docker_binary=args.docker,
                 worker_container=args.worker_container,
                 webui_container=args.webui_container,
+                model_provider_container=args.model_provider_container,
                 expected_worker_commit_sha=args.expected_worker_commit_sha,
                 expected_webui_commit_sha=args.expected_webui_commit_sha,
                 expected_old_gate_id=args.expected_old_gate_id,

@@ -16,6 +16,7 @@ import re
 import sqlite3
 import time
 import uuid
+from types import MappingProxyType
 from typing import Any, Iterator, Mapping
 
 
@@ -40,6 +41,11 @@ class ModelRequestContext:
     attempt_limit: int
     resource_scope: str = 'unverified'
     sender_id: str = field(default_factory=lambda: os.environ.get('ANIME_MODEL_SENDER_ID', ''))
+    provider_binding: Mapping[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        if self.provider_binding is not None:
+            object.__setattr__(self, 'provider_binding', MappingProxyType(dict(self.provider_binding)))
 
     def _connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(Path(self.database).resolve().as_uri() + '?mode=rw',
@@ -49,6 +55,10 @@ class ModelRequestContext:
 
     def reserve(self, *, endpoint: str, request: Mapping[str, Any], model: str,
                 operation_kind: str = 'INFERENCE') -> dict[str, Any]:
+        provider = None
+        if self.provider_binding is not None:
+            from model_provider_evidence import validate_provider_binding
+            provider = validate_provider_binding(self.provider_binding, endpoint=endpoint)
         conn = self._connection()
         try:
             return reserve_model_request(conn, stage_attempt_id=self.stage_attempt_id,
@@ -57,7 +67,7 @@ class ModelRequestContext:
                 request_sha256=hashlib.sha256(_json(request).encode('utf-8')).hexdigest(),
                 model=model, runtime_sha256=self.runtime_sha256, attempt_limit=self.attempt_limit,
                 operation_kind=operation_kind, resource_scope=self.resource_scope,
-                sender_id=self.sender_id)
+                sender_id=self.sender_id, provider_binding=provider)
         finally:
             conn.close()
 
@@ -241,7 +251,8 @@ def reserve_model_request(conn: sqlite3.Connection, *, stage_attempt_id: str,
                           operation_id: str, endpoint: str, request_sha256: str,
                           model: str, runtime_sha256: str, attempt_limit: int,
                           operation_kind: str = 'INFERENCE',
-                          resource_scope: str = 'unverified', sender_id: str = '') -> dict[str, Any]:
+                          resource_scope: str = 'unverified', sender_id: str = '',
+                          provider_binding: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Commit before dispatch. A replay is evidence only, never a resend permit."""
     if not isinstance(operation_id, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{8,128}", operation_id):
         raise ModelRequestStateError("model_request_invalid_operation")
@@ -257,10 +268,14 @@ def reserve_model_request(conn: sqlite3.Connection, *, stage_attempt_id: str,
         raise ModelRequestStateError('model_request_invalid_resource_scope')
     if not isinstance(sender_id, str) or (sender_id and not re.fullmatch('[0-9a-f]{32}', sender_id)):
         raise ModelRequestStateError('model_request_invalid_sender_id')
+    provider = dict(provider_binding) if provider_binding is not None else None
+    if provider is not None and provider.get('endpoint_sha256') != endpoint:
+        raise ModelRequestStateError('model_request_provider_endpoint_mismatch')
     basis = dict(stage_attempt_id=stage_attempt_id, operation_id=operation_id,
                  endpoint=endpoint, request_sha256=request_sha256, model=model,
                  runtime_sha256=runtime_sha256, attempt_limit=attempt_limit,
-                 operation_kind=operation_kind, resource_scope=resource_scope, sender_id=sender_id)
+                 operation_kind=operation_kind, resource_scope=resource_scope, sender_id=sender_id,
+                 provider_binding=provider)
     with _transaction(conn):
         replay = conn.execute("""SELECT payload_json FROM pipeline_stage_events
             WHERE event_type='MODEL_REQUEST_RESERVED' AND json_extract(payload_json,'$.operation_id')=?""",

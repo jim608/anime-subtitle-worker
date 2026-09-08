@@ -66,6 +66,7 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
             source_decision_schema_version=DECISION_SCHEMA_VERSION,
             source_decision_version=DECISION_VERSION,
             translator_api_key="must-never-be-published",
+            translator_base_url='http://192.0.2.10:11434/v1',
         )
         self.revision = root / ".source-revision"
         self.revision.write_text(WORKER_SOURCE_REVISION + "\n", encoding="utf-8")
@@ -344,6 +345,21 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
         self.assertEqual(repeated["gate_start_at"], "2026-09-03T17:02:03Z")
         self.assertEqual(repeated["gate"]["gate_id"], state["gate"]["gate_id"])
 
+    def test_provider_binding_reprobe_does_not_recreate_same_gate(self):
+        from model_provider_evidence import capture_provider_binding, direct_endpoint_descriptor
+        inspection = {'Id': 'a'*64, 'Image': 'sha256:' + 'b'*64,
+            'State': {'Running': True, 'StartedAt': '2026-01-01T00:00:00Z'},
+            'NetworkSettings': {'Ports': {'11434/tcp': [{'HostIp': '0.0.0.0', 'HostPort': '11434'}]}}}
+        states = []
+        for observed in (1800000000.0, 1800000001.0):
+            evidence = self._evidence()
+            evidence['model_provider'] = capture_provider_binding(inspection,
+                direct_endpoint_descriptor(self.config.translator_base_url), ['192.0.2.10'], observed_at=observed)
+            states.append(runtime.initialize_gate(self.config, evidence,
+                source_revision_file=self.revision, now=1_788_454_923.0))
+        self.assertEqual(states[0]['gate']['gate_id'], states[1]['gate']['gate_id'])
+        self.assertEqual('a'*64, states[0]['baseline']['model_provider']['container_id'])
+
     def test_gate_claim_requires_post_start_matching_baseline_and_not_preexisting(self) -> None:
         state = runtime.initialize_gate(
             self.config,
@@ -578,6 +594,8 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
         self.assertIsNone(recreated["state"])
 
     def test_host_arm_checks_live_containers_and_returns_initialized_summary(self) -> None:
+        from model_provider_evidence import redacted_endpoint_descriptor
+        provider_requested = False
         probe = {
             "status": "ARMED",
             "reason_code": "runtime_guardrails_loaded",
@@ -623,9 +641,17 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
             "production_resources_affected": False,
         }
         commands: list[list[str]] = []
+        probe['model_provider_endpoint'] = redacted_endpoint_descriptor('http://192.0.2.10:11434/v1')
 
         def runner(command: list[str], stdin: str | None, timeout: float) -> subprocess.CompletedProcess[str]:
             commands.append(command)
+            if command == ['hostname', '-I']:
+                return subprocess.CompletedProcess(command, 0, '192.0.2.10\n', '')
+            if command[1:3] == ['inspect', 'fixture-ollama']:
+                payload = [{'Id': 'a'*64, 'Image': 'sha256:' + 'b'*64,
+                    'State': {'Running': True, 'StartedAt': '2026-01-01T00:00:00Z'},
+                    'NetworkSettings': {'Ports': {'11434/tcp': [{'HostIp': '0.0.0.0', 'HostPort': '11434'}]}}}]
+                return subprocess.CompletedProcess(command, 0, json.dumps(payload), '')
             if command[0] == "git" and "status" in command:
                 return subprocess.CompletedProcess(command, 0, "", "")
             if command[0] == "git" and "ls-files" in command:
@@ -658,6 +684,10 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
             if "initialize" in command:
                 self.assertIsNotNone(stdin)
                 evidence = json.loads(str(stdin))
+                if provider_requested:
+                    self.assertEqual('a'*64, evidence['model_provider']['container_id'])
+                else:
+                    self.assertNotIn('model_provider', evidence)
                 self.assertEqual(evidence["worker_image_id"], WORKER_IMAGE)
                 self.assertEqual(evidence["worker_container_id"], WORKER_CONTAINER_ID)
                 self.assertEqual(
@@ -690,6 +720,24 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
         self.assertIn("probe", commands[8])
         self.assertIn("--fault-not-before-epoch", commands[8])
         self.assertIn("initialize", commands[10])
+        commands.clear()
+        provider_requested = True
+        result = runtime.arm_runtime_on_host(docker_binary='docker',
+            worker_container='anime-subtitle-worker', webui_container='anime-subtitle-worker-webui',
+            model_provider_container='fixture-ollama', expected_worker_commit_sha=WORKER_SHA,
+            expected_webui_commit_sha=WEBUI_SHA, fault_summary_path='/logs/fault/summary.json',
+            worker_repo=self.worker_repo, webui_repo=self.webui_repo, runner=runner)
+        self.assertEqual(initialized, result)
+        self.assertEqual(2, commands.count(['docker', 'inspect', 'fixture-ollama']))
+        commands.clear()
+        with self.assertRaisesRegex(runtime.RuntimeContractError, 'model_provider_changed_during_recovery'):
+            runtime.arm_runtime_on_host(docker_binary='docker',
+                worker_container='anime-subtitle-worker', webui_container='anime-subtitle-worker-webui',
+                model_provider_container='fixture-ollama', expected_model_provider_binding={},
+                expected_worker_commit_sha=WORKER_SHA, expected_webui_commit_sha=WEBUI_SHA,
+                fault_summary_path='/logs/fault/summary.json', worker_repo=self.worker_repo,
+                webui_repo=self.webui_repo, runner=runner)
+        self.assertFalse(any('initialize' in command for command in commands))
 
     def test_host_arm_fails_closed_on_source_revision_mismatch(self) -> None:
         def runner(command: list[str], stdin: str | None, timeout: float) -> subprocess.CompletedProcess[str]:

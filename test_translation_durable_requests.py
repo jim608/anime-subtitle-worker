@@ -75,6 +75,29 @@ class TranslationDurableRequestTest(unittest.TestCase):
             worker._get_translator(self.fixture.root / 'one.mkv')
         self.assertEqual([], self.calls)
 
+    def test_worker_request_captures_frozen_provider_binding(self):
+        from worker import VideoWorker
+        from model_provider_evidence import capture_provider_binding, direct_endpoint_descriptor
+        endpoint = 'http://192.0.2.10:11434/v1'
+        binding = capture_provider_binding({'Id': 'a'*64, 'Image': 'sha256:' + 'b'*64,
+            'State': {'Running': True, 'StartedAt': '2026-01-01T00:00:00Z'},
+            'NetworkSettings': {'Ports': {'11434/tcp': [{'HostIp': '0.0.0.0', 'HostPort': '11434'}]}}},
+            direct_endpoint_descriptor(endpoint), ['192.0.2.10'], observed_at=1800000000.0)
+        worker = object.__new__(VideoWorker)
+        worker.config = SimpleNamespace(pipeline_job_store_required=True,
+            scanner_state_path=str(self.fixture.database), max_retries=2,
+            m2_server_canary_observer_enabled=True, translator_base_url=endpoint)
+        worker._translator = self.translator(self.response)
+        worker._translator.config.translator_base_url = endpoint
+        worker._stage_state = SimpleNamespace(pipeline_jobs=lambda: self.fixture.store)
+        with patch('m2_guardrail_runtime.worker_runtime_code_revision', return_value='e'*64), \
+                patch('m2_guardrail_runtime.load_runtime_state', return_value={'baseline': {'model_provider': binding}}):
+            translator = worker._get_translator(self.fixture.root / 'one.mkv')
+        with self.assertRaises(TypeError):
+            translator._request_context.provider_binding['container_id'] = 'f'*64
+        self.assertEqual('1\t字幕', translator._request_translation('1\tsource'))
+        self.assertEqual(binding, self.receipts()[0]['provider_binding'])
+
     def test_reservation_exists_before_transport_and_result_is_saved(self):
         def create(**kwargs):
             self.assertEqual('RESERVED', self.receipts()[-1]['state'])

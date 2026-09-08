@@ -5,6 +5,31 @@ its frozen cohort, held sources and UNPROVEN preservation claims are unchanged.
 
 ## Scope
 
+## Provider identity binding (candidate, not deployed)
+
+The host arm/recover path now optionally accepts `--model-provider-container`.
+It binds the effective Worker endpoint to an explicitly published, local Docker
+Ollama instance using container ID, image ID and start generation. Unsupported
+or indirect topology fails closed; two inspections must agree. Recovery captures
+the identity before mutation and rechecks it when arming. An unchanged binding
+does not recreate the frozen Gate merely because observation time changed.
+
+The Worker copies this frozen binding into immutable request context and durable
+reservation evidence. It does not backfill historical requests. Binding is
+point-in-time identity evidence, not a cancellation certificate or proof that the
+provider stayed unchanged after capture. Live drift enforcement and controlled
+post-crash UNKNOWN resolution remain open; no ownership hold is cleared here.
+
+Read-only server capture: `provider-binding-readonly.json`, binding SHA-256
+`b91c298cd5186f24dbf03a45db19ad64f46f297ea8ce5a6d19d9b64d41c45415`.
+Related server tests: 258 PASS (`provider-binding-integration-server.log`);
+after final recovery ordering protection: 77 PASS
+(`provider-handoff-final-server.log`). Suites overlap; counts are not additive.
+All evidence is under `/logs/m3-baseline-20260908T070237Z/`. No production
+restart, deployment, arm, recovery or Gate mutation occurred for this increment.
+
+### Existing scope
+
 Build on the existing ASR/translation entry points, model configuration,
 resource admission and persistent stage/checkpoint stores. Do not create a
 parallel queue or lower output QC to make a fallback appear successful.
