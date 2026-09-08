@@ -2,6 +2,13 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+New candidate: real Worker thread162 stalls before discovery in Queue x mapping
+realpath checks. Fix per-operation resolved-path reuse and existing deadline
+propagation;40isolated tests PASS including real SQLite/symlink/reopen invariants.
+Not deployed. Next fresh safe deployment/controlled handoff (never reuse old1445
+receipt/root), then actual automatic claim and formal output proof. Preserve failed
+Gate144756/68holds/UNPROVEN; do not claim M2 acceptance from these tests.
+
 16:17UTC exact-source diagnosis complete: independent empty and same-style overlap
 failures remain, so no QC exemption/runtime edit justified for this canary. Retain
 failed source and let existing alternative-source request proceed with backoff;

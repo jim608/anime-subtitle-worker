@@ -1,5 +1,38 @@
 # M2 remaining acceptance — 2026-09-08
 
+## Reproduced enqueue preparation stall; candidate repair
+
+Actual PID50 nonblocking stack `worker-single-stack.log` locates thread162
+mikan-qbit-enqueue-watch in _queued_library_scan_mappings -> _path_is_relative_to
+-> realpath, before the bounded discovery loop. No queue lock or job lease owned;
+deployment/reconciliation holds false. Replacement target2565:12 is position295
+in the retained584target request, not a newly claimed download. Read-only owner
+evidence replacement-owner-1788884653335761924.json. No lock/hold was cleared.
+
+Isolated characterization mapping-budget-before.log reproduces2400path resolutions
+for40videos/30mappings (expected at most70), and missing deadline support. Candidate
+repair caches resolved roots only within this operation, resolves each video once,
+preserves first-mapping/symlink containment, and propagates the existing discovery
+deadline into queue-priority mapping. Expired work returns without claiming or
+mutating Queue. No QC/threshold/source/manifest/Guardrail change. Cooperative deadline
+checks do not claim to interrupt a single blocked kernel filesystem operation.
+
+mapping-budget-focused.log:37PASS. Initial integration run exposed wrong-call-site
+deadline wiring and an uncommitted SQLite test fixture; both corrected and original
+failure log retained. mapping-budget-integration-fixed.log:40PASS, including real
+SQLite reopen/no Queue or source changes, actual symlink containment, interrupted
+budget/re-entry, regular replacement-before-discovery and existing source/import
+regressions. Tests ran isolated, network disabled, candidate checkout read-only.
+Diagnostic py-spy0.4.2 is only in logs/.../diagnostic-tools, not Worker dependencies;
+no extra container capability or process pause was used.
+
+Candidate not deployed. Next create a NEW timestamped owned safe deployment attempt
+for this revision, preserving current7eeb848 runtime, SETTLED failedGate144756,
+68holds/UNPROVEN and all prior receipts. Do not rerun the old1445deployment scripts
+with their immutable IDs. Verify safe idle, deploy via existing updater, test actual
+image and controlled handoff; then prove automatic source recovery and formal output.
+Formal download/extraction0; M2 remains incomplete.
+
 ## Exact source and member diagnosis — 2026-09-08 16:17 UTC
 
 Read-only actual-image extraction into evidence-only scratch reproduced the same

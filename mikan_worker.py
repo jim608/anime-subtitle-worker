@@ -1673,7 +1673,9 @@ class MikanWorker:
         if redownload_progress and not series_mappings:
             self.logger.warning("Mikan cached series mappings are empty during redownload; falling back to full local series discovery.")
             series_mappings = self._series_mappings()
-        library_scan_mappings = _library_scan_series_mappings(self.config, self.logger, series_mappings)
+        library_scan_mappings = _library_scan_series_mappings(
+            self.config, self.logger, series_mappings, deadline_monotonic=deadline,
+        )
         if deadline is not None and time.monotonic() >= deadline:
             self.logger.info("Mikan discovery yielded during mapping preparation; partial matcher cache retained.")
             return queued
@@ -5352,7 +5354,11 @@ def _library_scan_series_mappings(
     config: AppConfig,
     logger: logging.Logger,
     series_mappings: list[dict[str, object]],
+    *,
+    deadline_monotonic: float | None = None,
 ) -> list[dict[str, object]]:
+    if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+        return []
     mappings = list(series_mappings)
     max_series = int(getattr(config, "mikan_library_scan_max_series_per_cycle", 80) or 0)
     if max_series <= 0 or len(mappings) <= max_series:
@@ -5365,11 +5371,14 @@ def _library_scan_series_mappings(
     queued_selected = 0
     recent_selected = 0
 
-    for mapping in _queued_library_scan_mappings(config, mappings):
+    for mapping in _queued_library_scan_mappings(config, mappings, deadline_monotonic=deadline_monotonic):
         if len(selected) >= max_series:
             break
         if _append_unique_mapping(selected, selected_keys, mapping):
             queued_selected += 1
+
+    if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+        return selected
 
     if bool(getattr(config, "mikan_library_scan_recent_first", True)):
         recent_limit = min(
@@ -5903,7 +5912,14 @@ def _episodes_from_releases(releases: list[MikanRelease]) -> set[int]:
 def _queued_library_scan_mappings(
     config: AppConfig,
     mappings: list[dict[str, object]],
+    *,
+    deadline_monotonic: float | None = None,
 ) -> list[dict[str, object]]:
+    def expired() -> bool:
+        return deadline_monotonic is not None and time.monotonic() >= deadline_monotonic
+
+    if expired() or not mappings:
+        return []
     if not bool(getattr(config, "scanner_queue_enabled", True)):
         return []
 
@@ -5918,9 +5934,33 @@ def _queued_library_scan_mappings(
             state.close()
 
     selected: list[dict[str, object]] = []
+    # This is a discovery-priority hint, never an admission or source-identity
+    # decision. Resolve each path once per snapshot (not once per pair), keeping
+    # symlink containment and first-mapping precedence. Do not cache across runs.
+    roots: dict[int, Path | None] = {}
     for video in queued_videos:
-        for mapping in mappings:
-            if _path_is_relative_to(video, Path(str(mapping.get("path", "")))):
+        if expired():
+            break
+        try:
+            resolved_video = video.resolve()
+        except (OSError, ValueError):
+            continue
+        for index, mapping in enumerate(mappings):
+            if expired():
+                return selected
+            if index not in roots:
+                try:
+                    roots[index] = Path(str(mapping.get("path", ""))).resolve()
+                except (OSError, ValueError):
+                    roots[index] = None
+            root = roots[index]
+            if root is None:
+                continue
+            try:
+                resolved_video.relative_to(root)
+            except ValueError:
+                continue
+            else:
                 selected.append(mapping)
                 break
     return selected

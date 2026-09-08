@@ -4265,7 +4265,8 @@ class MikanWorkerPendingTest(unittest.TestCase):
             worker._qbit = Mock(return_value=qbit)
             worker._series_mappings = Mock(return_value=[])
 
-            def assert_replaced_before_scan(config_arg, logger_arg, mappings_arg):
+            def assert_replaced_before_scan(config_arg, logger_arg, mappings_arg, *, deadline_monotonic=None):
+                self.assertIsNotNone(deadline_monotonic)
                 qbit.add_url.assert_called_once_with(
                     replacement.torrent_url,
                     save_path="/anime",
