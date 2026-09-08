@@ -1,5 +1,10 @@
 # M2 remaining acceptance — 2026-09-08
 
+M3 AI publication barrier candidate: 208 server isolated tests PASS in
+`logs/m3-baseline-20260908T070237Z/provider-publication-barrier-final-server.log`.
+No Production deployment, Gate change, or additional formal subtitle; M2 remains
+incomplete. These tests are not download/extraction acceptance evidence.
+
 ## M3 isolation work boundary (2026-09-08 08:10 UTC)
 
 Subsequent M3 work added isolated provider restart proof, a not-installed host

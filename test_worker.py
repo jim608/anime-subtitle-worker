@@ -338,6 +338,40 @@ class VideoWorkerTest(unittest.TestCase):
                 ["old-0", "old-1", "old-2"],
             )
 
+    def test_provider_confirmation_failure_prevents_formal_ai_replacement(self) -> None:
+        from model_provider_evidence import ModelProviderEvidenceError
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            worker = VideoWorker(_config(root, export_ai_ass=True), _logger())
+            video = root / 'Anime S01E01.mkv'
+            video.write_bytes(b'read-only-source')
+            paths = paths_for_video(video, worker.config)
+            destinations = [paths.ai_ja_ass, paths.ai_zh_cn_ass, paths.ai_zh_tw_ass]
+            for destination in destinations:
+                destination.write_bytes(b'existing-valid-output')
+            paths.zh_cn_srt.parent.mkdir(parents=True, exist_ok=True)
+            paths.zh_cn_srt.write_bytes(b'preserved-checkpoint')
+            def export(staged):
+                for path in (staged.ai_ja_ass, staged.ai_zh_cn_ass, staged.ai_zh_tw_ass):
+                    path.write_bytes(b'staged-output')
+                return 3
+            with (
+                patch.object(worker, '_enforce_asr_publication_gate'),
+                patch.object(worker, '_remediate_prepublication_srts'),
+                patch.object(worker, '_export_ai_ass', side_effect=export),
+                patch.object(worker, '_quality_check_ai_outputs', return_value=[]),
+                patch.object(worker, '_confirm_model_output_for_publication',
+                    side_effect=ModelProviderEvidenceError('provider_changed')) as confirm,
+                patch.object(worker, '_replace_ai_outputs_with_rollback') as replace,
+            ):
+                with self.assertRaisesRegex(ModelProviderEvidenceError, 'provider_changed'):
+                    worker._publish_ai_ass(video, paths)
+                confirm.assert_called_once_with(video, paths.zh_cn_srt)
+                replace.assert_not_called()
+            self.assertEqual(b'read-only-source', video.read_bytes())
+            self.assertEqual(b'preserved-checkpoint', paths.zh_cn_srt.read_bytes())
+            self.assertTrue(all(path.read_bytes() == b'existing-valid-output' for path in destinations))
+
     def test_publication_failure_rolls_back_remediated_srt_caches(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

@@ -5,6 +5,30 @@ its frozen cohort, held sources and UNPROVEN preservation claims are unchanged.
 
 ## Scope
 
+## AI publication provider barrier (candidate)
+
+The AI ASS path now consumes `confirm_model_output_provider` after staged QC and
+before formal replacement. It waits at most 45 seconds for a host observation
+strictly newer than SRT preparation, reading only the observation file at bounded
+two-second intervals. Only `model_output_provider_confirmation_pending` is waited
+on; malformed, UNPROVEN, drifted or otherwise invalid evidence fails immediately.
+It pins the runtime state and rechecks actual SRT lineage after waiting. Worker
+does not refresh observations, arm protection or modify the Gate.
+
+Direct extracted-source publication is unchanged and does not assert model
+provenance. This is not full M3 acceptance: repair-derived lineage, existing-AI
+restyling authority, and recoverable classification of observation-wait failures
+still need completion before deployment. A changed SRT without exact preparation
+lineage currently fails closed rather than being relabeled as verified.
+
+Real SQLite/Worker fixture checks cover bounded timeout, newer-observation success,
+immutable replay and immediate UNPROVEN refusal. Publication integration checks
+verify rejection before replacement with source, checkpoint and existing outputs
+unchanged. Server suite: **208 PASS**, `provider-publication-barrier-final-server.log`
+under `logs/m3-baseline-20260908T070237Z/`. Initial failed run is retained separately
+in `provider-publication-barrier-server.log` (test module typo and missing fixture
+directory, both corrected). No Production deployment or new subtitle delivery.
+
 ## Worker complete-cache admission (candidate)
 
 `_validate_translation_cache_chain` now invokes a read-only exact lineage check

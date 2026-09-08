@@ -4691,6 +4691,46 @@ class VideoWorker:
             raise SourceSelectionReviewError('model_output_cache_lineage_unproven')
         return proof
 
+    def _confirm_model_output_for_publication(self, video: Path, output: Path) -> None:
+        """Wait only for a newer host observation; never refresh or arm from Worker."""
+        proof = self._require_model_output_lineage(video, output)
+        if proof is None:
+            return  # legacy baseline; no M3 provider assertion
+        from m2_guardrail_runtime import load_runtime_state
+        from model_provider_evidence import ModelProviderEvidenceError
+        from model_request_state import ModelRequestStateError, confirm_model_output_provider
+        state = load_runtime_state(self.config)
+        if not state:
+            raise ModelProviderEvidenceError('model_output_runtime_state_missing')
+        deadline = time.monotonic() + 45.0
+        observation_path = Path(self.config.work_path) / 'm3-provider-observation.json'
+        while True:
+            if load_runtime_state(self.config) != state:
+                raise ModelProviderEvidenceError('model_output_runtime_changed_before_publication')
+            try:
+                observation = json.loads(observation_path.read_text(encoding='utf-8'))
+                if not isinstance(observation, dict):
+                    raise ValueError('observation is not an object')
+            except (OSError, ValueError) as exc:
+                raise ModelProviderEvidenceError('model_output_provider_observation_unreadable') from exc
+            try:
+                confirm_model_output_provider(self._stage_state.pipeline_jobs()._conn,
+                    prepared_token=proof['token'],
+                    gate_baseline_version=state['gate_baseline_version'], observation=observation)
+            except ModelRequestStateError as exc:
+                if str(exc) != 'model_output_provider_confirmation_pending':
+                    raise
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise
+                time.sleep(min(2.0, remaining))
+                continue
+            # Recheck actual bytes, source identity and runtime after the bounded wait.
+            current = self._require_model_output_lineage(video, output)
+            if current != proof or load_runtime_state(self.config) != state:
+                raise ModelProviderEvidenceError('model_output_changed_before_publication')
+            return
+
     def _validate_translation_cache_chain(
         self,
         video: Path,
@@ -5289,6 +5329,7 @@ class VideoWorker:
                 discard_on_failure=False,
                 persist_reports=False,
             )
+            self._confirm_model_output_for_publication(video, paths.zh_cn_srt)
             self._replace_ai_outputs_with_rollback(video, staged_outputs, destinations)
             self._persist_validated_quality_reports(reports, destinations)
             return exported

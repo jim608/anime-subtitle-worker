@@ -222,6 +222,30 @@ class ModelRequestRecoveryTest(unittest.TestCase):
             proof = context.record_output_lineage(endpoint=self.url, output_path=output,
                 output_sha256=hashlib.sha256(output.read_bytes()).hexdigest())
             self.assertEqual(proof['token'], worker._require_model_output_lineage(video, output)['token'])
+            observation_path = self.root/'m3-provider-observation.json'
+            observation = {'contract':'m3-provider-observation-v1', 'status':'VERIFIED',
+                'gate_baseline_version':'fixture-gate', 'model_provider':self.args['provider_binding'],
+                'checked_at':proof['prepared_at']}
+            observation_path.write_text(json.dumps(observation), encoding='utf-8')
+            with patch('worker.time.monotonic', side_effect=[0, 46]), patch('worker.time.sleep') as sleep:
+                with self.assertRaisesRegex(ModelRequestStateError, 'confirmation_pending'):
+                    worker._confirm_model_output_for_publication(video, output)
+                sleep.assert_not_called()
+            def refresh(_seconds):
+                import time
+                observation['checked_at'] = time.time()
+                observation_path.write_text(json.dumps(observation), encoding='utf-8')
+            with patch('worker.time.sleep', side_effect=refresh) as sleep:
+                worker._confirm_model_output_for_publication(video, output)
+                sleep.assert_called_once()
+            worker._confirm_model_output_for_publication(video, output)  # immutable replay
+            self.assertEqual(1, self.store._conn.execute("SELECT COUNT(*) FROM pipeline_stage_events "
+                "WHERE event_type='MODEL_OUTPUT_PROVIDER_CONFIRMED'").fetchone()[0])
+            observation['status'] = 'UNPROVEN'
+            observation_path.write_text(json.dumps(observation), encoding='utf-8')
+            with self.assertRaises(ModelProviderEvidenceError), patch('worker.time.sleep') as sleep:
+                worker._confirm_model_output_for_publication(video, output)
+            sleep.assert_not_called()
             baseline['model_provider'] = self.new
             with self.assertRaisesRegex(SourceSelectionReviewError, 'cache_lineage_unproven'):
                 worker._require_model_output_lineage(video, output)

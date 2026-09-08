@@ -9,6 +9,12 @@ relabeled PASS or mixed with future M3 runtime results.
 
 ### M3 — Configured model fallback and resource-aware recovery
 
+AI ASS publication now consumes post-preparation provider confirmation before
+formal replacement, with a bounded 45-second observation-file-only wait and
+post-wait byte/runtime recheck. Server 208 PASS. Repair-derived lineage, restyling
+authority and observation failure recovery classification still block candidate
+deployment; scheduler installation/runtime proof remain outstanding.
+
 Worker complete-cache admission now consumes exact provider/runtime SRT lineage
 before reusing cache. Unknown caches remain intact and use the existing source
 review category. Related server 207 PASS. Formal publication confirmation and
