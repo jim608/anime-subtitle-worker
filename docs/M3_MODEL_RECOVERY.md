@@ -1,5 +1,39 @@
 # M3 — configured model recovery
 
+## One controlled cache recovery actually claimed — 2026-09-08 12:30 UTC
+
+No code/config/deployment/Gate change. Runtime738e96e remains baseline.
+Read-only eligibility rejected the missing-Japanese-source shortcut for known
+job9f5394... (JA/CN both285cues); no cache was removed for that job.
+A separate pre-current-Gate reviewed job e15760a3eac4466eb2ea02c430d64418
+passed existing reprocess preconditions: open delivery obligation,attempts1,
+exact failure_revision0f5a53ecba86e1f0e571fad2, not held, no verified formal
+subtitle, and only2 archive candidates, both in /work. A separate private-DB
+real-model test was not launched: shared-provider ownership must remain in the
+existing Production request/admission mechanism.
+
+Using existing reprocess_video(mode=retranslate, queue_mode=auto_review), a
+single user-authorized revision-bound recovery preserved retry budget under
+policy m3-authorized-single-cache-rebuild-v1. It reversibly archived2 intermediates:
+ /work/manual_ai_reprocess/1788870543269839390-e9f4301866eb8216-retranslate/manifest.json
+SHAecb2d4445774f7563e1994d970a93cbf46a65de98f33f7221d747a907abeed9d.
+Source video, JA input and existing subtitles matched pre/post checksums at
+remediation closeout; attempts remained1. No old model lineage was fabricated.
+
+Actual subsequent Worker claim confirmed: Queue running, Pipeline ASR,
+subprocessPID1616572 alive. Cached JA opening verification rejected0.0-3.9s;
+existing bounded prompt-free full ASR fallback started, not a bulk Whisper bypass.
+Legacy heartbeat1788870586.233811. No MODEL events or formal delivery yet.
+Do not repeat the one-shot remediation: immutable intent already exists.
+Continue only this known live attempt, respect its terminal outcome/budget;
+no forced retry, no waiting for all translation/backlog/20-job Gate.
+Evidence /logs/m3-review-convergence-20260908T1210/:
+known-cache-eligibility.json,retranslate-preflight.json,
+retranslate-canary-intent.json,retranslate-canary-result.json,
+retranslate-canary-claim.json,retranslate-worker-process.txt.
+Formal additions0; M2/M3 acceptance remains incomplete.
+
+
 ## Review convergence deployed and proven — 2026-09-08 12:19 UTC
 
 Actual Worker738e96eafec66a6f62db31b9247cd58bf0aec6df; WebUI

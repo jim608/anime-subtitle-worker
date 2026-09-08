@@ -2,6 +2,11 @@
 
 ## Active Goal — M3 authorized (2026-09-08)
 
+12:30UTC one existing revision-bound retranslate recovery actually auto-claimed
+(jobe15760a3eac4466eb2ea02c430d64418),2work artifacts reversibly archived,
+retry budget preserved. Cached JA opening rejected -> bounded existing ASR fallback
+running; noMODEL events/formal delivery. Runtime/Gate unchanged; details M3 doc.
+
 12:19UTC runtime738e96e safely deployed/439actualtests/FI7/7/ARMED/resumed.
 Real post-source cache review now converges Queue and Pipeline NEEDS_REVIEW,
 successful checkpoint preserved,attempts1; automatic successor also verified.
