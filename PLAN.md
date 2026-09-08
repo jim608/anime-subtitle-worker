@@ -1,5 +1,26 @@
 # Incremental Delivery Plan
 
+## Latest incident: line-repair evidence boundary (2026-09-08)
+
+- Production is still Worker `6c925858703bce48f9e5763ac48eddab2f3e441d`;
+  mapping fix `42c48f68014effc9eb0a7c1790870c1ab9ec11ce` has not been deployed.
+- A distinct `incorrect_completion` trip at 1788816496.9895241 blocks admission.
+  Line repair retained a previous failed provenance and attempted strict completion
+  before closing its quality review. Accepted ASR diagnostics and source hash are intact.
+- Candidate archives the prior provenance, requires historical source/decision/transcript
+  evidence before reuse, records a fresh run, and resolves only the exact quality review
+  after every other strict check. The final strict validator is unchanged.
+- Server candidate: 253 targeted/shared tests and actual isolated container restart PASS,
+  `/logs/m2-line-repair-isolated-20260908T030048462657Z/`.
+  Restart fixture stubs the model/publisher; it proves recovery safety, not subtitle delivery.
+- Frozen current-state replay passes all 11 strict conditions with Production artifacts
+  mounted read-only; `/logs/m2-line-repair-replay-20260908T025520099117Z/`.
+- Final candidate source-reuse and noncohort claim binding also PASS; final 258 tests
+  and restart evidence `/logs/m2-line-repair-isolated-20260908T030844473143Z/`.
+- Still required: safe deployment, actual-image proof,
+  new exact-incident reconciliation preserving all existing holds, and real subsequent claim.
+  No new production subtitle delivery or new Gate is claimed by these tests.
+
 ## Download preparation repair candidate (2026-09-07 18:46 UTC)
 
 - Actual cached-only preparation profile: 44.909s, 340,464 `Path.resolve` calls,

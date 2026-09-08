@@ -2586,6 +2586,8 @@ def _execute_control_command(config, logger, action: str, target: str, parameter
                     line_command_parameters["expected_failure_revision"] = str(
                         parameters.get("expected_failure_revision") or ""
                     )
+                if bool(getattr(config, "m2_server_canary_observer_enabled", False)):
+                    line_command_parameters["review_id"] = review_id
                 output = _run_ai_retranslate_lines_command(
                     config,
                     video,
@@ -2665,6 +2667,9 @@ def _execute_control_command(config, logger, action: str, target: str, parameter
                         "lines": lines,
                     },
                 )
+                if not resolved and bool(getattr(config, "m2_server_canary_observer_enabled", False)):
+                    current_review = get_review_item(config, review_id)
+                    resolved = bool(current_review and current_review.get("status") == "resolved")
         else:
             mode = "retranslate" if remediation == "ai.retranslate" else "retranscribe"
             automatic_review = bool(parameters.get("automatic_review"))
@@ -5453,6 +5458,7 @@ def _run_ai_retranslate_lines_command(
     *,
     lines: str,
     expected_failure_revision: str = "",
+    review_id: str = "",
 ) -> str:
     from output_manifest import delivery_identity
 
@@ -5827,6 +5833,10 @@ def _run_ai_retranslate_lines_command(
                 raise _M2StrictCompletionRejected(
                     ["stage_checkpoint_history_complete"]
                 ) from exc
+            _resolve_verified_m2_line_repair_review(
+                success_state, resolved_video, config, attempt_id,
+                review_id=review_id, delivery_evidence=evidence,
+            )
             _validate_m2_completion_before_commit(
                 success_state,
                 resolved_video,
@@ -5868,6 +5878,48 @@ def _run_ai_retranslate_lines_command(
     if result["error"]:
         raise RuntimeError(str(result["error"]))
     return completed.stdout[-2000:]
+
+
+def _resolve_verified_m2_line_repair_review(
+    state, video: Path, config, attempt_id: str, *, review_id: str,
+    delivery_evidence: dict[str, object],
+) -> None:
+    """Resolve only this repair's quality review before the unchanged final gate.
+
+    This records a verified quality remediation, not a completed job. The final
+    strict validator still runs after this durable control-DB audit write; an
+    interruption or another unresolved condition cannot commit COMPLETED.
+    """
+    if not review_id or not bool(getattr(config, "m2_server_canary_observer_enabled", False)):
+        return
+    from control_state import get_review_item, resolve_review_item
+    from m2_guardrail_runtime import load_runtime_state
+    from m2_strict_runtime_evidence import build_m2_strict_runtime_evidence
+    from m2_strict_observation import STRICT_EVIDENCE_KEYS
+
+    proof = build_m2_strict_runtime_evidence(state, video, config, attempt_id, load_runtime_state(config))
+    evidence = proof.get("evidence") or {}
+    missing = [key for key in STRICT_EVIDENCE_KEYS
+               if key != "no_unresolved_retry_quarantine_fallback" and evidence.get(key) is not True]
+    if missing:
+        raise _M2StrictCompletionRejected(missing)
+    review = get_review_item(config, review_id)
+    if (
+        not review or str(review.get("target_key") or "") != str(video)
+        or review.get("kind") not in {"asr_quality", "subtitle_quality"}
+        or review.get("status") not in {"open", "resolved"}
+    ):
+        raise _M2StrictCompletionRejected(["no_unresolved_retry_quarantine_fallback"])
+    resolution = {
+        "action": "ai.retranslate_lines", "source": "control_command",
+        "reason": "quality_gate_and_publication_succeeded",
+        "video": str(video), "attempt_id": attempt_id,
+        "manifest_sha256": str(delivery_evidence.get("manifest_sha256") or ""),
+        "completion_pending_strict_commit": True,
+    }
+    if str(review.get("status") or "") == "open":
+        if not resolve_review_item(config, review_id, resolution):
+            raise _M2StrictCompletionRejected(["no_unresolved_retry_quarantine_fallback"])
 
 
 def _validated_control_target_path(config, value: str, *, require_file: bool) -> Path:

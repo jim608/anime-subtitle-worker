@@ -25,6 +25,91 @@ from worker import VideoWorker
 
 
 class RetranslateAiLinesSafetyTest(unittest.TestCase):
+    def test_m2_missing_historical_proof_refuses_before_translation_or_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config, video, paths = _fixture(Path(temp_dir))
+            config.m2_server_canary_observer_enabled = True
+            worker = _worker_that_publishes(paths)
+            translator = Mock()
+            old_output = paths.ai_zh_tw_ass.read_bytes()
+            with (
+                patch("retranslate_ai_lines.VideoWorker", return_value=worker),
+                patch("retranslate_ai_lines.SubtitleTranslator", return_value=translator),
+                self.assertRaisesRegex(RuntimeError, "line_repair_source_evidence_unverified"),
+            ):
+                retranslate_lines(config, video, {1}, logging.getLogger("test.line.missing-proof"))
+            translator.translate_blocks.assert_not_called()
+            worker._publish_ai_ass.assert_not_called()
+            self.assertEqual(paths.ai_zh_tw_ass.read_bytes(), old_output)
+            self.assertEqual(video.read_bytes(), b"video")
+
+    def test_m2_current_hash_does_not_replace_missing_historical_checksum(self) -> None:
+        from processing_provenance import ProvenanceRecorder
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config, video, paths = _fixture(Path(temp_dir))
+            config.m2_server_canary_observer_enabled = True
+            config.source_integrity_sha256_enabled = True
+            prior = ProvenanceRecorder(config, video)
+            prior.finish(ok=False)
+            worker = _worker_that_publishes(paths)
+            with (
+                patch("retranslate_ai_lines.VideoWorker", return_value=worker),
+                self.assertRaisesRegex(RuntimeError, "historical source checksum"),
+            ):
+                retranslate_lines(config, video, {1}, logging.getLogger("test.line.missing-hash"))
+            worker._publish_ai_ass.assert_not_called()
+
+    def test_success_records_new_line_attempt_provenance_and_archives_failed_run(self) -> None:
+        from processing_provenance import ProvenanceRecorder, load_provenance, provenance_path_for_video
+        from safe_files import sha256_file
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config, video, paths = _fixture(Path(temp_dir))
+            config.source_integrity_sha256_enabled = True
+            prior = ProvenanceRecorder(config, video)
+            prior.finish(ok=False, error=RuntimeError("previous translation omission"))
+            prior_path = provenance_path_for_video(config, video)
+            old_bytes = prior_path.read_bytes()
+            old_sha = sha256_file(prior_path)
+            worker = _worker_that_publishes(paths)
+            with (
+                patch("retranslate_ai_lines.VideoWorker", return_value=worker),
+                patch("retranslate_ai_lines.SubtitleTranslator", return_value=_translator_with_replacement("fixed-one")),
+                patch("retranslate_ai_lines.build_series_metadata_context", return_value=None),
+            ):
+                result = retranslate_lines(config, video, {1}, logging.getLogger("test.line.provenance"))
+            current = load_provenance(config, video)
+            self.assertEqual(current["status"], "complete")
+            self.assertGreater(current["run_started_at"], prior.payload["run_started_at"])
+            self.assertTrue(current["source_integrity"]["verified"])
+            self.assertEqual(current["source_integrity"]["verification"], "sha256")
+            self.assertEqual(current["line_repair"]["previous_provenance_sha256"], old_sha)
+            archive = json.loads((Path(result["archive"]) / "manifest.json").read_text(encoding="utf-8"))
+            entries = [row for row in archive["copied"] if row["source"] == str(prior_path)]
+            self.assertEqual(len(entries), 1)
+            self.assertEqual(Path(entries[0]["archive"]).read_bytes(), old_bytes)
+            self.assertEqual(video.read_bytes(), b"video")
+
+    def test_failed_line_repair_restores_prior_provenance_without_success(self) -> None:
+        from processing_provenance import ProvenanceRecorder, provenance_path_for_video
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config, video, paths = _fixture(Path(temp_dir))
+            prior = ProvenanceRecorder(config, video)
+            prior.finish(ok=False, error=RuntimeError("original review"))
+            prior_path = provenance_path_for_video(config, video)
+            old_bytes = prior_path.read_bytes()
+            worker = _worker_that_publishes(paths)
+            worker._publish_ai_ass.side_effect = RuntimeError("injected publisher failure")
+            with (
+                patch("retranslate_ai_lines.VideoWorker", return_value=worker),
+                patch("retranslate_ai_lines.SubtitleTranslator", return_value=_translator_with_replacement("fixed-one")),
+                patch("retranslate_ai_lines.build_series_metadata_context", return_value=None),
+                self.assertRaisesRegex(RuntimeError, "injected publisher failure"),
+            ):
+                retranslate_lines(config, video, {1}, logging.getLogger("test.line.provenance"))
+            self.assertEqual(prior_path.read_bytes(), old_bytes)
+
     def test_known_source_hallucination_requires_full_retranscribe_before_translation(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

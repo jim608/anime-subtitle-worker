@@ -1311,7 +1311,7 @@ def _reconciliation_signature(root_cause: Mapping[str, Any]) -> tuple[str, str, 
     if kind is None:
         return ('runtime_change', 'runtime_validation', 'live_worker_container_identity_mismatch')
     if (root_cause.get('mode') == 'authorized_reconciliation'
-        and kind == 'asr_postprocess_diagnostics_loss'):
+        and kind in {'asr_postprocess_diagnostics_loss', 'line_repair_evidence_incomplete'}):
         return ('incorrect_completion', 'm2_strict_completion', 'incorrect_completion')
     raise RuntimeContractError('unsupported_reconciliation_incident')
 
@@ -1329,8 +1329,10 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
         or 'sha256:' + sha256_file(path) != proof.get('sha256')):
         raise RuntimeContractError('postprocess_recovery_proof_invalid')
     report = _read_json(path)
+    line_repair = root_cause.get('incident_kind') == 'line_repair_evidence_incomplete'
+    contract = 'm2-line-repair-regression-v1' if line_repair else 'm2-asr-postprocess-regression-v1'
     if (not isinstance(report, Mapping)
-        or report.get('contract') != 'm2-asr-postprocess-regression-v1'
+        or report.get('contract') != contract
         or report.get('status') != 'PASS'
         or report.get('worker_source_revision') != evidence.get('worker_source_revision')
         or report.get('worker_image_id') != evidence.get('worker_image_id')
@@ -1340,6 +1342,11 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
             'shared_quality_gate', 'missing_evidence_rejected', 'source_unchanged',
             'tested_runtime_image'))):
         raise RuntimeContractError('postprocess_recovery_regression_unproven')
+    if line_repair and any(report.get(key) is not True for key in (
+        'historical_source_proof_required', 'review_settlement_order_verified',
+        'unchanged_strict_validator', 'original_incident_preserved',
+    )):
+        raise RuntimeContractError('line_repair_recovery_regression_unproven')
     logs = report.get('logs')
     if not isinstance(logs, list) or len(logs) != 2:
         raise RuntimeContractError('postprocess_recovery_logs_missing')
@@ -1349,9 +1356,11 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
             or 'sha256:' + sha256_file(log) != item.get('sha256')):
             raise RuntimeContractError('postprocess_recovery_logs_invalid')
     code = report.get('code_sha256')
+    names = (('main.py', 'retranslate_ai_lines.py', 'm2_strict_runtime_evidence.py', 'm2_guardrail_runtime.py')
+             if line_repair else ('worker.py', 'asr_postprocess.py', 'm2_guardrail_runtime.py'))
     if not isinstance(code, Mapping) or any(
         code.get(name) != sha256_file(Path(__file__).parent / name)
-        for name in ('worker.py', 'asr_postprocess.py', 'm2_guardrail_runtime.py')
+        for name in names
     ):
         raise RuntimeContractError('postprocess_recovery_code_not_tested')
 
@@ -1390,6 +1399,52 @@ def _planned_change_receipt(config: Any, root_cause: Mapping[str, Any]) -> dict[
     return receipt
 
 
+def _line_repair_noncohort_claim_bound(
+    connection: sqlite3.Connection, config: Any, incident: Mapping[str, Any],
+) -> bool:
+    """Bind an outside-cohort repair to its real stage claim and failed command.
+
+    A frozen cohort legitimately omits later claims. Do not manufacture an old
+    Gate row or claim hash to recover such an incident.
+    """
+    from control_state import get_command
+    try:
+        row = connection.execute(
+            'SELECT s.input_json,s.input_sha256,s.started_at,s.finished_at,s.status,j.canonical_path,'
+            'a.started_at,a.finished_at FROM pipeline_stage_attempts s '
+            'JOIN pipeline_jobs j ON j.job_id=s.job_id '
+            'JOIN ai_delivery_attempts a ON a.attempt_id=? '
+            "WHERE s.stage_attempt_id=? AND s.stage='TRANSLATING'",
+            (incident.get('attempt_id'), incident.get('claim_stage_attempt_id')),
+        ).fetchone()
+        if not row:
+            return False
+        inputs = json.loads(row[0])
+        trip_at = float(incident['trip']['observed_at'])
+        if (inputs != {'delivery_attempt_id': incident.get('attempt_id'), 'queue': 'line_retranslation'}
+            or hashlib.sha256(row[0].encode()).hexdigest() != row[1]
+            or row[4] != 'SUCCEEDED' or row[5] != incident.get('canonical_path')
+            or not 0 < float(row[6]) <= float(row[2]) <= float(row[3]) <= trip_at <= float(row[7]) + 1):
+            return False
+        command = get_command(config, str(incident.get('command_id') or ''))
+        params = command.get('parameters') or {}
+        return bool(
+            command.get('action') == 'review.resolve_ai'
+            and command.get('status') == 'failed'
+            and command.get('target') == incident.get('canonical_path')
+            and command.get('error') == 'M2 strict completion evidence rejected line repair'
+            and params.get('remediation') == 'ai.retranslate_lines'
+            and params.get('review_id') == incident.get('review_id')
+            and bool(params.get('review_id'))
+            and params.get('expected_failure_revision') == incident.get('failure_revision')
+            and bool(params.get('expected_failure_revision'))
+            and 0 < float(command.get('started_at') or 0) <= float(row[6])
+            and trip_at <= float(command.get('finished_at') or 0) <= trip_at + 30
+        )
+    except (ValueError, TypeError, KeyError, sqlite3.Error):
+        return False
+
+
 def _planned_change_incident(
     connection: sqlite3.Connection, *, config: Any, evidence: Mapping[str, Any],
     breaker: Mapping[str, Any], now: float,
@@ -1419,9 +1474,11 @@ def _planned_change_incident(
             raise RuntimeContractError('reconciliation_frozen_policy_changed')
         if breaker != request.get('breaker'):
             raise RuntimeContractError('reconciliation_breaker_evidence_changed')
-        if root_cause.get('incident_kind') == 'asr_postprocess_diagnostics_loss':
+        if root_cause.get('incident_kind') in {'asr_postprocess_diagnostics_loss', 'line_repair_evidence_incomplete'}:
             _validate_postprocess_recovery_proof(config, evidence, root_cause)
-            incident = request.get('asr_postprocess_incident')
+            incident_key = ('line_repair_incident' if root_cause.get('incident_kind') == 'line_repair_evidence_incomplete'
+                            else 'asr_postprocess_incident')
+            incident = request.get(incident_key)
             if not isinstance(incident, Mapping) or incident != root_cause.get('incident'):
                 raise RuntimeContractError('postprocess_recovery_incident_changed')
             from m2_production_recovery import source_hold
@@ -1443,10 +1500,14 @@ def _planned_change_incident(
                 or trip not in breaker.get('reasons', [])):
                 raise RuntimeContractError('postprocess_recovery_trip_unproven')
             claim_hash = hashlib.sha256(str(incident.get('attempt_id') or '').encode()).hexdigest()
-            if not any(item.get('reason_code') == 'incorrect_completion'
+            gate_claim_bound = any(item.get('reason_code') == 'incorrect_completion'
                        and item.get('evidence', {}).get('gate_id') == request['old_gate_id']
                        and item.get('evidence', {}).get('claim_identity_hash') == claim_hash
-                       for item in breaker.get('reasons', [])):
+                       for item in breaker.get('reasons', []))
+            if not gate_claim_bound and not (
+                root_cause.get('incident_kind') == 'line_repair_evidence_incomplete'
+                and _line_repair_noncohort_claim_bound(connection, config, incident)
+            ):
                 raise RuntimeContractError('postprocess_recovery_claim_binding_unproven')
             latest = breaker.get('latest_trip', {})
             if latest != trip and (latest.get('reason_code') != 'runtime_change'
@@ -2061,7 +2122,7 @@ def _prepare_pending_recovery_resume(
     if planned_mode:
         if (expected_reason, affected_stage, failure_code) != _reconciliation_signature(root_cause):
             raise RuntimeContractError('planned_change_signature_invalid')
-        if root_cause.get('incident_kind') == 'asr_postprocess_diagnostics_loss':
+        if root_cause.get('incident_kind') in {'asr_postprocess_diagnostics_loss', 'line_repair_evidence_incomplete'}:
             _validate_postprocess_recovery_proof(config, evidence, root_cause)
         receipt = _planned_change_receipt(config, root_cause)
         followup = root_cause.get("expected_deployment_handoff")
@@ -2364,9 +2425,10 @@ def recover_runtime_local(
     if planned_mode:
         if (expected_reason, affected_stage, failure_code) != _reconciliation_signature(root_cause):
             raise RuntimeContractError("planned_change_signature_invalid")
-        if root_cause.get('incident_kind') == 'asr_postprocess_diagnostics_loss':
+        if root_cause.get('incident_kind') in {'asr_postprocess_diagnostics_loss', 'line_repair_evidence_incomplete'}:
             _validate_postprocess_recovery_proof(config, evidence, root_cause)
-        category = "ASR_POSTPROCESS_EVIDENCE_REPAIR" if root_cause.get('incident_kind') else "PLANNED_RUNTIME_CHANGE"
+        category = ("LINE_REPAIR_EVIDENCE_REPAIR" if root_cause.get('incident_kind') == 'line_repair_evidence_incomplete'
+                    else "ASR_POSTPROCESS_EVIDENCE_REPAIR" if root_cause.get('incident_kind') else "PLANNED_RUNTIME_CHANGE")
     elif collision_mode:
         if affected_stage != "worker" or failure_code != "worker_unknown":
             raise RuntimeContractError("unsupported_collision_recovery_signature")

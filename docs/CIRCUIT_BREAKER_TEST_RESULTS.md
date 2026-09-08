@@ -1,5 +1,27 @@
 # M2 Circuit Breaker Test Results
 
+## Line-repair candidate regression (2026-09-08, not deployed)
+
+- Final candidate: 258 tests and actual isolated container restart PASS,
+  `/logs/m2-line-repair-isolated-20260908T030844473143Z/`.
+- Final read-only artifact/copy replay verifies historical source reuse, original
+  noncohort stage/command binding, all 11 strict conditions and unchanged original
+  provenance: `/logs/m2-line-repair-replay-20260908T030852409400Z/replay.json`.
+
+- Before fix: one regression fails because successful line repair leaves provenance
+  `failed`; `/logs/m2-line-repair-targeted-20260908T024741947576Z/tests.log`.
+- Candidate: 253 targeted/shared tests PASS, including exact held incident recovery,
+  restart/idempotent receipt reuse, wrong code, wrong proof contract, missing historical
+  source proof, unheld incident and unrelated trip rejection.
+- Real isolated container exit 73 / restart PASS; original source, transcript checkpoint
+  and archived prior provenance preserved. The model and publisher are fixture stubs,
+  so this is not a real subtitle delivery count.
+- Logs and code fingerprints: `/logs/m2-line-repair-isolated-20260908T030048462657Z/`.
+  `tested_runtime_image=false`; this report cannot authorize Production recovery.
+- Read-only Production artifact/copy replay passes all 11 strict flags:
+  `/logs/m2-line-repair-replay-20260908T025520099117Z/replay.json`.
+- Actual-image attestation, fresh seven-breaker FI and controlled handoff remain pending.
+
 ## Actual 6c92585 image and formal recovery (2026-09-07 18:30 UTC)
 
 - Safe updater: 1,893 Worker tests + 231 WebUI/deployment tests PASS; EXIT=0,

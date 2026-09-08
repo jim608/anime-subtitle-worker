@@ -19,6 +19,13 @@ from output_manifest import (
     write_output_manifest,
 )
 from safe_files import atomic_write_text, sha256_file, verified_copy_replace
+from processing_provenance import (
+    ProvenanceRecorder,
+    load_provenance,
+    processing_config_signature,
+    provenance_path_for_video,
+)
+from source_integrity import capture_source_snapshot, verify_source_snapshot
 from srt_utils import SrtBlock, read_srt, validate_translation, write_srt
 from subtitle_paths import paths_for_video
 from subtitle_quality import quality_report_candidates
@@ -78,6 +85,24 @@ def retranslate_lines(config: object, video: Path, indexes: set[int], logger: lo
         # Snapshot every mutable cache, sidecar, report and publication marker
         # before cache restoration or any translation output is written.
         archive_dir = _archive_translation_outputs(config, resolved_video, paths, indexes)
+        _validate_line_repair_source_reuse(config, resolved_video)
+        source_snapshot = capture_source_snapshot(
+            resolved_video,
+            hash_content=bool(getattr(config, "source_integrity_sha256_enabled", False)),
+        )
+        prior_provenance_path = provenance_path_for_video(config, resolved_video)
+        prior_sha = sha256_file(prior_provenance_path) if prior_provenance_path.is_file() else ""
+        recorder = ProvenanceRecorder(config, resolved_video)
+        worker._provenance = recorder
+        worker._source_snapshot = source_snapshot
+        recorder.update("source_integrity", {**source_snapshot.as_evidence(), "verified": False})
+        recorder.update("line_repair", {
+            "operation": "manual_line_retranslate",
+            "lines": sorted(indexes),
+            "archive": str(archive_dir),
+            "previous_provenance_sha256": prior_sha,
+        })
+        recorder.record_stage("line_retranslation", "running", "Reusing validated source transcript")
         worker._recover_pending_asr_commit(resolved_video, paths)
         worker._restore_japanese_srt_cache_from_ass(paths)
         if not paths.ja_srt.is_file():
@@ -166,6 +191,8 @@ def retranslate_lines(config: object, video: Path, indexes: set[int], logger: lo
         if pending_hold is not None:
             write_translation_quality_events(paths.zh_cn_srt, [])
             translation_quality_hold_path(paths.zh_cn_srt).unlink()
+        # Recheck the captured input before any official output is published.
+        verify_source_snapshot(source_snapshot)
         begin_output_publication(resolved_video, config)
         worker._publish_ai_ass(resolved_video, paths)
         write_output_manifest(
@@ -185,6 +212,9 @@ def retranslate_lines(config: object, video: Path, indexes: set[int], logger: lo
         )
         finish_output_publication(resolved_video, config)
         worker._deliver_completed_media_if_required(resolved_video)
+        recorder.update("source_integrity", verify_source_snapshot(source_snapshot))
+        recorder.record_stage("line_retranslation", "ok", "Quality gates and publication succeeded")
+        recorder.finish(ok=True, outcome={"stage": "line_retranslation", "status": "ok"})
         if not config.keep_intermediate_files:
             # The Japanese SRT is the verified, expensive ASR source of truth.
             # Keep it after a successful line repair so another review action
@@ -223,6 +253,42 @@ def retranslate_lines(config: object, video: Path, indexes: set[int], logger: lo
             translation_quality_events_path(temp_translation).unlink(missing_ok=True)
             translation_quality_hold_path(temp_translation).unlink(missing_ok=True)
         lock.release()
+
+
+def _validate_line_repair_source_reuse(config: object, video: Path) -> None:
+    """M2 repairs may reuse evidence, never invent historical source continuity."""
+    if not bool(getattr(config, "m2_server_canary_observer_enabled", False)):
+        return
+    from m2_guardrail_runtime import load_runtime_state
+    from m2_strict_runtime_evidence import (
+        _decision_evidence,
+        _hallucination_evidence,
+        _source_checksum_evidence,
+    )
+    from scan_state import ScanStateStore
+
+    prior = load_provenance(config, video)
+    if not isinstance(prior, dict) or prior.get("config_signature") != processing_config_signature(config):
+        raise RuntimeError("line_repair_source_evidence_unverified: processing policy")
+    stat = video.stat()
+    source_ok, _ = _source_checksum_evidence(
+        video, config, {}, {"media_size": stat.st_size, "media_mtime_ns": stat.st_mtime_ns}, prior,
+    )
+    if not source_ok:
+        raise RuntimeError("line_repair_source_evidence_unverified: historical source checksum")
+    state = ScanStateStore.from_config(config)
+    try:
+        pipeline = state.pipeline_jobs()
+        job = pipeline.job_for_path(video, size=stat.st_size, mtime_ns=stat.st_mtime_ns, create=False)
+        decision_ok, strategy, _ = _decision_evidence(
+            pipeline, job, video, config, load_runtime_state(config), prior,
+        )
+        if not decision_ok or not _hallucination_evidence(
+            video, config, decision_ok=decision_ok, strategy=strategy,
+        ):
+            raise RuntimeError("line_repair_source_evidence_unverified: decision or transcript")
+    finally:
+        state.close()
 
 
 def _archive_translation_outputs(config: object, video: Path, paths: object, indexes: set[int]) -> Path:
@@ -274,6 +340,7 @@ def _translation_restore_candidates(config: object, video: Path, paths: object) 
         asr_transcription_hold_path(paths.ja_srt, config),
         output_manifest_path(video, config),
         output_publication_marker_path(video, config),
+        provenance_path_for_video(config, video),
         *[
             report_path
             for path in subtitle_outputs

@@ -1,5 +1,29 @@
 # M2 Production Observation
 
+## Latest status override: line-repair trip, candidate only (2026-09-08)
+
+The earlier ARMED closeout is historical. Worker remains
+`6c925858703bce48f9e5763ac48eddab2f3e441d`; the latest observed breaker is TRIPPED
+at epoch 1788816496.9895241 (`incorrect_completion`, `m2_strict_completion`).
+The affected line-repair attempt is
+`aiatt_46d2c4f9e123507c75af899902cec6d6baa9d6790be60bf2d30fdada346266d3`,
+outside the frozen cohort. Do not reuse the resolved ASR-loss incident receipt.
+
+Isolated precommit replay reproduced all six rejected conditions. The old provenance
+was `failed`, finished at 1788816418.2991838, before the repair claim at
+1788816450.0050297. Its decision, source checksum, ASR hallucination evidence and
+stage history independently validate; the stale run binding and still-open quality
+review explain the completion rejection. Evidence:
+`/logs/m2-line-repair-replay-20260908T024933207995Z/replay.json`.
+
+Candidate-only replay passes all 11 strict evidence conditions, preserving the original
+Production provenance hash: `/logs/m2-line-repair-replay-20260908T025520099117Z/`.
+253 isolated tests and real container interruption/restart pass:
+`/logs/m2-line-repair-isolated-20260908T030048462657Z/`.
+The restart fixture uses stub model/publisher and is not a delivery acceptance result.
+No Production redeployment/recovery, Gate replacement, or new subtitle was performed
+for this candidate validation. Existing 64 holds and the old incident remain retained.
+
 ## Source preparation time-budget defect (candidate verified, not deployed)
 
 Bounded cached-index profiling, with no source search, measured 44.909 seconds

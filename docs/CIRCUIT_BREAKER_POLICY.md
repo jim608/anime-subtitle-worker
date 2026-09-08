@@ -1,5 +1,25 @@
 # M2 Circuit Breaker Policy
 
+## Restricted line-repair incident recovery (candidate, 2026-09-08)
+
+`authorized_reconciliation` may identify `line_repair_evidence_incomplete` only
+for an exact `incorrect_completion` / `m2_strict_completion` incident. Its request
+must bind `line_repair_incident`, the preserved review-required attempt, source hold,
+original Gate/claim hash, exact breaker evidence, current runtime and frozen diff.
+For claims outside the frozen cohort, an original TRANSLATING stage with an intact
+input hash and exact delivery attempt, plus the matching failed review command and
+incident time, supplies the binding instead. It does not create a Gate member or
+fabricate a historical Gate claim hash. An unbound incident remains rejected.
+The old ASR-loss proof contract is not accepted for this distinct incident.
+
+The required `m2-line-repair-regression-v1` report binds actual-image/source revision,
+hash-verified test/restart logs and exact main, line-repair, strict-verifier and runtime
+code. It must prove source-history prerequisites, review settlement order, unchanged
+strict verification, preserved incident, restart, checkpoint, idempotency and safety.
+Missing proof or a new unrelated trip remains fail-closed. No latch/lock deletion,
+historical receipt relabeling or old Gate result transfer is authorized by this mode.
+The existing durable pause, idle checks and controlled recovery remain mandatory.
+
 ## Restricted ASR postprocess incident recovery (deployed, 2026-09-07)
 
 Authorized reconciliation may explicitly identify `asr_postprocess_diagnostics_loss`
