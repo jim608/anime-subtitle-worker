@@ -2,6 +2,16 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+Latest16:12UTC: exact download completed and Worker automatically extracted E12;
+both bilingual ASS tracks parse PASS/hardQC FAIL, formal deliveries0. Preserve
+failed hash; do not re-add or relax QC. Next diagnose bilingual import behavior
+against retained evidence in isolation, then choose existing safe source policy.
+Gate144756 automatically SETTLED20/20,18review/2failed/strict0/safetyFAIL; retain it.
+Investigate checkpoint_loss_count20 against actual member evidence, not a library
+scan or automatic reset. Current7eeb848/ARMED/68holds unchanged; separate AI successor
+755338a... actually running ASR. See latest M2_REMAINING_ACCEPTANCE for evidence.
+Historical deployment notes below are chronological, not current action requests.
+
 14:55UTC actual7eeb848 deployed by safe-update-stack20260908T144053Z-3222495;
 actual image329targeted tests+7breakers PASS, controlled recovery ARMED. Old SETTLED
 Gate/receipt and68holds/UNPROVEN preserved, newGate144756 starts0/20. One reviewed

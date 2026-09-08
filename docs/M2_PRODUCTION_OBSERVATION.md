@@ -1,5 +1,17 @@
 # M2 Production Observation
 
+## Frozen result read — 2026-09-08 16:12 UTC
+
+Gate m2-gate-20260908T144756513012Z-ad0fe3a765 automatically SETTLED20/20:
+18NEEDS_REVIEW,2FAILED,strict0,safety_gateFAIL. Summary emitted1788880578.4625626.
+Original cohort/baseline/receipt remain immutable; no reset, replacement or PASS.
+checkpoint_loss_count20 is an aggregate requiring exact member-evidence diagnosis,
+not proof of20 physically deleted checkpoints. Runtime7eeb848 remains ARMED,
+68 source holds/UNPROVEN retained. Download canary parsed but hardQC rejected;
+formal delivery0 and no Gate credit. Full automatic summary and source/sidecar
+safety evidence: /logs/m2-download-revalidation-20260908T1445/terminal-closeout-1788883929717665338.json.
+M2 incomplete; no runtime change or Gate recreation for this documentation.
+
 ## Actual controlled handoff — 2026-09-08 14:55 UTC
 
 Worker7eeb848b70ab5027d17f3a45c83e3d7400d80004, WebUI175a02a7bad46e0b6fa2372c59f39e8dd272911e;

@@ -1,5 +1,73 @@
 # M2 remaining acceptance — 2026-09-08
 
+## Terminal canary and frozen Gate disposition — 2026-09-08 16:12 UTC
+
+The existing bounded observer expired, not the download. A subsequent exact-hash
+read proves download complete (progress1, amount_left0, stalledUP), followed by
+automatic extraction claim at1788881346.9366496 and terminal1788881399.1704633.
+Hash3aeb9cf71d052508dccb77817a4f264f8216dced was NOT re-added. Episode12 mapped
+to the actual completed file, target confidence1.0, match version pending-release-v1.
+Both embedded bilingual ASS tracks parsed PASS but unchanged hard QC rejected:
+TC820 events: empty_dialogue_text1, timing_overlap413, hallucination_text1;
+SC815 events: empty_dialogue_text1, timing_overlap408, hallucination_text1.
+The hallucination issue sample is empty text, not evidence of invented spoken content.
+Result subtitle_validation_failed/no_usable_chinese, extracted_count0; queue job
+status replaced is a source-disposition terminal, NOT successful publication.
+Pending retains extract_failed and failed hash; no completed_at or formal delivery.
+Do not relax QC, re-add this source, or classify the source video as damaged.
+Next inspect the retained bilingual-source evidence and existing import normalization
+contract in isolation; determine a reproducible defect versus unsupported source
+before any runtime fix or alternative-source action. Formal acceptance remains open.
+
+Evidence root `/logs/m2-download-revalidation-20260908T1445/`:
+`canary-download-after-observer.json` contains full extraction/matching/QC evidence.
+`terminal-closeout-1788883929717665338.json` preserves exact Gate, automatic summary,
+runtime, pending and checksums. Source and all3 prior sidecars remain unchanged.
+Earlier terminal-closeout1788883865919080852 did not resolve the relative summary
+path; summary_present=false there is a verifier path issue, not missing automation.
+The corrected read-only helper resolves the persisted basename under the existing
+m2_server_canary_observations directory; no Production code/state was changed.
+
+Gate m2-gate-20260908T144756513012Z-ad0fe3a765 is SETTLED20/20 with18NEEDS_REVIEW,
+2FAILED, strict0, safety_gateFAIL. Summary emitted1788880578.4625626 automatically.
+Its checkpoint_loss_count20 requires member-evidence investigation; do not infer
+20 physical checkpoint deletions solely from this aggregate. Breaker trips, false
+completion, source mutation and duplicate job/publish counters are0. Preserve this
+failed cohort and original receipt, no backfill/reset or mixed-version PASS.
+Runtime still7eeb848b70ab5027d17f3a45c83e3d7400d80004/ARMED,68holds preserved.
+Independent next AI job755338a47cdc4990a877b0402eb9ea06 automatically claimed
+at1788883638.2799692, ASR/running attempt3, heartbeat1788883841.4687028:
+`ai-successor-terminal-download.json`. This is processing, not a delivered subtitle.
+New formal AI/download/extraction deliveries in this recovery remain0/0/0;
+prior M3 AI delivery remains separate. No runtime edit/deploy/restart this follow-up.
+M2 is incomplete. Goal remains active; next work is specific source/QC and Gate
+member-evidence diagnosis, not another download wait or full-project audit.
+
+## Bounded live download follow-up and prepublication evidence
+
+Same hash3aeb9cf71d052508dccb77817a4f264f8216dced remains downloading; latest
+canary-download-fourth.json records0.80031618195progress and7508952035downloaded
+bytes/9383197103total. No extraction row yet. This is a verified live wait, not
+a stalled/failed download or completed subtitle. No re-add, priority override,
+runtime edit, deployment or Gate change occurred in this follow-up.
+
+Before actual publication, before-publish.json/full.log verifies current source
+SHA b999b8081a3ea63b756b5c96a32db9db6c484fe00d72477b9dfa800aa09829f8,
+size694204096/mtime1639746000573000000 unchanged from canary intent. Three existing
+sidecars captured by path/hash/size/mtime; no file was removed to manufacture a case.
+valid_finished=false, valid_ai=false, official_languages=[].
+existing-subtitles-validation.json applies existing full import policy read-only:
+old zh-TW.ass and zh.ass fail hard QC; therefore missing-valid-TC is proven even
+though subtitle files exist. English sidecar is retained too; its Chinese-import
+policy rejection is not a claim that English captions are universally invalid.
+
+Prepared operational read-only verifier work/m2_download_formal_verify.py for this
+exact target's official_subtitle_versions manifest, final bytes/language/QC, source
+hash and prior-artifact backups/unchanged files. It has not yet verified a formal
+publication. Still require actual extraction/matching/ledger and duplicate-trigger
+evidence after normal Worker processing. Formal delivered count remains0.
+All evidence is under /logs/m2-download-revalidation-20260908T1445/.
+
 ## Deployed and recovered; real canary downloading — 2026-09-08 14:55 UTC
 
 Actual Worker7eeb848b70ab5027d17f3a45c83e3d7400d80004, WebUI175a02a7bad46e0b6fa2372c59f39e8dd272911e.
