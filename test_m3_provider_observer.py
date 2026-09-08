@@ -13,7 +13,9 @@ import uuid
 @unittest.skipUnless(os.name == 'posix' and all(shutil.which(tool) for tool in ('bash','flock','timeout')), 'Linux host adapter test')
 class ProviderObserverShellTest(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
+        # Other suites select /dev/shm for media fixtures; Docker mounts it
+        # noexec. These PATH command fixtures must live on executable storage.
+        self.temp = tempfile.TemporaryDirectory(dir='/tmp')
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.log = self.root/'commands.jsonl'

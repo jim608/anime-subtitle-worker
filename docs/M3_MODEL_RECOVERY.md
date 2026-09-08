@@ -5,6 +5,28 @@ its frozen cohort, held sources and UNPROVEN preservation claims are unchanged.
 
 ## Scope
 
+## Complete candidate regression — 2026-09-08 10:42 UTC
+
+The full candidate suite completed in an isolated container using the deployed
+image's dependencies, candidate code read-only, network disabled and no Production
+media mounts: **2023 tests PASS**, exit 0, 45.992 seconds. This is not a newly built
+or deployed runtime image. Evidence:
+`logs/m3-baseline-20260908T070237Z/candidate-full-predeploy-final.log` and `.exit`.
+
+Initial full run retained in `candidate-full-predeploy.log`: 2023 tests,
+three failures/one error in host-observer shell fixtures. Test import order sets
+global tempfile storage to Docker's noexec `/dev/shm`; executable fake commands
+then failed with permission denied. Only the shell fixture now explicitly uses
+`/tmp`. The full corrected run verifies it without skipping or weakening tests.
+
+The complete safe-update-stack flow was reviewed. This handoff must use an owned
+`RECONCILIATION_HOLD_ID` so post-retirement failure preserves live databases and
+evidence, not the generic database rollback branch. Do not run prior immutable
+fragment helpers again. Prepare a fresh owned drain/idle handoff, preserve all
+existing holds/Gate evidence, and install the pinned host observer as part of the
+controlled transition. No admission pause or Production deployment occurred during
+this regression step.
+
 ## Predeployment live boundary — 2026-09-08 10:36 UTC
 
 Read-only runtime verification still reports ARMED / runtime_baseline_match,

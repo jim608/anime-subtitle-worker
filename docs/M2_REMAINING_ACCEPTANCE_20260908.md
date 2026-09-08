@@ -1,5 +1,10 @@
 # M2 remaining acceptance — 2026-09-08
 
+M3 full candidate server regression: 2023 PASS, exit 0, retained at
+`logs/m3-baseline-20260908T070237Z/candidate-full-predeploy-final.log`.
+Only the host-observer test fixture's executable tempdir changed. No Production
+deployment, Gate change, source hold release or formal subtitle addition.
+
 2026-09-08 10:36 UTC: runtime ARMED/baseline match at Worker a4829a5 / WebUI
 175a02a, original Gate retained. Active transcription with fresh heartbeat observed
 once via lite status; no deployment or interruption. Evidence under

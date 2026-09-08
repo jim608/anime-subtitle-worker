@@ -9,6 +9,12 @@ relabeled PASS or mixed with future M3 runtime results.
 
 ### M3 — Configured model fallback and resource-aware recovery
 
+Full candidate regression now passes: 2023 tests in the server isolated container
+(candidate-full-predeploy-final.log, exit 0). Fixed only executable shell fixture
+tempdir contamination from another suite's noexec /dev/shm. Fresh owned admission
+drain, planned-change receipt, observer installation and actual image deployment
+still required; no Production container switch or database changes yet.
+
 2026-09-08 10:36 UTC live check: original runtime ARMED/baseline match, active
 transcription heartbeat and no maintenance hold. No safe idle window demonstrated.
 ASS restyling is outside the normal Queue path and is not run/countable here.
