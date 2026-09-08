@@ -5,6 +5,24 @@ its frozen cohort, held sources and UNPROVEN preservation claims are unchanged.
 
 ## Scope
 
+## Bounded host observation publisher (candidate, not deployed)
+
+`m2_guardrail_runtime.py provider-refresh --model-provider-container NAME` now
+performs one context read, two Docker provider inspections and one local evidence
+update. It does not scan Queue, arm a Gate, resume admission or settle requests.
+The local publisher verifies the exact Gate baseline, effective endpoint and
+inspection timestamp, then rechecks the runtime context before atomic publication.
+It retains continuity loss as UNPROVEN; a later successful inspection cannot
+erase a prior gap. Re-arming that same baseline also refuses to overwrite the gap.
+
+Composed command-runner and isolated file/runtime tests cover the bounded command
+sequence, wrong-Gate rejection without file mutation, gap persistence and re-arm
+refusal. Server isolated related suite: 54 PASS, `provider-refresh-entry-server.log`
+under `/logs/m3-baseline-20260908T070237Z/`.
+The periodic host lifecycle/single-writer deployment handoff and the
+post-response confirmation barrier remain open. This command has not been run
+against Production and does not by itself establish autonomous observation.
+
 ## Provider observation admission contract (candidate, not deployed)
 
 For a provider-bound baseline, runtime status now requires a host observation

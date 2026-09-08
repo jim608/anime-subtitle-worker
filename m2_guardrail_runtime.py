@@ -940,6 +940,12 @@ def initialize_gate(
             from m2_production_observation import initialize_observation_gate
 
             if provider_observation is not None:
+                try:
+                    validate_provider_observation(baseline['model_provider'],
+                        _read_json(Path(config.work_path) / 'm3-provider-observation.json') or {},
+                        gate_baseline_version=baseline_version, now=timestamp)
+                except ModelProviderEvidenceError as exc:
+                    raise RuntimeContractError('provider_observation_gap_requires_new_baseline') from exc
                 atomic_write_text(Path(config.work_path) / 'm3-provider-observation.json',
                                   json.dumps(provider_observation, sort_keys=True) + '\n')
             observation_gate = initialize_observation_gate(config, existing, now=timestamp)
@@ -2816,6 +2822,65 @@ def recover_runtime_local(
     }
 
 
+def provider_observation_context(config: Any) -> dict[str, Any]:
+    from model_provider_evidence import redacted_endpoint_descriptor
+    state = load_runtime_state(config) or {}
+    provider = state.get('baseline', {}).get('model_provider')
+    if state.get('status') != 'ARMED' or not isinstance(provider, Mapping):
+        raise RuntimeContractError('provider_observation_bound_runtime_required')
+    return {'gate_baseline_version':state['gate_baseline_version'],
+            'model_provider':provider,
+            'model_provider_endpoint':redacted_endpoint_descriptor(str(config.translator_base_url))}
+
+
+def refresh_provider_observation_local(config: Any, evidence: Mapping[str, Any]) -> dict[str, Any]:
+    """Update host evidence only. Never arm a Gate or release admission/requests."""
+    from model_provider_evidence import validate_provider_binding, validate_provider_observation, ModelProviderEvidenceError
+    context = provider_observation_context(config)
+    if evidence.get('gate_baseline_version') != context['gate_baseline_version']:
+        raise RuntimeContractError('provider_observation_baseline_mismatch')
+    binding = validate_provider_binding(evidence.get('model_provider') or {}, endpoint=str(config.translator_base_url))
+    now = time.time()
+    observation = {'contract':'m3-provider-observation-v1',
+        'gate_baseline_version':context['gate_baseline_version'], 'status':'VERIFIED',
+        'model_provider':binding, 'checked_at':evidence.get('checked_at')}
+    # Validate the supplied observation clock separately from baseline continuity.
+    validate_provider_observation(binding, observation, gate_baseline_version=context['gate_baseline_version'], now=now)
+    target = Path(config.work_path) / 'm3-provider-observation.json'
+    previous = _read_json(target) or {}
+    reason = None
+    try:
+        validate_provider_observation(context['model_provider'], previous,
+            gate_baseline_version=context['gate_baseline_version'], now=now)
+    except ModelProviderEvidenceError as exc:
+        reason = str(exc)
+    if binding != context['model_provider']:
+        reason = 'provider_observation_identity_changed'
+    if reason:
+        observation.update(status='UNPROVEN', reason_code=reason,
+                           previous_observation=previous if previous.get('status') == 'VERIFIED' else None)
+        # Once continuity is lost, a later matching read cannot erase that gap.
+        if previous.get('status') == 'UNPROVEN' and previous.get('gate_baseline_version') == context['gate_baseline_version']:
+            return {'status':'DEGRADED', 'reason_code':previous.get('reason_code'), 'updated':False}
+    if provider_observation_context(config) != context:
+        raise RuntimeContractError('provider_observation_handoff_changed')
+    atomic_write_text(target, json.dumps(observation, sort_keys=True) + '\n')
+    return {'status':'DEGRADED' if reason else 'VERIFIED', 'reason_code':reason or 'provider_identity_match', 'updated':True}
+
+
+def refresh_provider_observation_on_host(*, docker_binary: str, worker_container: str,
+                                         model_provider_container: str, worker_config_path: str,
+                                         runner: CommandRunner | None = None) -> dict[str, Any]:
+    run = runner or _default_runner
+    name = _require_container_name(worker_container)
+    base = [docker_binary, 'exec', '-i', name, 'python', '/app/m2_guardrail_runtime.py']
+    context = _run_json(base + ['provider-context', '--config', worker_config_path], run, 'provider_context_unavailable')
+    binding = _capture_model_provider_binding(docker_binary, model_provider_container, context, run)
+    return _run_json(base + ['provider-refresh-local', '--config', worker_config_path], run,
+        'provider_observation_publish_failed', stdin=json.dumps({'gate_baseline_version':context['gate_baseline_version'],
+            'model_provider':binding, 'checked_at':time.time()}, sort_keys=True))
+
+
 def resolve_model_request_local(config: Any, evidence: Mapping[str, Any], *,
                                 state_path_override: str | Path | None = None) -> dict[str, Any]:
     """Host-controlled, paused handoff only; never arm or resume admission here."""
@@ -3929,6 +3994,14 @@ def _parser() -> argparse.ArgumentParser:
     recover_local.add_argument("--config", required=True)
     recover_local.add_argument("--source-revision-file", required=True)
     recover_local.add_argument("--state-path", default="")
+    refresh = subparsers.add_parser('provider-refresh', help='One bounded host provider evidence refresh; no Queue polling')
+    refresh.add_argument('--docker', default='docker')
+    refresh.add_argument('--worker-container', default='anime-subtitle-worker')
+    refresh.add_argument('--model-provider-container', required=True)
+    refresh.add_argument('--worker-config', default='/app/config.yaml')
+    for command_name in ('provider-context', 'provider-refresh-local'):
+        provider_local = subparsers.add_parser(command_name, help=argparse.SUPPRESS)
+        provider_local.add_argument('--config', required=True)
     resolve_local = subparsers.add_parser('resolve-model-local', help=argparse.SUPPRESS)
     resolve_local.add_argument('--config', required=True)
     resolve_local.add_argument('--state-path', default='')
@@ -3994,6 +4067,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 root_cause_evidence=planned,
                 model_request_token=args.model_request_token,
             )
+        elif args.command == 'provider-refresh':
+            result = refresh_provider_observation_on_host(docker_binary=args.docker,
+                worker_container=args.worker_container, model_provider_container=args.model_provider_container,
+                worker_config_path=args.worker_config)
+        elif args.command == 'provider-context':
+            from config import load_config
+            result = provider_observation_context(load_config(args.config))
         elif args.command == 'pause-reconciliation':
             from config import load_config
             result = pause_reconciliation_admission(load_config(args.config), args.reconciliation_id)
@@ -4039,7 +4119,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise RuntimeContractError("runtime_evidence_invalid") from exc
             if not isinstance(evidence, dict):
                 raise RuntimeContractError("runtime_evidence_invalid")
-            if args.command == 'resolve-model-local':
+            if args.command == 'provider-refresh-local':
+                result = refresh_provider_observation_local(config, evidence)
+            elif args.command == 'resolve-model-local':
                 result = resolve_model_request_local(config, evidence, state_path_override=args.state_path or None)
             elif args.command == "recover-local":
                 result = recover_runtime_local(

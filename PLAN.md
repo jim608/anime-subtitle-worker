@@ -9,6 +9,10 @@ relabeled PASS or mixed with future M3 runtime results.
 
 ### M3 — Configured model fallback and resource-aware recovery
 
+Bounded host `provider-refresh` publisher is implemented; it preserves observed
+continuity gaps and cannot arm/resume. Autonomous scheduling, single-writer
+handoff and post-response confirmation still block Production deployment.
+
 Provider observation consumer/arm seed now fails closed for missing, stale,
 future or baseline-mismatched host evidence. Autonomous host publishing and
 post-response generation confirmation remain incomplete; freshness alone is not

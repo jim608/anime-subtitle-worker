@@ -376,6 +376,24 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
             observation_path.unlink()
             self.assertEqual('DEGRADED', runtime.runtime_guardrail_status(self.config,
                 source_revision_file=self.revision)['status'])
+            observation_path.write_text(json.dumps(original), encoding='utf-8')
+            refresh = {'gate_baseline_version':states[0]['gate_baseline_version'],
+                       'model_provider':states[0]['baseline']['model_provider'], 'checked_at':1_788_454_933.0}
+            self.assertEqual('VERIFIED', runtime.refresh_provider_observation_local(self.config, refresh)['status'])
+            saved_observation = observation_path.read_bytes()
+            with self.assertRaisesRegex(runtime.RuntimeContractError, 'baseline_mismatch'):
+                runtime.refresh_provider_observation_local(self.config, {**refresh, 'gate_baseline_version':'other'})
+            self.assertEqual(saved_observation, observation_path.read_bytes())
+            observation_path.write_text(json.dumps({**original, 'checked_at':1_788_454_000.0}), encoding='utf-8')
+            self.assertEqual('DEGRADED', runtime.refresh_provider_observation_local(self.config, refresh)['status'])
+            gap_record = observation_path.read_bytes()
+            self.assertFalse(runtime.refresh_provider_observation_local(self.config, refresh)['updated'])
+            self.assertEqual(gap_record, observation_path.read_bytes())
+            evidence['model_provider_checked_at'] = 1_788_454_933.0
+            with self.assertRaisesRegex(runtime.RuntimeContractError, 'gap_requires_new_baseline'):
+                runtime.initialize_gate(self.config, evidence, source_revision_file=self.revision,
+                                        now=1_788_454_933.0)
+            self.assertEqual(gap_record, observation_path.read_bytes())
 
     def test_gate_claim_requires_post_start_matching_baseline_and_not_preexisting(self) -> None:
         state = runtime.initialize_gate(
@@ -739,6 +757,16 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
             if 'resume-local' in command:
                 flow.append('resume')
                 return subprocess.CompletedProcess(command, 0, json.dumps({'status':'ARMED','claims_resumed':True}), '')
+            if 'provider-context' in command:
+                return subprocess.CompletedProcess(command, 0, json.dumps({
+                    'gate_baseline_version':'fixture-baseline',
+                    'model_provider_endpoint':probe['model_provider_endpoint']}), '')
+            if 'provider-refresh-local' in command:
+                supplied = json.loads(stdin)
+                self.assertEqual('fixture-baseline', supplied['gate_baseline_version'])
+                self.assertEqual('a'*64, supplied['model_provider']['container_id'])
+                self.assertGreater(supplied['checked_at'], 0)
+                return subprocess.CompletedProcess(command, 0, json.dumps({'status':'VERIFIED','updated':True}), '')
             raise AssertionError(f"unexpected command: {command}")
 
         result = runtime.arm_runtime_on_host(
@@ -801,6 +829,16 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
                     result = runtime.recover_runtime_on_host(**recovery_args)
                     self.assertTrue(result['claim_resume']['claims_resumed'])
                 self.assertEqual(expected_flow, flow)
+        recovery_case = None
+        flow.clear()
+        commands.clear()
+        result = runtime.refresh_provider_observation_on_host(docker_binary='docker',
+            worker_container='anime-subtitle-worker', model_provider_container='fixture-ollama',
+            worker_config_path='/app/config.yaml', runner=runner)
+        self.assertEqual('VERIFIED', result['status'])
+        self.assertEqual(5, len(commands))
+        self.assertTrue(all('recover-local' not in cmd and 'initialize' not in cmd and 'resume-local' not in cmd
+                            for cmd in commands))
 
     def test_host_arm_fails_closed_on_source_revision_mismatch(self) -> None:
         def runner(command: list[str], stdin: str | None, timeout: float) -> subprocess.CompletedProcess[str]:
