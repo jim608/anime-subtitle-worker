@@ -163,6 +163,62 @@ def find_model_output_lineage(conn: sqlite3.Connection, *, job_id: str, output_p
     return json.loads(row[0]) if row else None
 
 
+def record_model_output_merge(conn: sqlite3.Connection, *, parent_token: str, repair_token: str,
+                              output_path: Path, parent_bytes: bytes, repair_bytes: bytes,
+                              merged_bytes: bytes) -> dict[str, Any]:
+    """Prove an exact cue replacement from two known preparations; QC remains separate."""
+    from srt_utils import parse_srt, format_srt, validate_srt_structure
+    with _transaction(conn):
+        parents = []
+        for token, content in ((parent_token, parent_bytes), (repair_token, repair_bytes)):
+            row = conn.execute("""SELECT payload_json FROM pipeline_stage_events
+                WHERE event_type='MODEL_OUTPUT_PREPARED' AND json_extract(payload_json,'$.token')=?""", (token,)).fetchone()
+            if not row:
+                raise ModelRequestStateError('model_output_merge_parent_missing')
+            item = json.loads(row[0])
+            if item['output_sha256'] != hashlib.sha256(content).hexdigest():
+                raise ModelRequestStateError('model_output_merge_parent_hash_mismatch')
+            parents.append(item)
+        parent, repair = parents
+        path_digest = hashlib.sha256(str(Path(output_path).resolve()).encode('utf-8')).hexdigest()
+        if parent['output_path_sha256'] != path_digest or any(
+            parent[key] != repair[key] for key in ('job_id','execution_digest','runtime_sha256','provider_binding')
+        ):
+            raise ModelRequestStateError('model_output_merge_identity_mismatch')
+        original = parse_srt(parent_bytes.decode('utf-8-sig'))
+        replacements = parse_srt(repair_bytes.decode('utf-8-sig'))
+        validate_srt_structure(original)
+        validate_srt_structure(replacements)
+        by_index = {block.index:block for block in original}
+        replacement_map = {block.index:block for block in replacements}
+        if not replacements or len(replacement_map) != len(replacements) or any(
+            block.index not in by_index or block.timing != by_index[block.index].timing for block in replacements
+        ):
+            raise ModelRequestStateError('model_output_merge_replacement_mismatch')
+        expected = format_srt([replacement_map.get(block.index, block) for block in original]).encode('utf-8-sig')
+        if expected != merged_bytes:
+            raise ModelRequestStateError('model_output_merge_unselected_content_changed')
+        watermark = conn.execute("""SELECT COALESCE(MAX(rowid),0) FROM pipeline_stage_events
+            WHERE stage_attempt_id=? AND event_type IN
+            ('MODEL_REQUEST_RESERVED','MODEL_REQUEST_UNKNOWN','MODEL_REQUEST_SETTLED')
+            AND COALESCE(json_extract(payload_json,'$.operation_kind'),'INFERENCE')='INFERENCE'""",
+            (repair['stage_attempt_id'],)).fetchone()[0]
+        if watermark != repair['request_event_watermark']:
+            raise ModelRequestStateError('model_output_merge_inference_changed')
+        output_digest = hashlib.sha256(merged_bytes).hexdigest()
+        key = hashlib.sha256(_json({'parent_token':parent_token,'repair_token':repair_token,
+            'output_sha256':output_digest}).encode('utf-8')).hexdigest()
+        prior = conn.execute("""SELECT payload_json FROM pipeline_stage_events
+            WHERE event_type='MODEL_OUTPUT_PREPARED' AND json_extract(payload_json,'$.token')=?""", (key,)).fetchone()
+        if prior:
+            return {**json.loads(prior[0]), 'replay':True}
+        result = {**repair, 'token':key, 'output_path_sha256':path_digest, 'output_sha256':output_digest,
+            'parent_token':parent_token, 'repair_token':repair_token, 'derivation_kind':'targeted_model_merge',
+            'replaced_indexes':sorted(replacement_map), 'prepared_at':_timestamp(), 'publication_verified':False}
+        _event(conn, result, 'MODEL_OUTPUT_PREPARED')
+        return {**result, 'replay':False}
+
+
 def record_model_output_derivation(conn: sqlite3.Connection, *, parent_token: str,
                                    output_path: Path, output_sha256: str,
                                    diagnostics: list[dict[str, Any]]) -> dict[str, Any]:

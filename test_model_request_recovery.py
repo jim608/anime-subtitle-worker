@@ -259,6 +259,51 @@ class ModelRequestRecoveryTest(unittest.TestCase):
             baseline.pop('model_provider')
             self.assertIsNone(worker._require_model_output_lineage(video, output))
 
+    def test_targeted_merge_requires_two_known_parents_and_preserves_unselected_cues(self):
+        from model_request_state import ModelRequestContext, record_model_output_merge
+        from srt_utils import SrtBlock, format_srt
+        self.settle(self.prepare())
+        stage = self.make_stage('merge-source')
+        output, patch_path = self.root/'merged.srt', self.root/'patch.srt'
+        context = ModelRequestContext(self.database, stage['stage_attempt_id'], 'c'*64, 2,
+                                      provider_binding=self.args['provider_binding'])
+        first = SrtBlock(1, '00:00:01,000 --> 00:00:02,000', ['unchanged'])
+        old = SrtBlock(2, '00:00:03,000 --> 00:00:04,000', ['old'])
+        fixed = SrtBlock(2, old.timing, ['fixed'])
+        original = format_srt([first, old]).encode('utf-8-sig')
+        patch_bytes = format_srt([fixed]).encode('utf-8-sig')
+        merged = format_srt([first, fixed]).encode('utf-8-sig')
+        parent = context.record_output_lineage(endpoint=self.url, output_path=output,
+            output_sha256=hashlib.sha256(original).hexdigest())
+        repair = context.record_output_lineage(endpoint=self.url, output_path=patch_path,
+            output_sha256=hashlib.sha256(patch_bytes).hexdigest())
+        kwargs = dict(parent_token=parent['token'], repair_token=repair['token'], output_path=output,
+                      parent_bytes=original, repair_bytes=patch_bytes, merged_bytes=merged)
+        for change in ({'parent_token':'0'*64}, {'parent_bytes':b'wrong'},
+                       {'merged_bytes':merged.replace(b'unchanged', b'altered')},
+                       {'output_path':patch_path}):
+            with self.assertRaises(ModelRequestStateError):
+                record_model_output_merge(self.store._conn, **{**kwargs, **change})
+        child = record_model_output_merge(self.store._conn, **kwargs)
+        self.assertEqual([2], child['replaced_indexes'])
+        self.assertEqual(parent['token'], child['parent_token'])
+        self.assertEqual(repair['token'], child['repair_token'])
+        self.assertFalse(child['publication_verified'])
+        self.assertTrue(record_model_output_merge(self.store._conn, **kwargs)['replay'])
+        from worker import VideoWorker
+        worker = object.__new__(VideoWorker)
+        worker._stage_state = SimpleNamespace(pipeline_jobs=lambda:self.store)
+        output.write_bytes(original)
+        patch_path.write_bytes(patch_bytes)
+        with patch.object(worker, '_require_model_output_lineage', return_value=repair):
+            worker._record_targeted_merge_lineage(self.root/'merge-source.mkv', output,
+                patch_path, [first, fixed], parent)
+        self.assertEqual(original, output.read_bytes())
+        self.assertEqual(patch_bytes, patch_path.read_bytes())
+        context.reserve(endpoint=self.url, request={'later':True}, model='fixture')
+        with self.assertRaisesRegex(ModelRequestStateError, 'inference_changed'):
+            record_model_output_merge(self.store._conn, **kwargs)
+
     def test_deterministic_derivation_preserves_parent_and_requires_complete_hash_chain(self):
         import sqlite3
         from contextlib import closing

@@ -1,5 +1,10 @@
 # M2 remaining acceptance — 2026-09-08
 
+M3 targeted repair-merge lineage candidate: 211 server related tests PASS in
+`logs/m3-baseline-20260908T070237Z/provider-targeted-merge-lineage-server.log`.
+No Production deployment, Gate change or formal subtitle added. Not M2
+download/extraction or strict frozen-cohort acceptance.
+
 M3 deterministic repair-lineage candidate: 210 server related tests PASS in
 `logs/m3-baseline-20260908T070237Z/provider-deterministic-lineage-server.log`.
 No Production deployment, formal subtitle addition or Gate change; not M2

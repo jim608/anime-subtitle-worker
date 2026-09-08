@@ -4237,6 +4237,7 @@ class VideoWorker:
             self._invalidate_translation_intermediates(paths)
             return False
 
+        parent_lineage = self._require_model_output_lineage(video, paths.zh_cn_srt)
         selected_source = [source_by_index[index] for index in sorted(omission_indexes)]
         repair_root = Path(self.config.work_path) / "ai_translation_repair"
         repair_root.mkdir(parents=True, exist_ok=True)
@@ -4297,6 +4298,7 @@ class VideoWorker:
             # Remove the derived traditional cache before publishing a new
             # simplified cache. If this fails, the original rejected zh-CN
             # SRT and its omission sidecar remain intact for the next retry.
+            self._record_targeted_merge_lineage(video, paths.zh_cn_srt, temporary, merged, parent_lineage)
             paths.zh_tw_srt.unlink(missing_ok=True)
             write_srt(temporary, merged)
             retained_events = [
@@ -4519,6 +4521,7 @@ class VideoWorker:
                 start, end = _srt_timing_seconds(source.timing)
                 display_limits[index] = max(1, int(max(0.0, end - start) * fail_cps))
 
+            parent_lineage = self._require_model_output_lineage(video, paths.zh_cn_srt)
             selected_source = [source_by_index[index] for index in target_indexes]
             repair_root = Path(self.config.work_path) / "ai_translation_repair"
             repair_root.mkdir(parents=True, exist_ok=True)
@@ -4599,6 +4602,7 @@ class VideoWorker:
                     for block in source_blocks
                 ]
                 validate_translation(source_blocks, merged)
+                self._record_targeted_merge_lineage(video, paths.zh_cn_srt, temporary, merged, parent_lineage)
                 paths.zh_tw_srt.unlink(missing_ok=True)
                 write_srt(temporary, merged)
                 planned_sha256 = sha256_file(temporary)
@@ -4655,6 +4659,20 @@ class VideoWorker:
         if any(str(issue.code) == "cps_too_high" for issue in final_report.issues):
             raise SubtitleQualityError(summarize_quality_report(final_report))
         return bool(diagnostics)
+
+    def _record_targeted_merge_lineage(self, video: Path, output: Path, repair: Path,
+                                       merged: list[SrtBlock], parent: dict[str, object] | None) -> None:
+        if parent is None:
+            return  # explicit legacy execution; no invented historical proof
+        from model_request_state import record_model_output_merge
+        from srt_utils import format_srt
+        replacement = self._require_model_output_lineage(video, repair)
+        if replacement is None:
+            raise SourceSelectionReviewError('model_output_merge_repair_lineage_unproven')
+        record_model_output_merge(self._stage_state.pipeline_jobs()._conn,
+            parent_token=parent['token'], repair_token=replacement['token'], output_path=output,
+            parent_bytes=output.read_bytes(), repair_bytes=repair.read_bytes(),
+            merged_bytes=format_srt(merged).encode('utf-8-sig'))
 
     def _require_model_output_lineage(self, video: Path, output: Path) -> dict[str, object] | None:
         """Read-only cache authority check; never bless or discard unknown cache."""

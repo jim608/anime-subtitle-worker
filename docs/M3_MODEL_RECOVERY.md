@@ -5,6 +5,29 @@ its frozen cohort, held sources and UNPROVEN preservation claims are unchanged.
 
 ## Scope
 
+## Targeted model repair merge lineage (candidate)
+
+Safe-omission and CPS repair already use the durable Translator commit for their
+temporary, partial SRT. The missing boundary was the subsequent merge into the
+full cache. Both Worker paths now capture original lineage before requesting repair
+and record a two-parent preparation before replacing any cache.
+
+`record_model_output_merge` requires known original/repair preparations, matching
+job and runtime/provider identity, exact original/repair byte hashes, unchanged
+replacement cue timings and an exact reconstruction of the final SRT. Unselected
+cues cannot change. The repair request-event watermark must still match, including
+on replay. The child retains both parent tokens and replaced indexes and remains
+`publication_verified:false`; existing quality holds/QC and the post-preparation
+provider publication barrier still apply. No old preparation is rewritten.
+
+Server related suites: 211 PASS in
+`logs/m3-baseline-20260908T070237Z/provider-targeted-merge-lineage-server.log`.
+Tests cover missing/changed ancestors, changed unselected content, wrong target,
+replay, later inference refusal and the Worker helper with real SQLite. Existing
+Worker repair regressions remain passing. This is isolated proof, not a real model
+translation or formal delivery; existing ASS restyling authority and deployment
+scheduler/runtime acceptance remain outstanding. Production changes/additions: 0.
+
 ## Deterministic prepublication repair lineage (candidate)
 
 AI publication now captures exact immutable parent lineage before deterministic

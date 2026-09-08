@@ -9,6 +9,11 @@ relabeled PASS or mixed with future M3 runtime results.
 
 ### M3 — Configured model fallback and resource-aware recovery
 
+Targeted omission/CPS model repair merges now record both original and partial
+repair preparations, requiring exact merge bytes and unchanged unselected cues.
+Server 211 related tests PASS. Existing ASS restyling authority and scheduler /
+safe runtime deployment acceptance remain outstanding; no Production deployment.
+
 Deterministic prepublication QC repairs now create immutable child SRT preparation
 lineage from a verified parent and continuous diagnostic hash chain. Server 210
 related tests PASS. Model-based targeted repair and existing ASS restyling still
