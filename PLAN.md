@@ -2,6 +2,11 @@
 
 ## Active Goal — M3 authorized (2026-09-08)
 
+13:01UTC known alternative9f5394... safely retranslated-cache requeue via existing
+revision-bound API;2work artifacts archived/source hashes unchanged/attempts1.
+Still queued while server runs other selective recovery; no claim/delivery claim.
+Evidence and immutable intent in known-alternative-9f; do not repeat operation.
+
 12:55UTC e15760... canary naturally exited: NEEDS_REVIEW/paused/attempts3,
 ASR quality failure after configured fallbacks; no further forced retry.
 Source/archive preservation verified; MODEL0/formal additions0.

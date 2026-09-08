@@ -1,5 +1,33 @@
 # M3 — configured model recovery
 
+## Known alternative safely requeued — 2026-09-08 13:01 UTC
+
+After e157 terminal closeout, read-only preflight of previously known job
+9f5394b655b340b2822cc43337dbcaf0 found open obligation,attempts1,
+failure_revision5b0ab81f252517a6f7a98d71, no verified official TC, not held,
+285 parsed JA cues and no leading gap. This is not full ASR/QC acceptance.
+Existing revision-bound reprocess_video(auto_review,retranslate) completed once:
+2 work intermediates archived, original source/JA/sidecar hashes unchanged,
+attempts remained1. Archive manifest
+/work/manual_ai_reprocess/1788872314774294178-3bd3c0839035d1ef-retranslate/manifest.json
+SHA89b224f1bcca313e49b92072b0a41a123221f0e5ebdc9f94fc5203e1ad92f73e.
+Do not repeat this operation: its separate immutable intent already exists.
+
+At1788872468.183177,9f remains queued (not claimed/model-verified/delivered).
+Worker is occupied by a different server-selected existing selective-ASR
+recovery of7d0c98..., attempts4, child2024330, heartbeat1788872442.7998874.
+Its cached checkpoint context mismatch invoked existing prompt-free fallback.
+Do not infer attempts4 proves an infinite retry: selective policy selection
+uses the default non-revision-scoped candidate filter; full retranscribe policy
+separately counts durable command history across revisions. No budget reset.
+No runtime/config/Gate changes, formal additions0. Logs:
+/logs/m3-review-convergence-20260908T1210/known-alternative-preflight.json,
+known-alternative-operation.log/.exit and known-alternative-9f/ (intent/result,
+first/second-status.json,second-scheduler.json,second-process.txt).
+Next: follow existing scheduler; no priority override or repeated remediation.
+Chrome original terminal debugger detached; new authenticated terminal tab
+1255612175 recovered read-only access without restarting Worker.
+
 ## Canary terminal closeout — 2026-09-08 12:55 UTC
 
 The bounded existing ASR chain (large-v3 -> large-v2 -> independent medium)
