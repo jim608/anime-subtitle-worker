@@ -2,6 +2,12 @@
 
 ## Active Goal — M3 authorized (2026-09-08)
 
+13:12UTC real9f5394... COMPLETED/ledger succeeded;91 real model RESPONSEs,
+runtime/provider identities match,3preparations/1provider confirmation.
+Formal v2/hash/parse/Production-role hardQC PASS,source hashes unchanged:
+newAI formal TC1 (download0/extraction0). Not strictGate/M3 completion.
+Remaining exact lineage/idempotency and acceptance audit; no runtime change.
+
 13:01UTC known alternative9f5394... safely retranslated-cache requeue via existing
 revision-bound API;2work artifacts archived/source hashes unchanged/attempts1.
 Still queued while server runs other selective recovery; no claim/delivery claim.

@@ -1,5 +1,45 @@
 # M2 remaining acceptance — 2026-09-08
 
+## Real model response and formal AI publication — 2026-09-08 13:12 UTC
+
+Known job9f5394b655b340b2822cc43337dbcaf0 auto-claimed after7d0c98...
+naturally finished NEEDS_REVIEW/paused/attempts5. The new live child2081593
+entered TRANSLATING; heartbeat1788872824.0869553 recorded batch21/48.
+No manual priority override, model-side private Queue, or forced interruption.
+
+At1788872963.3860781, the real job had91 MODEL_REQUEST_RESERVED and91
+MODEL_REQUEST_SETTLED, all outcomes RESPONSE with valid response digests.
+Configured Sakura and qwen2.5:7b-instruct-q4_K_M both used; each reservation
+remained within its effective durable attempt limit. Runtime identity hash
+e9414f2cda46ccfc61f6b48fdf30d054a7ef032adc06d47fcf8e59bd176bee7b
+and provider bindingb91c298cd5186f24dbf03a45db19ad64f46f297ea8ce5a6d19d9b64d41c45415
+match loaded baseline Worker738e96e. Also3 MODEL_OUTPUT_PREPARED and1
+MODEL_OUTPUT_PROVIDER_CONFIRMED events. Event counts alone are not strict Gate
+acceptance or proof of the final artifact's exact confirmation lineage.
+
+Formal re-read at1788873170.8224776: Pipeline COMPLETED, Queue done,
+delivery obligation aiobl_6369c08d8fb849e3c50dd8be9fa9a21739e8564d03dbe75569a506700f14b411
+succeeded/attempt_count2. Manifest v2 validated against exact ledger obligation
+and policy, all file hashes, and translated_trilingual publication semantics.
+Manifest SHAe6104d894429497ca3c502532d4ecb31839cb6c0337a0015ad74952184d1d0eb.
+Three formal ASS files each parse285 cues and pass hard QC using Production's
+explicit japanese/translated_zh_cn/translated_zh_tw roles; warnings retained.
+Source video, original JA and existing sidecar hashes match pre-recovery intent.
+New formal TC subtitle count **1** (one AI target, not three language outputs).
+Download-derived additions0; extraction-derived additions0; old AI delivery not recounted.
+Initial generic-role recheck misclassified simplified Chinese; retained initial
+formal-verification.json is superseded by formal-verification-language-roles.json.
+Only the read-only verifier role was corrected; no QC policy/output changes.
+
+Evidence /logs/m3-review-convergence-20260908T1210/known-alternative-9f/:
+followup-6.json,followup-6-scheduler.json,followup-6-process.txt,
+model-evidence-1.json (provider summary accessor absent; sample binding present),
+model-evidence-2.json (correct nested binding and baseline comparison),
+output-probe.json,formal-verification-language-roles.json.
+No code/config/deployment/Gate change. M2 download/extraction and strict Gate
+remain incomplete. Finish exact confirmation-lineage/idempotency and remaining
+M3 acceptance checks before calling M3 complete; do not retry this succeeded job.
+
 ## Canary terminal closeout — 2026-09-08 12:55 UTC
 
 The bounded existing ASR chain (large-v3 -> large-v2 -> independent medium)
