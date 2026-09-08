@@ -1,5 +1,73 @@
 # M2 Production Observation
 
+## Current closeout: controlled recovery restored (2026-09-08 04:32 UTC)
+
+- Actual Worker: `65a9670fb1cbeb459939df60755366bd32589e63`.
+  WebUI: `175a02a7bad46e0b6fa2372c59f39e8dd272911e` (unchanged).
+  Worker image: `sha256:24c23d2a16ce93c5e94d526070bd230de963c427fb5d3c499edd2bbcdbdc8ae8`.
+- Safe deployment `20260908T041804Z-3967701` and controlled recovery exited 0.
+  Worker 1926 / WebUI 231 deployment tests PASS; actual-image targeted 245 tests,
+  isolated container crash/restart, source safety and idempotency PASS; fresh breakers 7/7 PASS.
+- Original failed preservation claims remain UNPROVEN. Original Gates, receipts,
+  failed test reports and backups are retained, not relabelled PASS. The failed
+  460619e actual-image test remains linked through the checkpoint-race snapshot.
+- Reconciliation `m2-recon-source-decision-20260908`, receipt
+  `/logs/m2-reconciliation-m2-recon-source-decision-20260908.json`,
+  SHA256 `7163453b1031bda7dbfdf9d9988f35bfed44c2a6d845ae2b65f09954aaa143a9`.
+  Ancestor: `/logs/m2-reconciliation-m2-recon-leading-gap-20260908.json`.
+  Planned receipt: `/logs/m2-planned-runtime-change-source-decision-lane-20260908.json`.
+  Controlled recovery: `m2breakerrec_7d47749bf57a4831b2debb589374b67c`.
+- Logical holds: 67 = original 27 UNKNOWN revisions + 24 unexplained removals
+  + 9 unproven arrivals + 3 later identity changes + 4 later evidence incidents.
+  All 66 preceding holds preserved; new hold is the exact untrusted source-decision
+  attempt. No source files moved/renamed/deleted. Holds include obligations absent
+  from the current Queue, so these counts must not be added as disjoint Queue rows.
+  Actual read checks rejected publication for 67/67 held paths; post-Gate held claims 0.
+- 7140 queued identities reconciled as recoverable, subject to unchanged source/QC
+  admission; 6889 other-state identities retained. This does not prove historical
+  continuity. Historical revalidation preserved 1255 retry counters and protected
+  checkpoint/output identities; 154 READY, 149 recoverable-total metric at that snapshot.
+  READY alone is not delivery, and exhausted budgets/holds still prevent dispatch.
+- Breaker ARMED; Gate ACTIVE: `m2-gate-20260908T042203260424Z-ea2562f0dc`.
+  Start `2026-09-08T04:22:03.260424Z`, baseline
+  `m2-guardrail-v1:4bd8a3c2eb64004cfd7c6717`.
+  Configuration fingerprint:
+  `sha256:355300b197164801be4616a688d852c1b8b5274fe91e91e40a2a21f12a3c4dbc`.
+  Decision schema 1; frozen-first-20 policy unchanged, initialized 0/20.
+  Old cohort scores were not transferred; no Gate pass / M2_PRODUCTION_ACCEPTED claimed.
+- Real historical claim `aiobl_710b0dea0f5d5d287a8e69d6b63a8c72c44ee67c2376bada0982f81b8738f803`
+  started 1788841654.478999, produced a hash-valid SUBTITLE_DETECTION checkpoint
+  `ffb4ccc5a1dedc054fa70a95eebd75bc1432223b549b609b0324a4eade307dae`,
+  and correctly retained review (`candidate_analysis_inconclusive`), not COMPLETED.
+- Next automatic-remediation Queue claim
+  `aiobl_e7c26b6e56ea6b0076a572536f2993cd844a0160a8fd99470f99f231507061d2`
+  started 1788841662.3464353, entered actual ASR with heartbeat 1788841665.8556786,
+  and new source checkpoint
+  `1984e8ace517a19ebc45d03978ab8fe35c53ccdebcca0778ae592720ef8d42e8`.
+  Its source SHA256 matched the already recorded current-run snapshot; this is not
+  evidence that an older unrecorded source never changed.
+- Both claims preceded scheduler wake command `cmd_98762a03dd33b3c9a0f63c6e`
+  at 1788841680.467118. Therefore the earlier displayed deployment_hold was stale,
+  not proof of an active lock, and the supplemental wake did not cause those claims.
+  No lock/latch was removed. Existing control-loop dispatcher (300s interval,
+  single in-flight recovery, finite budgets) dispatched the following recovery.
+  Final snapshot: lane CANARY_IN_FLIGHT, one in-flight; no ongoing Codex watcher needed.
+- Verified new formal subtitle deliveries in this closeout: 0. Claim/checkpoint/review
+  are not subtitle delivery. Real download canary `m2dl_9e2ac34428c091432381` reached
+  qB but stayed zero-byte/zero-peers and timed out as `did not start` at
+  2026-09-08T03:22:40.561911Z. No valid downloaded file/extraction/formal publish verified;
+  failed source remains excluded under existing alternate/backoff budgets.
+- Remaining: 67 held sources/obligations require trustworthy evidence; local source
+  analysis review and external source/peer availability remain unresolved. Existing
+  788 uncertain mappings and 356 source-backoff inventory are not declared repaired.
+  No QC/model/schema relaxation, source mutation, valid-output overwrite, or M3 work.
+- Evidence root: `/logs/m2-source-decision-lane-repair-20260908/`.
+  Actual-image tests: `/logs/m2-asr-postprocess-isolated-20260908T042133632441Z/`.
+  Claims: `claim-evidence-1788841743016227257.json`.
+  Source: `source-verification-1788841852268534312/result.json`.
+  Final status: `final-status-1788841953550180079.json`.
+  These final document updates do not redeploy or rebuild the Gate.
+
 ## Source-decision lane isolation (2026-09-08 04:15 UTC)
 
 `5fc079223a9943c8216db19fd2673fb3e01ee247` deployed successfully; controlled recovery
