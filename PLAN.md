@@ -264,17 +264,17 @@ Extend the existing configured ASR/translation routes and resource admission,
 not a parallel queue or a wholesale backend rewrite. Preserve compatibility,
 source safety, strict QC and existing durable checkpoint/recovery contracts.
 
-- [ ] Establish focused baseline of existing model routes, resource admission,
+- [x] Establish focused baseline of existing model routes, resource admission,
   retry bounds and restart behavior; identify evidence-backed gaps.
-- [ ] Implement the smallest missing Adapter/fallback contract, using configured
+- [x] Implement the smallest missing Adapter/fallback contract, using configured
   models only, with persistent route/reason/attempt evidence and bounded retries.
-- [ ] Verify timeout/crash/OOM, exhausted or unavailable fallback, resume without
+- [x] Verify timeout/crash/OOM, exhausted or unavailable fallback, resume without
   repeating valid checkpoints, and unchanged quality/publication protections.
-- [ ] Run targeted integration and necessary shared-boundary regressions in the
+- [x] Run targeted integration and necessary shared-boundary regressions in the
   server isolation environment; do not count fixtures as production delivery.
-- [ ] Deploy only verified runtime changes through existing safe idle/update and
+- [x] Deploy only verified runtime changes through existing safe idle/update and
   controlled recovery. Preserve old receipts, held obligations and Gate cohorts.
-- [ ] Verify actual runtime parity and bounded real processing/publication evidence;
+- [x] Verify actual runtime parity and bounded real processing/publication evidence;
   report remaining external/M2 Gate blockers independently.
 
 No new model download, QC relaxation, source hold release or production
