@@ -430,6 +430,9 @@ class SubtitleTranslator:
                 model_chain=model_chain,
                 source_language=source_language,
                 translation_memory_decision_digest=translation_memory_decision_digest,
+                model_execution_digest=(self._request_context.checkpoint_identity(
+                    endpoint=str(self.config.translator_base_url))
+                    if getattr(self, '_request_context', None) is not None else ''),
             )
             restored, restored_count, last_model, restored_events = load_translation_checkpoint(
                 checkpoint_path,

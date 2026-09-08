@@ -44,7 +44,11 @@ def translation_checkpoint_signature(
     model_chain: Sequence[str],
     source_language: str = "ja",
     translation_memory_decision_digest: str = "",
+    model_execution_digest: str = "",
 ) -> str:
+    if model_execution_digest and (not isinstance(model_execution_digest, str)
+            or re.fullmatch('[0-9a-f]{64}', model_execution_digest) is None):
+        raise TranslationCheckpointError('model execution identity must be a SHA-256 hex value')
     memory_digest = str(translation_memory_decision_digest or "").strip().casefold()
     if memory_digest and (
         len(memory_digest) != 64
@@ -64,6 +68,8 @@ def translation_checkpoint_signature(
         "translation_memory_decision_digest": memory_digest,
         "source_blocks": [_block_payload(block) for block in source_blocks],
     }
+    if model_execution_digest:
+        payload['model_execution_digest'] = model_execution_digest
     encoded = json.dumps(
         payload,
         ensure_ascii=False,

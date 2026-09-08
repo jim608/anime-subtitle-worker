@@ -19,6 +19,29 @@ from translator import SubtitleTranslator
 
 
 class TranslationCheckpointTest(unittest.TestCase):
+    def test_provider_bound_checkpoint_cannot_cross_execution_identity(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            output = root/'episode.zh-CN.srt'
+            batches = [[block] for block in self._blocks()]
+            kwargs = dict(output_path=output, batch_size=1, translation_context='fixture',
+                          glossary={}, model_chain=['same-model'])
+            legacy = translation_checkpoint_signature(self._blocks(), **kwargs)
+            first = translation_checkpoint_signature(self._blocks(), **kwargs, model_execution_digest='a'*64)
+            second = translation_checkpoint_signature(self._blocks(), **kwargs, model_execution_digest='b'*64)
+            self.assertEqual(3, len({legacy, first, second}))
+            path = translation_checkpoint_path(root, output)
+            translated = [SrtBlock(1, batches[0][0].timing, ['已完成'])]
+            write_translation_checkpoint(path, signature=first, output_path=output,
+                completed_batches=[translated], last_model='same-model', quality_events=[])
+            snapshot = path.read_bytes()
+            self.assertEqual(1, load_translation_checkpoint(path, signature=first, batches=batches)[1])
+            self.assertEqual(0, load_translation_checkpoint(path, signature=second, batches=batches)[1])
+            self.assertEqual(0, load_translation_checkpoint(path, signature=legacy, batches=batches)[1])
+            self.assertEqual(snapshot, path.read_bytes())
+            with self.assertRaises(TranslationCheckpointError):
+                translation_checkpoint_signature(self._blocks(), **kwargs, model_execution_digest='unproven')
+
     @staticmethod
     def _blocks() -> list[SrtBlock]:
         return [
@@ -381,6 +404,7 @@ class TranslationCheckpointTest(unittest.TestCase):
             source = self._blocks()
             config = SimpleNamespace(
                 work_path=root / "work",
+                translator_base_url='http://192.0.2.10:11434/v1',
                 batch_size=1,
                 translation_context_enabled=False,
                 translation_context_max_blocks=10,
@@ -393,7 +417,7 @@ class TranslationCheckpointTest(unittest.TestCase):
                 subtitle_quality_hard_max_primary_chars=64,
             )
 
-            def make_translator() -> SubtitleTranslator:
+            def make_translator(execution_digest='') -> SubtitleTranslator:
                 translator = object.__new__(SubtitleTranslator)
                 translator.config = config
                 translator.logger = logging.getLogger("test.translation.checkpoint")
@@ -401,6 +425,8 @@ class TranslationCheckpointTest(unittest.TestCase):
                 translator._translator_models = ("primary", "small")
                 translator._translator_model_index = 0
                 translator._translator_model = "primary"
+                translator._request_context = (SimpleNamespace(checkpoint_identity=lambda **_: execution_digest)
+                                                if execution_digest else None)
                 translator._build_translation_context = lambda _blocks, _path: ""
                 translator._commit_translation_output = (
                     lambda destination, blocks, reason: write_srt(destination, blocks)
@@ -449,6 +475,17 @@ class TranslationCheckpointTest(unittest.TestCase):
                 [event["index"] for event in resumed.translation_quality_events],
                 [1],
             )
+            for label, digest, expected_calls in [('same','a'*64,[2,3]), ('changed','b'*64,[1,2,3])]:
+                bound_output = root/(label+'.zh-CN.srt')
+                first = make_translator('a'*64)
+                first._translate_batch = crash_on_second
+                with self.assertRaisesRegex(RuntimeError, 'simulated process crash'):
+                    first.translate_blocks(source, root/'episode.ja.srt', bound_output)
+                resumed_calls.clear()
+                resumed = make_translator(digest)
+                resumed._translate_batch = finish
+                resumed.translate_blocks(source, root/'episode.ja.srt', bound_output)
+                self.assertEqual(expected_calls, resumed_calls)
             self.assertFalse(translation_checkpoint_path(config.work_path, output).exists())
 
     def test_non_japanese_completed_checkpoint_is_retained_and_reused(self) -> None:

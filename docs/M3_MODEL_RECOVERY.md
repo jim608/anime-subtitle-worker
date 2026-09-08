@@ -5,6 +5,27 @@ its frozen cohort, held sources and UNPROVEN preservation claims are unchanged.
 
 ## Scope
 
+## Provider-bound translation checkpoint identity (candidate)
+
+Publication review found that batch checkpoint signatures previously contained
+configured model names but not the executing provider generation. A later fresh
+provider observation cannot validate older restored batches by itself.
+
+Provider-bound request contexts now derive a checkpoint identity from validated
+provider binding and runtime code/configuration digest. Translator passes it into
+the existing checkpoint signature. Same execution identity resumes at the next
+batch; changed runtime/provider identity refuses the old batches, even when the
+configured model name is unchanged. A rejected signature read does not delete or
+rewrite the old checkpoint. Legacy/unbound signatures retain their original
+format, rather than retroactively claiming provider provenance.
+
+Composed Translator/file-checkpoint tests verify same-provider resume versus
+changed-provider full batch processing; context tests distinguish runtime/provider
+changes and reject wrong endpoint evidence. Local related suite: 40 PASS. Server
+related suite: 184 PASS, `provider-checkpoint-binding-server.log` under the M3 log root.
+Final SRT-cache lineage and post-response publication confirmation are still open;
+this increment is not a complete publication barrier or deployment acceptance.
+
 ## UNRAID host scheduler adapter (candidate, not installed)
 
 `m3-provider-observer.sh` uses host Bash/Docker and the Worker Python CLI, matching

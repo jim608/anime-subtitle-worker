@@ -53,6 +53,15 @@ class ModelRequestContext:
         conn.execute('PRAGMA foreign_keys=ON')
         return conn
 
+    def checkpoint_identity(self, *, endpoint: str) -> str:
+        if self.provider_binding is None:
+            return ''  # retain the explicit legacy/unbound checkpoint contract
+        from model_provider_evidence import validate_provider_binding
+        provider = validate_provider_binding(self.provider_binding, endpoint=endpoint)
+        _digest(self.runtime_sha256)
+        return hashlib.sha256(_json({'runtime_sha256':self.runtime_sha256,
+                                    'provider_binding':provider}).encode('utf-8')).hexdigest()
+
     def reserve(self, *, endpoint: str, request: Mapping[str, Any], model: str,
                 operation_kind: str = 'INFERENCE') -> dict[str, Any]:
         provider = None

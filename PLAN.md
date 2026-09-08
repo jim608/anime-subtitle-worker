@@ -9,6 +9,11 @@ relabeled PASS or mixed with future M3 runtime results.
 
 ### M3 — Configured model fallback and resource-aware recovery
 
+Batch checkpoint signatures now include validated provider/runtime identity for
+bound M3 requests; same-identity resume is preserved and cross-provider batches
+are not restored. Final SRT-cache lineage and the publication confirmation barrier
+remain required; no Production deployment has occurred.
+
 UNRAID Bash/Docker scheduler adapter is implemented and isolated-tested (36
 related server tests PASS), without host Python or Docker socket mounts. It is
 not installed; scheduling/reboot proof and post-response confirmation remain

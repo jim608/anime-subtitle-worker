@@ -35,6 +35,21 @@ class ModelProviderEvidenceTest(unittest.TestCase):
         self.assertEqual(self.inspection['State']['StartedAt'], binding['started_at'])
         self.assertNotIn('host', binding)
 
+    def test_checkpoint_identity_binds_runtime_and_provider_not_observation_time(self):
+        from dataclasses import replace
+        from model_request_state import ModelRequestContext
+        context = ModelRequestContext(Path('unused-fixture.sqlite3'), 'fixture-stage', 'c'*64, 2,
+                                      provider_binding=self.capture())
+        identity = context.checkpoint_identity(endpoint=self.url)
+        self.assertEqual(identity, replace(context).checkpoint_identity(endpoint=self.url))
+        self.assertNotEqual(identity, replace(context, runtime_sha256='d'*64).checkpoint_identity(endpoint=self.url))
+        inspection = deepcopy(self.inspection)
+        inspection['State']['StartedAt'] = '2026-01-02T00:00:00Z'
+        self.assertNotEqual(identity, replace(context, provider_binding=self.capture(inspection)).checkpoint_identity(endpoint=self.url))
+        self.assertEqual('', replace(context, provider_binding=None).checkpoint_identity(endpoint=self.url))
+        with self.assertRaises(ModelProviderEvidenceError):
+            context.checkpoint_identity(endpoint='http://192.0.2.11:11434/v1')
+
     def test_remote_host_and_wrong_published_port_are_rejected(self):
         with self.assertRaisesRegex(ModelProviderEvidenceError, 'not_on_attested_host'):
             self.capture(hosts=['192.0.2.11'])
