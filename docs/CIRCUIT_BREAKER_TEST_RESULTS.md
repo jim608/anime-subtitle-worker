@@ -1,5 +1,15 @@
 # M2 Circuit Breaker Test Results
 
+## 2026-09-08 candidate evidence (not deployed)
+
+`de6759499eaa0576dc9b9affd2f842109781d4c5`: final-ASR rejection baseline reproduced;
+corrected focused suite 209 PASS; related suite 312 PASS and isolated container
+crash/restart PASS. Existing QC unchanged, missing/consumed repair evidence fails
+closed; source/audio unchanged. Logs and failed invocation retained in
+[bounded acceptance evidence](M2_REMAINING_ACCEPTANCE_20260908.md).
+No new production image or fresh production-runtime 7/7 claim is made. The prior
+runtime's recorded breaker verification remains historical/current-runtime evidence.
+
 ## Current closeout: controlled recovery restored (2026-09-08 04:32 UTC)
 
 - Actual Worker: `65a9670fb1cbeb459939df60755366bd32589e63`.

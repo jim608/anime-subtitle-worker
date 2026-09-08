@@ -1,5 +1,16 @@
 # Incremental Delivery Plan
 
+## Latest bounded acceptance update (2026-09-08 05:10 UTC)
+
+See [remaining acceptance evidence](docs/M2_REMAINING_ACCEPTANCE_20260908.md).
+One autonomous new formal AI traditional-Chinese delivery is verified. Candidate
+`de6759499eaa0576dc9b9affd2f842109781d4c5` fixes durable final-ASR rejection and
+fragment repair-budget evidence; 209 focused / 312 related tests and isolated
+container restart PASS. Deployment is deferred by `planned_change_work_not_idle`;
+the owned pause has been released. Runtime remains `65a9670`, Breaker ARMED,
+existing Gate preserved. Download-chain formal acceptance, held obligations and
+strict Gate completion remain open. This is not whole-project acceptance or M3.
+
 ## Current closeout: controlled recovery restored (2026-09-08 04:32 UTC)
 
 - Actual Worker: `65a9670fb1cbeb459939df60755366bd32589e63`.

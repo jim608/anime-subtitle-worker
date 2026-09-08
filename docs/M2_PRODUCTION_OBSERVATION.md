@@ -1,5 +1,15 @@
 # M2 Production Observation
 
+## Latest bounded acceptance update (2026-09-08 05:10 UTC)
+
+[Evidence and remaining work](M2_REMAINING_ACCEPTANCE_20260908.md): one new formal
+AI traditional-Chinese delivery verified by final-location readback, existing QC
+and processing checksum. This does not count as download/extraction acceptance.
+Candidate `de6759499eaa0576dc9b9affd2f842109781d4c5` is tested but **not deployed**:
+safe idle was unavailable. Owned admission pause released; actual Worker `65a9670`,
+Breaker ARMED and existing frozen Gate remain unchanged. No cohort replacement,
+Gate restart or M2_PRODUCTION_ACCEPTED claim.
+
 ## Current closeout: controlled recovery restored (2026-09-08 04:32 UTC)
 
 - Actual Worker: `65a9670fb1cbeb459939df60755366bd32589e63`.

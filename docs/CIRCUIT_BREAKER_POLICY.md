@@ -1,5 +1,14 @@
 # M2 Circuit Breaker Policy
 
+## 2026-09-08 05:10 UTC boundary clarification
+
+Final ASR rejection evidence and durable fragment repair-budget candidate
+`de6759499eaa0576dc9b9affd2f842109781d4c5` changes no breaker/QC policy.
+It is not deployed: two safe-idle checks found real active work. Only this
+attempt's owned pause was released after unchanged runtime/Gate verification.
+Existing ARMED protection and 67 logical holds remain in force. Details:
+[bounded acceptance](M2_REMAINING_ACCEPTANCE_20260908.md).
+
 ## Current closeout: controlled recovery restored (2026-09-08 04:32 UTC)
 
 - Actual Worker: `65a9670fb1cbeb459939df60755366bd32589e63`.
