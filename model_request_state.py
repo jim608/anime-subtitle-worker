@@ -6,10 +6,11 @@ open while doing network/model work. No PID/age-based ownership reclamation.
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -38,6 +39,7 @@ class ModelRequestContext:
     runtime_sha256: str
     attempt_limit: int
     resource_scope: str = 'unverified'
+    sender_id: str = field(default_factory=lambda: os.environ.get('ANIME_MODEL_SENDER_ID', ''))
 
     def _connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(Path(self.database).resolve().as_uri() + '?mode=rw',
@@ -54,7 +56,8 @@ class ModelRequestContext:
                 endpoint=hashlib.sha256(endpoint.encode('utf-8')).hexdigest(),
                 request_sha256=hashlib.sha256(_json(request).encode('utf-8')).hexdigest(),
                 model=model, runtime_sha256=self.runtime_sha256, attempt_limit=self.attempt_limit,
-                operation_kind=operation_kind, resource_scope=self.resource_scope)
+                operation_kind=operation_kind, resource_scope=self.resource_scope,
+                sender_id=self.sender_id)
         finally:
             conn.close()
 
@@ -142,6 +145,13 @@ def ensure_model_request_schema(conn: sqlite3.Connection) -> None:
                 BEFORE {action} ON pipeline_stage_events
                 WHEN OLD.event_type IN ('MODEL_REQUEST_RESERVED','MODEL_REQUEST_UNKNOWN','MODEL_REQUEST_SETTLED')
                 BEGIN SELECT RAISE(ABORT,'model_request_receipt_immutable'); END""")
+        conn.execute(f"""CREATE TRIGGER IF NOT EXISTS m3_sender_receipt_no_{action.lower()}
+            BEFORE {action} ON pipeline_stage_events
+            WHEN OLD.event_type='MODEL_REQUEST_SENDER_EXITED'
+            BEGIN SELECT RAISE(ABORT,'model_request_receipt_immutable'); END""")
+    conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_m3_sender_exit_token
+        ON pipeline_stage_events(json_extract(payload_json,'$.token'))
+        WHERE event_type='MODEL_REQUEST_SENDER_EXITED'""")
 
 
 @contextmanager
@@ -171,6 +181,49 @@ def _event(conn: sqlite3.Connection, request: Mapping[str, Any], kind: str) -> N
         1.0, _json(request), _timestamp()))
 
 
+def record_model_sender_exit(database: Path, sender_id: str, *,
+                             returncode: int | None, timeout_reaped: bool = False) -> int:
+    """Supervisor-only: called after run() returned or killed AND waited.
+
+    This proves only that this sender cannot issue a later request. It is NOT
+    proof that remote work stopped, and never changes ownership or retry budget.
+    """
+    if not isinstance(sender_id, str) or not re.fullmatch('[0-9a-f]{32}', sender_id):
+        raise ModelRequestStateError('model_request_invalid_sender_id')
+    if (type(timeout_reaped) is not bool or
+            (timeout_reaped and returncode is not None) or
+            (not timeout_reaped and type(returncode) is not int)):
+        raise ModelRequestStateError('model_request_sender_exit_unproven')
+    observed = _timestamp()
+    conn = sqlite3.connect(Path(database).resolve().as_uri() + '?mode=rw', uri=True, timeout=10)
+    try:
+        conn.execute('PRAGMA foreign_keys=ON')
+        with _transaction(conn):
+            rows = conn.execute("""SELECT json_extract(model_json,'$.m3_request')
+                FROM pipeline_stage_attempts INDEXED BY idx_m3_owned_endpoint
+                WHERE json_extract(model_json,'$.m3_request.state') IN ('RESERVED','UNKNOWN')
+                AND json_extract(model_json,'$.m3_request.sender_id')=?""", (sender_id,)).fetchall()
+            written = 0
+            for row in rows:
+                request = json.loads(row[0])
+                previous = conn.execute("""SELECT payload_json FROM pipeline_stage_events
+                    WHERE event_type='MODEL_REQUEST_SENDER_EXITED'
+                    AND json_extract(payload_json,'$.token')=?""", (request['token'],)).fetchone()
+                if previous:
+                    saved = json.loads(previous[0])
+                    if saved['returncode'] != returncode or saved['timeout_reaped'] != timeout_reaped:
+                        raise ModelRequestStateError('model_request_sender_exit_conflict')
+                    continue
+                if observed < request['created_at']:
+                    raise ModelRequestStateError('model_request_sender_exit_clock_invalid')
+                _event(conn, {**request, 'sender_exited_no_later_than': observed,
+                    'returncode': returncode, 'timeout_reaped': timeout_reaped}, 'MODEL_REQUEST_SENDER_EXITED')
+                written += 1
+            return written
+    finally:
+        conn.close()
+
+
 def _write_current(conn: sqlite3.Connection, request: Mapping[str, Any]) -> None:
     row = conn.execute('SELECT model_json FROM pipeline_stage_attempts WHERE stage_attempt_id=?',
                        (request['stage_attempt_id'],)).fetchone()
@@ -188,7 +241,7 @@ def reserve_model_request(conn: sqlite3.Connection, *, stage_attempt_id: str,
                           operation_id: str, endpoint: str, request_sha256: str,
                           model: str, runtime_sha256: str, attempt_limit: int,
                           operation_kind: str = 'INFERENCE',
-                          resource_scope: str = 'unverified') -> dict[str, Any]:
+                          resource_scope: str = 'unverified', sender_id: str = '') -> dict[str, Any]:
     """Commit before dispatch. A replay is evidence only, never a resend permit."""
     if not isinstance(operation_id, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{8,128}", operation_id):
         raise ModelRequestStateError("model_request_invalid_operation")
@@ -202,10 +255,12 @@ def reserve_model_request(conn: sqlite3.Connection, *, stage_attempt_id: str,
         raise ModelRequestStateError('model_request_invalid_operation_kind')
     if resource_scope not in {'unverified', 'shared_gpu', 'independent'}:
         raise ModelRequestStateError('model_request_invalid_resource_scope')
+    if not isinstance(sender_id, str) or (sender_id and not re.fullmatch('[0-9a-f]{32}', sender_id)):
+        raise ModelRequestStateError('model_request_invalid_sender_id')
     basis = dict(stage_attempt_id=stage_attempt_id, operation_id=operation_id,
                  endpoint=endpoint, request_sha256=request_sha256, model=model,
                  runtime_sha256=runtime_sha256, attempt_limit=attempt_limit,
-                 operation_kind=operation_kind, resource_scope=resource_scope)
+                 operation_kind=operation_kind, resource_scope=resource_scope, sender_id=sender_id)
     with _transaction(conn):
         replay = conn.execute("""SELECT payload_json FROM pipeline_stage_events
             WHERE event_type='MODEL_REQUEST_RESERVED' AND json_extract(payload_json,'$.operation_id')=?""",
@@ -261,7 +316,8 @@ def record_model_request_result(conn: sqlite3.Connection, *, token: str,
         if proof.get('cancelled_before_start') is not True:
             raise ModelRequestStateError("model_request_cancellation_unproven")
     elif outcome == 'UNKNOWN':
-        if proof.get('reason_code') not in {'transport_error','hard_timeout','process_interrupted'}:
+        if proof.get('reason_code') not in {'transport_error','hard_timeout','process_interrupted',
+                                          'provider_completion_unproven'}:
             raise ModelRequestStateError("model_request_unknown_reason_invalid")
     else:
         raise ModelRequestStateError("model_request_invalid_outcome")

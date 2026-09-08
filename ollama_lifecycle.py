@@ -72,6 +72,11 @@ def unload_managed_translation_models(
                 active_opener,
             )
             if receipt is not None:
+                if response.get('done') is not True:
+                    request_context.record(receipt['token'], 'UNKNOWN',
+                        {'reason_code': 'provider_completion_unproven'})
+                    logger.warning('Managed model unload response did not prove completion; retaining ownership')
+                    continue
                 request_context.record(receipt['token'], 'RESPONSE', {
                     'response_sha256': hashlib.sha256(json.dumps(response, sort_keys=True).encode('utf-8')).hexdigest(),
                 })

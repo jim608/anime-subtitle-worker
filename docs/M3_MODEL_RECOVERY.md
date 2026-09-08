@@ -61,6 +61,43 @@ for the existing job/checkpoint/recovery stores.
 
 ## Remaining engineering and acceptance
 
+### Sender quiescence and semantic unload completion (candidate)
+
+Review confirms the existing host runtime attestation binds Worker/WebUI, not
+the model provider generation. A provider restart timestamp after reservation
+alone would be insufficient: a still-live sender could dispatch after that
+restart. Controlled resolution must also prove the sender can issue no later
+request. No provider reset or UNKNOWN-clear operation was performed.
+
+The existing `_process_video_subprocess` supervisor now supplies a unique
+`ANIME_MODEL_SENDER_ID`, captured in each request. Only after `subprocess.run`
+returns, or its timeout kill-and-wait completes, the supervisor appends immutable
+`MODEL_REQUEST_SENDER_EXITED` events to the existing stage event store. A launch
+OSError does not assert exit. Events retain a time upper bound, return code or
+reaped-timeout status, and request token. Replays do not duplicate evidence;
+conflicting exit claims fail closed. This evidence never settles remote requests
+or replenishes their budgets. Missing evidence keeps the original hold.
+
+The actual process-loss HTTP test now records this exit evidence after join and
+still proves no duplicate send. A separate real `subprocess.run` timeout test
+exercises the production supervision wrapper using only an isolated child.
+Server logs: `sender-exit-evidence-server.log` (214 related tests PASS), and
+`sender-real-reap-server.log` (5 final targeted tests PASS; overlapping, not summed).
+
+An additional reproduced unload defect is fixed: HTTP response without boolean
+`done=true` retains UNKNOWN (`provider_completion_unproven`) instead of claiming
+release. Related server tests: `unload-terminal-evidence-server.log`, 41 PASS.
+The [Ollama generation API](https://docs.ollama.com/api/generate) defines `done` as
+generation completion; [the ps API](https://docs.ollama.com/api/ps) lists resident
+models, not a per-request cancellation certificate. Neither residency nor an
+unload of another request may substitute for the missing cancellation evidence.
+
+Still required: bind provider identity before dispatch through trusted host
+evidence, verify provider quiescence/termination after the proven sender exit,
+and commit an authorized resolution via the existing recovery boundary. Provider
+generation changes must respect baseline/Gate policy. No naive stopped-PID,
+elapsed-time or restart-date release is allowed. Production deployment pending.
+
 ### Real process-loss and Docker restart evidence (isolated, not production)
 
 `test_model_request_restart.py` uses a real loopback HTTP server and spawned

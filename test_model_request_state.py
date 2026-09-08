@@ -228,6 +228,21 @@ class ModelRequestStateTest(unittest.TestCase):
         with self.assertRaisesRegex(ModelRequestStateError, 'ownership_unresolved'):
             self.reserve(operation_id='operation-two')
 
+    def test_sender_exit_is_immutable_evidence_not_remote_completion(self):
+        from model_request_state import record_model_sender_exit
+        receipt = self.reserve(sender_id='e'*32)
+        self.assertEqual(1, record_model_sender_exit(self.database, 'e'*32, returncode=-9))
+        self.assertEqual(0, record_model_sender_exit(self.database, 'e'*32, returncode=-9))
+        self.assertEqual(0, record_model_sender_exit(self.database, 'f'*32, returncode=0))
+        with self.assertRaisesRegex(ModelRequestStateError, 'ownership_unresolved'):
+            self.reserve(operation_id='operation-two')
+        with self.assertRaisesRegex(ModelRequestStateError, 'sender_exit_conflict'):
+            record_model_sender_exit(self.database, 'e'*32, returncode=0)
+        with self.assertRaisesRegex(sqlite3.IntegrityError, 'receipt_immutable'):
+            self.store._conn.execute("DELETE FROM pipeline_stage_events WHERE event_type='MODEL_REQUEST_SENDER_EXITED'")
+        self.store.rollback()
+        self.assertEqual(receipt['token'], self.reserve(sender_id='e'*32)['token'])
+
     def test_unproven_cancellation_keeps_owner(self):
         receipt = self.reserve()
         with self.assertRaisesRegex(ModelRequestStateError, 'cancellation_unproven'):

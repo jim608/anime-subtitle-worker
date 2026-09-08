@@ -212,6 +212,16 @@ class TranslationDurableRequestTest(unittest.TestCase):
             self.translator(self.response)._request_translation('1\tsource')
         self.assertEqual([], self.calls)
 
+    def test_unload_nonterminal_http_response_retains_owner(self):
+        from ollama_lifecycle import unload_managed_translation_models
+        config = self.unload_config()
+        with patch('ollama_lifecycle._running_models', side_effect=[('primary',), ()]), \
+                patch('ollama_lifecycle._post_json', return_value={'done': False}):
+            self.assertEqual((), unload_managed_translation_models(config, logging.getLogger('test'),
+                request_context=self.context, model_names=('primary',)))
+        self.assertEqual('UNKNOWN', self.receipts()[-1]['state'])
+        self.assertEqual('provider_completion_unproven', self.receipts()[-1]['result_evidence']['reason_code'])
+
     def test_timeout_completion_keeps_original_context(self):
         release, finished = threading.Event(), threading.Event()
         def create(**kwargs):

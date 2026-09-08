@@ -4,18 +4,21 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import logging
 import multiprocessing
+import os
 from pathlib import Path
 import threading
 from types import SimpleNamespace
 import unittest
 
-from model_request_state import ModelRequestContext, pending_model_resource_request
+from model_request_state import (ModelRequestContext, pending_model_resource_request,
+                                 record_model_sender_exit)
 import test_model_request_state as fixtures
 
 
-def _request_in_child(database, stage_id, endpoint, result):
+def _request_in_child(database, stage_id, endpoint, result, sender_id):
     from openai import OpenAI
     from translator import SubtitleTranslator, TranslationRequestInFlightError
+    os.environ['ANIME_MODEL_SENDER_ID'] = sender_id
     translator = object.__new__(SubtitleTranslator)
     translator.config = SimpleNamespace(translator_base_url=endpoint,
         pipeline_job_store_required=True, translation_request_hard_timeout_seconds=30)
@@ -80,7 +83,7 @@ class ModelRequestRestartTest(unittest.TestCase):
         children = []
         try:
             first = context.Process(target=_request_in_child,
-                args=(str(fixture.database), stage_id, endpoint, result))
+                args=(str(fixture.database), stage_id, endpoint, result, 'e'*32))
             children.append(first)
             first.start()
             self.assertTrue(started.wait(15), 'fixture model never received the request')
@@ -92,8 +95,10 @@ class ModelRequestRestartTest(unittest.TestCase):
             first.join(5)
             self.assertFalse(first.is_alive())
             self.assertFalse(answered.is_set())
+            self.assertEqual(1, record_model_sender_exit(fixture.database, 'e'*32,
+                                                        returncode=first.exitcode))
             second = context.Process(target=_request_in_child,
-                args=(str(fixture.database), stage_id, endpoint, result))
+                args=(str(fixture.database), stage_id, endpoint, result, 'f'*32))
             children.append(second)
             second.start()
             self.assertEqual('ownership_refused', result.get(timeout=15))

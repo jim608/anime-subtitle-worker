@@ -67,6 +67,13 @@ dispatch, and preserves fixture source/checkpoint. No production container was
 restarted. Post-crash remote cancellation attestation and production deployment
 acceptance remain open; isolated restart is not formal output delivery.
 
+Ninth increment adds immutable sender-exit evidence at the existing subprocess
+supervisor boundary, including a real timeout kill-and-wait test. Remote ownership
+remains held. Ollama unload now requires terminal `done=true`. 214 related and
+5 final targeted server tests PASS (overlap, not summed). Provider generation
+binding/quiescence proof and controlled resolution are still required; no
+Production deployment or model-provider restart has occurred.
+
 Extend the existing configured ASR/translation routes and resource admission,
 not a parallel queue or a wholesale backend rewrite. Preserve compatibility,
 source safety, strict QC and existing durable checkpoint/recovery contracts.

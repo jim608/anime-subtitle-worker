@@ -990,6 +990,20 @@ def _process_video_with_policy(
     )
 
 
+def _record_model_sender_exit(config, sender_id, logger, *, returncode=None, timeout_reaped=False):
+    if not sender_id:
+        return
+    try:
+        from model_request_state import record_model_sender_exit
+        from scan_state import scan_state_path
+        record_model_sender_exit(scan_state_path(config), sender_id,
+                                 returncode=returncode, timeout_reaped=timeout_reaped)
+    except Exception:
+        # Failure to save this secondary proof cannot turn a child failure into
+        # success or release remote ownership. The durable hold remains intact.
+        logger.warning('Could not persist model sender exit evidence; retaining remote ownership')
+
+
 def _process_video_subprocess(
     config,
     video,
@@ -1050,6 +1064,13 @@ def _process_video_subprocess(
         environment[ACCEPTANCE_ATTEMPT_CONTEXT_ENV] = (
             serialize_acceptance_attempt_context(acceptance_attempt_context)
         )
+    model_sender_id = ''
+    if bool(getattr(config, 'pipeline_job_store_required', False)):
+        import uuid
+        model_sender_id = uuid.uuid4().hex
+        if environment is None:
+            environment = os.environ.copy()
+        environment['ANIME_MODEL_SENDER_ID'] = model_sender_id
     try:
         completed = subprocess.run(
             command,
@@ -1058,6 +1079,7 @@ def _process_video_subprocess(
             env=environment,
         )
     except subprocess.TimeoutExpired:
+        _record_model_sender_exit(config, model_sender_id, logger, timeout_reaped=True)
         detail = f"AI subprocess timed out and was terminated after {timeout}s"
         _persist_isolated_resource_failure(
             config,
@@ -1081,6 +1103,7 @@ def _process_video_subprocess(
         logger.exception("Failed to start AI subprocess for %s: %s", video, exc)
         return False
 
+    _record_model_sender_exit(config, model_sender_id, logger, returncode=completed.returncode)
     if completed.returncode == 0:
         logger.info("Isolated AI subprocess completed. video=%s", video)
         return True
