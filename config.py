@@ -72,6 +72,7 @@ class AppConfig:
     config_path: Path | None = None
     translator_fallback_models: list[str] = field(default_factory=list)
     translator_ollama_auto_unload_enabled: bool = False
+    translator_resource_scope: str = "unverified"
     translator_ollama_unload_timeout_seconds: float = 15.0
     translation_request_hard_timeout_seconds: int = 180
     translation_request_max_tokens: int = 512
@@ -601,6 +602,9 @@ def load_config(config_path: str | Path) -> AppConfig:
         raise ConfigError("Config file must contain a YAML mapping.")
 
     raw = _expand_env_values(raw)
+    scope = raw.get('translator_resource_scope', 'unverified')
+    if not isinstance(scope, str) or scope not in {'unverified', 'shared_gpu', 'independent'}:
+        raise ConfigError('translator_resource_scope must be unverified, shared_gpu or independent')
 
     missing = sorted(REQUIRED_FIELDS - set(raw))
     if missing:
@@ -627,6 +631,7 @@ def load_config(config_path: str | Path) -> AppConfig:
         translator_api_key=_as_str(raw, "translator_api_key"),
         translator_model=_as_str(raw, "translator_model"),
         translator_fallback_models=_optional_str_list(raw, "translator_fallback_models"),
+        translator_resource_scope=_as_optional_str(raw, "translator_resource_scope", "unverified"),
         translator_timeout_seconds=_as_positive_int(raw, "translator_timeout_seconds"),
         translator_ollama_auto_unload_enabled=_optional_bool(
             raw,

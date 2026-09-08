@@ -37,6 +37,7 @@ class ModelRequestContext:
     stage_attempt_id: str
     runtime_sha256: str
     attempt_limit: int
+    resource_scope: str = 'unverified'
 
     def _connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(Path(self.database).resolve().as_uri() + '?mode=rw',
@@ -53,7 +54,7 @@ class ModelRequestContext:
                 endpoint=hashlib.sha256(endpoint.encode('utf-8')).hexdigest(),
                 request_sha256=hashlib.sha256(_json(request).encode('utf-8')).hexdigest(),
                 model=model, runtime_sha256=self.runtime_sha256, attempt_limit=self.attempt_limit,
-                operation_kind=operation_kind)
+                operation_kind=operation_kind, resource_scope=self.resource_scope)
         finally:
             conn.close()
 
@@ -70,6 +71,29 @@ def _json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
+def pending_model_resource_request(database: Path, *, endpoint: str | None = None) -> dict[str, Any] | None:
+    """Bounded read-only authority check, including old endpoint revisions.
+
+    Without an endpoint, independent remote requests do not reserve local GPU.
+    Missing historical scope is unverified, not proof of resource independence.
+    The pending-owner partial index covers the state predicate; no Queue scan.
+    """
+    conn = sqlite3.connect(Path(database).resolve().as_uri() + '?mode=ro', uri=True, timeout=5)
+    try:
+        predicate = "COALESCE(json_extract(model_json,'$.m3_request.resource_scope'),'unverified') != 'independent'"
+        parameters = ()
+        if endpoint is not None:
+            predicate = "json_extract(model_json,'$.m3_request.endpoint')=?"
+            parameters = (hashlib.sha256(endpoint.strip().rstrip('/').encode('utf-8')).hexdigest(),)
+        row = conn.execute("""SELECT json_extract(model_json,'$.m3_request')
+            FROM pipeline_stage_attempts INDEXED BY idx_m3_owned_endpoint
+            WHERE json_extract(model_json,'$.m3_request.state') IN ('RESERVED','UNKNOWN')
+            AND """ + predicate + ' LIMIT 1', parameters).fetchone()
+        return json.loads(row[0]) if row else None
+    finally:
+        conn.close()
+
+
 def _digest(value: str) -> str:
     if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
         raise ModelRequestStateError("model_request_invalid_digest")
@@ -83,29 +107,23 @@ def _timestamp() -> float:
     return now
 
 
-@contextmanager
-def _transaction(conn: sqlite3.Connection) -> Iterator[None]:
-    if conn.in_transaction:
-        raise ModelRequestStateError("model_request_requires_own_short_transaction")
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        # Additive indexes only: ownership is stage model metadata and receipts
-        # are existing immutable pipeline_stage_events, with the original FKs.
-        conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_m3_owned_endpoint
+def ensure_model_request_schema(conn: sqlite3.Connection) -> None:
+    """Additive migration under the caller's existing schema transaction."""
+    conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_m3_owned_endpoint
             ON pipeline_stage_attempts(json_extract(model_json,'$.m3_request.endpoint'))
             WHERE json_extract(model_json,'$.m3_request.state') IN ('RESERVED','UNKNOWN')""")
-        conn.execute("""CREATE INDEX IF NOT EXISTS idx_m3_request_budget
+    conn.execute("""CREATE INDEX IF NOT EXISTS idx_m3_request_budget
             ON pipeline_stage_events(job_id,event_type,json_extract(payload_json,'$.budget_key'))""")
-        conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_m3_request_operation
+    conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_m3_request_operation
             ON pipeline_stage_events(json_extract(payload_json,'$.operation_id'))
             WHERE event_type='MODEL_REQUEST_RESERVED'""")
-        conn.execute("""CREATE INDEX IF NOT EXISTS idx_m3_request_token
+    conn.execute("""CREATE INDEX IF NOT EXISTS idx_m3_request_token
             ON pipeline_stage_events(event_type,json_extract(payload_json,'$.token'))""")
-        conn.execute("""CREATE TRIGGER IF NOT EXISTS m3_preserve_owned_request
+    conn.execute("""CREATE TRIGGER IF NOT EXISTS m3_preserve_owned_request
             BEFORE DELETE ON pipeline_stage_attempts
             WHEN json_extract(OLD.model_json,'$.m3_request.state') IN ('RESERVED','UNKNOWN')
             BEGIN SELECT RAISE(ABORT,'model_request_ownership_unresolved'); END""")
-        conn.execute("""CREATE TRIGGER IF NOT EXISTS m3_preserve_request_metadata
+    conn.execute("""CREATE TRIGGER IF NOT EXISTS m3_preserve_request_metadata
             BEFORE UPDATE OF model_json ON pipeline_stage_attempts
             WHEN json_extract(OLD.model_json,'$.m3_request.state') IN ('RESERVED','UNKNOWN')
             AND json_extract(OLD.model_json,'$.m3_request') IS NOT json_extract(NEW.model_json,'$.m3_request')
@@ -119,11 +137,20 @@ def _transaction(conn: sqlite3.Connection) -> Iterator[None]:
                 )
             )
             BEGIN SELECT RAISE(ABORT,'model_request_ownership_unresolved'); END""")
-        for action in ('DELETE', 'UPDATE'):
-            conn.execute(f"""CREATE TRIGGER IF NOT EXISTS m3_request_receipt_no_{action.lower()}
+    for action in ('DELETE', 'UPDATE'):
+        conn.execute(f"""CREATE TRIGGER IF NOT EXISTS m3_request_receipt_no_{action.lower()}
                 BEFORE {action} ON pipeline_stage_events
                 WHEN OLD.event_type IN ('MODEL_REQUEST_RESERVED','MODEL_REQUEST_UNKNOWN','MODEL_REQUEST_SETTLED')
                 BEGIN SELECT RAISE(ABORT,'model_request_receipt_immutable'); END""")
+
+
+@contextmanager
+def _transaction(conn: sqlite3.Connection) -> Iterator[None]:
+    if conn.in_transaction:
+        raise ModelRequestStateError("model_request_requires_own_short_transaction")
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        ensure_model_request_schema(conn)
         yield
         conn.commit()
     except BaseException:
@@ -160,7 +187,8 @@ def _write_current(conn: sqlite3.Connection, request: Mapping[str, Any]) -> None
 def reserve_model_request(conn: sqlite3.Connection, *, stage_attempt_id: str,
                           operation_id: str, endpoint: str, request_sha256: str,
                           model: str, runtime_sha256: str, attempt_limit: int,
-                          operation_kind: str = 'INFERENCE') -> dict[str, Any]:
+                          operation_kind: str = 'INFERENCE',
+                          resource_scope: str = 'unverified') -> dict[str, Any]:
     """Commit before dispatch. A replay is evidence only, never a resend permit."""
     if not isinstance(operation_id, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{8,128}", operation_id):
         raise ModelRequestStateError("model_request_invalid_operation")
@@ -172,10 +200,12 @@ def reserve_model_request(conn: sqlite3.Connection, *, stage_attempt_id: str,
         raise ModelRequestStateError("model_request_invalid_budget")
     if operation_kind not in {'INFERENCE', 'UNLOAD'}:
         raise ModelRequestStateError('model_request_invalid_operation_kind')
+    if resource_scope not in {'unverified', 'shared_gpu', 'independent'}:
+        raise ModelRequestStateError('model_request_invalid_resource_scope')
     basis = dict(stage_attempt_id=stage_attempt_id, operation_id=operation_id,
                  endpoint=endpoint, request_sha256=request_sha256, model=model,
                  runtime_sha256=runtime_sha256, attempt_limit=attempt_limit,
-                 operation_kind=operation_kind)
+                 operation_kind=operation_kind, resource_scope=resource_scope)
     with _transaction(conn):
         replay = conn.execute("""SELECT payload_json FROM pipeline_stage_events
             WHERE event_type='MODEL_REQUEST_RESERVED' AND json_extract(payload_json,'$.operation_id')=?""",

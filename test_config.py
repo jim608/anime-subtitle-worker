@@ -7,6 +7,14 @@ from config import ConfigError, load_config
 
 
 class ConfigEnvironmentExpansionTests(unittest.TestCase):
+    def test_model_resource_scope_rejects_invalid_or_structured_values(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / 'config.yaml'
+            for value in ('invented', '[shared_gpu]', 'null'):
+                path.write_text('translator_resource_scope: ' + value, encoding='utf-8')
+                with self.assertRaisesRegex(ConfigError, 'translator_resource_scope'):
+                    load_config(path)
+
     def test_shipped_config_omits_optional_op_ed_prompt_for_rollback_compatibility(self):
         import yaml
 

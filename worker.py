@@ -6285,7 +6285,8 @@ class VideoWorker:
                                    'config': configuration_fingerprint(self.config)}, sort_keys=True)
             self._translator._request_context = ModelRequestContext(
                 database, str(attempt['stage_attempt_id']),
-                hashlib.sha256(identity.encode('utf-8')).hexdigest(), self.config.max_retries)
+                hashlib.sha256(identity.encode('utf-8')).hexdigest(), self.config.max_retries,
+                str(getattr(self.config, 'translator_resource_scope', 'unverified')))
         return self._translator
 
     def _load_resource_launch_plan(self, video: Path) -> dict[str, object] | None:

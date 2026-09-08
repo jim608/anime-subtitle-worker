@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 import math
 from pathlib import Path
@@ -30,6 +30,28 @@ RESOURCE_PLAN_CONTRACT = "resource-launch-plan-v1"
 RESOURCE_SCHEMA_VERSION = 1
 RESOURCE_PLAN_MAX_AGE_SECONDS = 60.0
 _MAX_JSON_BYTES = 128 * 1024
+
+
+def _model_request_hold(config: Any, stage: str) -> dict[str, Any] | None:
+    if not bool(getattr(config, 'pipeline_job_store_required', False)):
+        return None
+    normalized = str(stage).strip().casefold()
+    if normalized not in GPU_JOB_STAGES and normalized != 'translation':
+        return None
+    from model_request_state import pending_model_resource_request
+    database = Path(str(getattr(config, 'scanner_state_path', 'scanner_state.sqlite3')))
+    if not database.is_absolute():
+        database = Path(config.work_path) / database
+    try:
+        endpoint = str(getattr(config, 'translator_base_url', '')) if normalized == 'translation' else None
+        pending = pending_model_resource_request(database, endpoint=endpoint)
+    except Exception:
+        return {'reason_code': 'model_request_authority_unavailable'}
+    if pending is None:
+        return None
+    return {'reason_code': 'model_request_resource_unresolved',
+            'token': pending['token'], 'state': pending['state'],
+            'resource_scope': pending.get('resource_scope', 'unverified')}
 
 
 def resource_admission_state_path(config: Any) -> Path:
@@ -100,6 +122,13 @@ def build_resource_launch_plan(
         previous_state=previous_hysteresis,
         config=policy,
     )
+    request_hold = _model_request_hold(config, stage)
+    if request_hold is not None:
+        decision = replace(decision, tier='unavailable', allow_new_job=False,
+            asr_model=None, asr_compute_type=None,
+            retry_after=max(1.0, float(getattr(config, 'resource_admission_unavailable_retry_seconds', 60))),
+            reason_codes=(*decision.reason_codes, request_hold['reason_code']),
+            diagnostics={**decision.diagnostics, 'model_request_hold': request_hold})
     pressure = decision.tier != "green" or decision.asr_compute_type != primary_compute
     effective = {
         "concurrency": 1,
@@ -248,6 +277,9 @@ def validate_authorized_resource_launch_plan(
         raise ValueError("resource launch plan decision identity mismatch")
     if _canonical_json(authorized) != _canonical_json(parsed):
         raise ValueError("resource launch plan differs from the persisted decision")
+    request_hold = _model_request_hold(config, str(parsed['stage']))
+    if request_hold is not None:
+        raise ValueError(request_hold['reason_code'])
     return parsed
 
 

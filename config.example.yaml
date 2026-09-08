@@ -2,6 +2,12 @@
 # Merge this safe fragment into an existing complete config.yaml.  It contains
 # no server paths, ports, credentials, or deployment-specific values.
 
+# M3 model resource identity. Keep unverified unless deployment evidence proves
+# shared_gpu (same physical Worker GPU) or independent (separate model resource).
+# UNKNOWN requests in shared/unverified scopes defer local GPU admission, not
+# unrelated CPU work. This declaration never releases an existing request hold.
+translator_resource_scope: unverified
+
 # Keep disabled until the durable Job Store migration and integration have
 # been deployed together.  Enabling requires pipeline_job_store_required=true.
 source_analyzer_enabled: false

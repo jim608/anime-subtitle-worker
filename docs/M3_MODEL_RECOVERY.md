@@ -61,6 +61,42 @@ for the existing job/checkpoint/recovery stores.
 
 ## Remaining engineering and acceptance
 
+### Shared-resource admission increment (candidate, not deployed)
+
+Read-only server topology evidence identifies the configured translation endpoint
+as the Tower Ollama container, with Worker and Ollama both assigned the host's
+single RTX 3060. Evidence: `endpoint-topology-readonly.log` and
+`endpoint-gpu-binding-readonly.log` under the M3 log root. No provider/container
+was restarted or reconfigured to gather this evidence.
+
+New `translator_resource_scope` accepts `unverified` (compatible conservative
+default), `shared_gpu`, or `independent`. Deployment must prove independence
+before choosing it; an endpoint URL alone is not sufficient. The scope is saved
+with each request, so changing endpoint/configuration does not erase old holds.
+Production `config.yaml` was not changed; the example fragment documents the
+setting. Actual baseline/configuration handoff is still pending.
+
+Existing resource admission now defers GPU launches for unresolved shared or
+unverified requests, even with free VRAM, using existing bounded retry intervals.
+Explicit independent requests do not block local GPU; their own translation
+endpoint is still protected. Unrelated CPU stages are not blocked. Worker checks
+again through `validate_authorized_resource_launch_plan` after acquiring its
+existing GPU kernel lease. No second resource lock or Queue was introduced.
+
+The authority lookup is read-only, LIMIT 1, and requires the pending-owner partial
+index rather than scanning Queue/history. Index/trigger installation now runs in
+the existing Pipeline schema migration savepoint before first admission. Missing
+or unreadable authority fails closed. Rollback must retain these additive receipt
+protections; do not delete historical receipts to make an older consumer work.
+
+342 focused/shared server-isolated tests PASS in
+`durable-resource-admission-server.log`; final configuration validation and seven
+new resource-boundary tests PASS (16 targeted tests) in
+`durable-resource-config-final-server.log`. These runs overlap and are not summed.
+Still required: controlled UNKNOWN resolution based on actual remote completion
+or cancellation evidence, explicit route/alias contracts, restart acceptance,
+runtime attestation, safe deployment and bounded live proof. No M3 acceptance yet.
+
 ### Worker/Translator binding increment (candidate, not deployed)
 
 Lifecycle follow-up: managed Ollama unload now uses the same durable endpoint

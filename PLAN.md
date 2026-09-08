@@ -47,6 +47,14 @@ is refused and ambiguous unload outcomes remain UNKNOWN. 327 server-isolated
 tests PASS. Shared-device admission and controlled UNKNOWN reconciliation are
 still required before safe deployment.
 
+Sixth candidate increment: read-only topology confirms Tower Ollama and Worker
+share the single RTX 3060. Request resource scopes now feed existing admission
+and the post-kernel-lease recheck, with bounded indexed authority reads. CPU work
+and proven independent model resources remain separate. 342 server-isolated
+related tests plus 16 final targeted tests PASS (overlapping suites, not summed).
+Production configuration/runtime unchanged. UNKNOWN controlled resolution,
+route contracts and deployment/live acceptance remain open.
+
 Extend the existing configured ASR/translation routes and resource admission,
 not a parallel queue or a wholesale backend rewrite. Preserve compatibility,
 source safety, strict QC and existing durable checkpoint/recovery contracts.

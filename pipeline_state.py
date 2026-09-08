@@ -827,6 +827,8 @@ def ensure_pipeline_state_schema(connection: sqlite3.Connection) -> None:
     connection.execute(f"SAVEPOINT {savepoint}")
     try:
         _ensure_pipeline_state_schema_unprotected(connection)
+        from model_request_state import ensure_model_request_schema
+        ensure_model_request_schema(connection)
         issues = _schema_issues(connection, include_m2=True)
         if issues:
             raise PipelineStateError(
