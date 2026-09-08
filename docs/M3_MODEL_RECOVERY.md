@@ -1,5 +1,41 @@
 # M3 — configured model recovery
 
+## Review convergence deployed and proven — 2026-09-08 12:19 UTC
+
+Actual Worker738e96eafec66a6f62db31b9247cd58bf0aec6df; WebUI
+175a02a7bad46e0b6fa2372c59f39e8dd272911e unchanged. Image
+sha256:e34372dc6ae9f1e28b293ce6f9dd61414f7c0b292ad32588f43dcd2613f1c617.
+Safe deployment20260908T121255Z-1408116 exit0; backup retained.
+Actual-image439 related tests PASS; fresh isolated breakers7/7 PASS.
+Official recovery exit0, ARMED/admission resumed,68 holds preserved/no new deltas.
+Reconciliation m3-recon-review-convergence-20260908T1210, receipt SHA
+ddd2a2d3870721ac8b7ae451bc17364cc672c390a7721542f83ab6585c793b57.
+7069 recoverable identities/6960 retained other states; not delivery counts.
+Original planned receipt SHA6828376c5f5f6c1988f153716dc7ecfb4b3af141d01d77f6e5601423acd6124c.
+New Gate m2-gate-20260908T121706917079Z-5900a7525f,
+start2026-09-08T12:17:06.917079Z, baseline
+m2-guardrail-v1:6decf6663590b59db7e8351a, initialized0/20. Old evidence retained.
+
+REAL FIX PROOF: automatic claim at1788869865.229487; pipeline job
+9f5394b655b340b2822cc43337dbcaf0 source attempta6ff6421e3dc4d388a2858011fa3965f
+SUCCEEDED with checkpoint cca481408e327523b1620fa18f0cdd369990d7bbc81a2ea02077d237abd0db10
+(byte hash verified), then rejected old model cache lineage. Queue paused/manual_review,
+attempts1 AND formal Pipeline NEEDS_REVIEW now agree. No synthetic second attempt,
+no legacy-cache bypass or false completion. Successor73ffcf607606424c9799d69b23e2d262
+also automatically claimed at1788869904.9252076, settled NEEDS_REVIEW for materialized
+subtitle structural QC; no protection relaxed. First two frozen members remain
+reviews/strict0 and cannot be replaced. No MODEL events, no new formal delivery.
+This validates the convergence fix, not M3 model-output or M2 production acceptance.
+
+Evidence root /logs/m3-review-convergence-20260908T1210/:
+safe-deploy.log/deploy.exit, actual-runtime-before-recovery.json,
+actual-image-validation.log, attestation.json, recovery-closeout.json,
+post-cycle-probe.json, real-review-convergence.json.
+FI /logs/m2-guardrail-fi-20260908T121659158625Z-6a5f8c00/result.json.
+Next focus real eligible model processing without bypassing old-cache lineage,
+source/QC holds, resource limits or frozen cohort membership. Do not redeploy docs.
+
+
 ## Pending post-source review convergence fix
 
 Bounded actual-baseline evidence in /logs/m3-writer-reservation-20260908T1155/

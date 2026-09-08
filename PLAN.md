@@ -2,6 +2,12 @@
 
 ## Active Goal — M3 authorized (2026-09-08)
 
+12:19UTC runtime738e96e safely deployed/439actualtests/FI7/7/ARMED/resumed.
+Real post-source cache review now converges Queue and Pipeline NEEDS_REVIEW,
+successful checkpoint preserved,attempts1; automatic successor also verified.
+68holds/no newdelta; newGate121706 separateoldresults. NoMODEL events/output;
+M3 real model acceptance and M2 delivery/Gate remain incomplete.
+
 Pending narrow parent post-source review convergence fix: exact real jobs showed
 paused/manual_review Queue but SUBTITLE_DETECTION formal state after source success.
 Deployed-image red reproduction;399 server regressions plus reopen/replay PASS.
