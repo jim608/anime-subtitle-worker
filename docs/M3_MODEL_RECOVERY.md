@@ -61,6 +61,31 @@ for the existing job/checkpoint/recovery stores.
 
 ## Remaining engineering and acceptance
 
+### Real process-loss and Docker restart evidence (isolated, not production)
+
+`test_model_request_restart.py` uses a real loopback HTTP server and spawned
+sender processes. The server receives the request before the first sender is
+terminated. A second process is refused without a second HTTP request; the
+server's later unobserved response does not clear ownership. The source hash,
+mtime and committed non-empty checkpoint hash remain unchanged. This test PASSes
+locally and in the actual Worker image on the server (`http-process-loss-server.log`).
+
+`m3_model_request_restart_probe.py` also passed a real Docker restart across two
+boots with the same dedicated fixture volume. The named test container was
+verified running, with only `/candidate:ro` and `/fixture:rw` mounts, before
+restart. Second boot exited 0, preserved UNKNOWN/token/checkpoint/source, and
+refused duplicate dispatch. Evidence directory:
+`/logs/m3-baseline-20260908T070237Z/docker-request-restart-U48jOk/` includes mount
+evidence, pre-restart receipt, restart log, final state, result JSON and cleanup.
+Only that exited, label-verified test container was removed; all fixture and log
+evidence remains on the server. Production Worker/Ollama were not restarted.
+
+These tests prove safe refusal after lost ownership, not a remote cancellation
+certificate or successful production delivery. The known positive resume paths
+remain a response observed and committed by the original callback, or confirmed
+Future cancellation before execution. Controlled post-crash resolution still
+needs authoritative provider evidence; no age/PID/VRAM inference was added.
+
 ### Route authorization and cancellation evidence (candidate, not deployed)
 
 Read-only model discovery on the actual configured provider confirms that both

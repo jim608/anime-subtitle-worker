@@ -1,5 +1,16 @@
 # M2 remaining acceptance — 2026-09-08
 
+## M3 isolation work boundary (2026-09-08 08:10 UTC)
+
+The explicitly authorized M3 candidate now has isolated model ownership,
+fallback/resource and real process/container restart evidence; see
+`docs/M3_MODEL_RECOVERY.md`. None of these fixtures count toward M2 formal AI,
+download/extraction delivery or the frozen cohort. The restart targeted only a
+dedicated fixture container, not Production Worker/Ollama. No production
+deployment, configuration edit, Gate reconstruction or source-hold release was
+performed in this increment. The historical runtime snapshot below is not a
+fresh Gate-progress poll. M2 remains incomplete.
+
 ## Current closeout: deployed and recovered (2026-09-08 06:28 UTC)
 
 This section supersedes the earlier deployment deferral below. **M2 remains incomplete**:

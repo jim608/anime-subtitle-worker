@@ -61,6 +61,12 @@ cancellation records NOT_DISPATCHED; submit failure without a Future retains
 UNKNOWN. 345 server-isolated tests PASS. Post-dispatch UNKNOWN cancellation
 attestation and real restart/deployment acceptance remain unproven.
 
+Eighth evidence increment: real HTTP sender-process loss and a real isolated
+Docker restart both PASS. Restart preserves pending ownership, prevents duplicate
+dispatch, and preserves fixture source/checkpoint. No production container was
+restarted. Post-crash remote cancellation attestation and production deployment
+acceptance remain open; isolated restart is not formal output delivery.
+
 Extend the existing configured ASR/translation routes and resource admission,
 not a parallel queue or a wholesale backend rewrite. Preserve compatibility,
 source safety, strict QC and existing durable checkpoint/recovery contracts.
