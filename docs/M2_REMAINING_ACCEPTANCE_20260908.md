@@ -1,5 +1,41 @@
 # M2 remaining acceptance — 2026-09-08
 
+## Bounded post-deploy evidence — 2026-09-08 11:26 UTC
+
+No additional runtime change, deployment, Gate reset or hold release in this
+check. Worker remains the deployed 5f379e8 baseline described above.
+
+- Four exact historical download entries (260:1/2/3/8) were present in SQLite;
+  their full payloads matched the pre-M3 deployment backup before this check.
+  A missing optional `status` key is not a missing obligation.
+- One bounded primary-source query succeeded (206 releases, 8.59 seconds).
+  Exact candidate-hash qB query found no reusable downloads. Episodes 1/2/8
+  had no eligible choice under existing failure/seen rules; episode 3 did.
+- Obligation `m2dl_62b18022da8c630ffb2d`: unique formal target, no verified TC,
+  source not held; existing controlled replacement entry added one candidate
+  `439ca54daae64082d358e64404bd94ee3b87b496` at 11:25:20 UTC. Failed/seen
+  history retained. This is dispatch evidence, not autonomous claim or delivery.
+- One subsequent exact sample: `stalledDL`, 0 bytes, no extraction job. Do not
+  delete/re-add it or count HTTP/qB acceptance as usable subtitles. Existing
+  retry/source-alternative policy owns continuation. Source SHA-256 before/after
+  equals `c5de59a7183a586dfbf87657e207dd19c5932bb71d2d13da8213e539c7faf4b7`;
+  existing subtitles unchanged, new formal subtitles **0**.
+- Known AI job `1fc3bd293f5e4f86be7fc0cbb589d9ee` reached ASR review for
+  Japanese single-character/punctuation fragments. A subsequent attempt
+  `0aa89ea8bcc84866887eee2247f75b74` is ASR RUNNING, with start/heartbeat
+  1788866383.6462607. No MODEL events or provider-confirmed formal output yet.
+  Its repeated ASR attempt needs bounded retry-policy verification; do not
+  assume quality recovery succeeded or force it past review.
+
+Evidence root: `/logs/m3-runtime-handoff-20260908/`:
+`download-target-history.json`, `download-four-source-probe.log`,
+`download-four-case-20260908T112309892299Z.json`,
+`source-case-result-1788866693948861863.json`, `download-e3-safety.log`,
+`source-status-1788866766811468632.json`, `known-job-final-probe.json`.
+No full Queue polling, library rescan, or wait for download/Gate completion.
+M2 and M3 acceptance remain incomplete.
+
+
 ## Current M3 handoff — 2026-09-08 11:10 UTC
 
 Worker 5f379e877ce59cb3207927e38aad2f6735b76287 / WebUI
