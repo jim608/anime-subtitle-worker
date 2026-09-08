@@ -2,6 +2,14 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+14:55UTC actual7eeb848 deployed by safe-update-stack20260908T144053Z-3222495;
+actual image329targeted tests+7breakers PASS, controlled recovery ARMED. Old SETTLED
+Gate/receipt and68holds/UNPROVEN preserved, newGate144756 starts0/20. One reviewed
+download source3aeb9cf... truly downloading2.55%; separate AI successor e707c...ASR
+attempt4 heartbeat confirmed. No formal download/extraction output yet: next verify
+this existing download through extraction/QC/manifest/safe final publish; never re-add.
+Full evidence and exact IDs: M2_REMAINING_ACCEPTANCE latest section. M2 incomplete.
+
 Candidate code now fixes both controlled historical completion revalidation and
 receipt-bound SETTLED Gate handoff. Combined targeted122tests PASS; not deployed.
 Next owned safe deployment/reconciliation followed by real download/extraction

@@ -1,5 +1,16 @@
 # M2 Production Observation
 
+## Actual controlled handoff — 2026-09-08 14:55 UTC
+
+Worker7eeb848b70ab5027d17f3a45c83e3d7400d80004, WebUI175a02a7bad46e0b6fa2372c59f39e8dd272911e;
+ARMED, new Gate m2-gate-20260908T144756513012Z-ad0fe3a765, baseline
+m2-guardrail-v1:0fd9069deb41ef803987a229, initialized0/20. Old SETTLED20 Gate121706
+and its failed summary match original receipt unchanged;68holds retained, no new
+unclassified difference, UNPROVEN unchanged. No historical backfill or success claim.
+329actual-image tests and7/7breakers PASS; new source3aeb9cf...downloading, separate
+AI e707c...attempt4 ASR heartbeat verified. New formal subtitles0; M2 not accepted.
+Evidence `/logs/m2-download-revalidation-20260908T1445/`, details in remaining acceptance.
+
 Candidate-only update: controlled runtime change can retain receipt-bound SETTLED
 Gate evidence unchanged; real fixture tests prove new Gate starts empty. Combined
 122tests PASS at `/logs/m2-resumed-acceptance-20260908/combined-revalidation-uJ60ID/`.

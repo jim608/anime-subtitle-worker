@@ -1,5 +1,57 @@
 # M2 remaining acceptance — 2026-09-08
 
+## Deployed and recovered; real canary downloading — 2026-09-08 14:55 UTC
+
+Actual Worker7eeb848b70ab5027d17f3a45c83e3d7400d80004, WebUI175a02a7bad46e0b6fa2372c59f39e8dd272911e.
+Image sha256:078f77c90f0dfd19192108bed4b7086a9ac1aa4c5baeb6eac3506f9b413fcb9d;
+container c0d0c3b624ac83f8d2da2e644b21916b13397dd649e1ea323f7fd7210a15337a,
+started2026-09-08T14:42:30.991964676Z; source revision73160fd55a38a536c6c1be0f69622c63d6707671607dfde9d2846805941278af.
+Safe deployment20260908T144053Z-3222495 completed with online backups/manifest,
+after original child3140201 naturally ended and safe endpoint idle=1, AI/extract/Mikan0.
+No task was killed/frozen. Backup `/work/deployment_backups/20260908T144053Z-3222495`.
+Existing deploy quality-sidecar housekeeping inspected2456 directories, matched0,
+migrated/deleted0; no additional media-library inventory was performed.
+
+All evidence below is under `/logs/m2-download-revalidation-20260908T1445/`.
+Actual image relevant329tests PASS (`actual-image-validation.log`); fresh breaker7/7
+PASS (`fresh-fault-suite.log`, FI run m2-guardrail-fi-20260908T144547928235Z-3a96125a,
+production_resources_affected=false). Initial isolated-network coordinator failed
+provider_endpoint_not_on_attested_host; original failure preserved. Host-network
+coordinator revalidated existing attestations and completed controlled recovery
+without retesting/redeployment (`recovery-host-network.log`, exit0, recovery-closeout.json).
+
+Reconciliation m2-recon-download-revalidation-20260908T1445:68previousholds retained,
+0newdifferences,7022recoverable identities,7008retained-state identities. UNPROVEN
+is unchanged. Old planned receipt sha256:c77bbe21bd6342578770d22f77f7210a93ec85a2dff944488b108a0d5eed3774;
+reconciliation receipt sha256:bd6f220c00c954972e855cd09aec6036ac0b8f595824e5c3eb03ef0f627e6b40.
+Old settled Gate121706 row is exactly equal to original receipt; receipt hash matches.
+New Gate m2-gate-20260908T144756513012Z-ad0fe3a765, baseline
+m2-guardrail-v1:0fd9069deb41ef803987a229, initialized0/20; ARMED and both admission
+holds false. No old results copied. Do not claim Gate pass or overall M2 acceptance.
+
+Canary2565:12 was revalidated via public controlled API at14:48:36; anonymous
+request c5ddc7dc1fb7b26ca0f1800397d48591b9eee403831b5b280a673846273261db.
+Immutable canary-intent.json retains current source checksum and prior revision;
+old completed snapshot stays inside pending completion_revalidation. One bounded
+existing replacement stage added a NEW source hash3aeb9cf71d052508dccb77817a4f264f8216dced
+at14:55:01. qB exact-hash proof at1788879336:downloading,0.02545289898progress,
+227587806downloadedbytes/9383197103total, project categoryllm-sub/tagsmikan,mikansub.
+No failed old hash was re-added. Download batch is not complete or validated yet.
+`canary-download-first.json`, `single-enqueue-full.log` and `single-enqueue-result.json`.
+
+AI independently resumed: e707c192ab7b411abb33440ce9b8e583, running attempt4,
+ASR/asr-full-retranscribe-v1, transcription heartbeat1788879229.6354964
+(`ai-successor-after-download.json`). Earlier scheduler deployment_hold label did
+not prove a live hold; direct flags were false and normal scheduling resumed without
+manual Retry or clearing protection. Early canary-followup-1 read omitted SQLite
+authority registration; corrected canary-followup-sqlite proves archive persisted.
+
+New formal deliveries this recovery: AI0/download0/extraction0. Prior M3 AI1 remains
+separate. Next follow ONLY this live torrent's bounded completion/extraction/import,
+re-read final formal subtitle/QC/manifest/source checksum, verify dedup and server
+successor. Do not rerun enqueue, canary intent or completed deployment scripts.
+Do not wait all history/20 Gate; keep M2 incomplete until formal evidence exists.
+
 ## Combined candidate ready for safe deployment preparation
 
 Final combined candidate targeted suite:122/122 PASS, exit0, server evidence
