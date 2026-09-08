@@ -9,6 +9,11 @@ relabeled PASS or mixed with future M3 runtime results.
 
 ### M3 — Configured model fallback and resource-aware recovery
 
+UNRAID Bash/Docker scheduler adapter is implemented and isolated-tested (36
+related server tests PASS), without host Python or Docker socket mounts. It is
+not installed; scheduling/reboot proof and post-response confirmation remain
+required before the candidate's safe deployment.
+
 Gate initialization and provider refresh now serialize across processes through
 a nonblocking kernel-owned lock; no lock deletion/PID-age reclaim. Real process
 exit/reacquisition verified on Windows and Linux; Linux related 66 PASS.

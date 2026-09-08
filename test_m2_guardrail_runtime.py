@@ -380,6 +380,16 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
             refresh = {'gate_baseline_version':states[0]['gate_baseline_version'],
                        'model_provider':states[0]['baseline']['model_provider'], 'checked_at':1_788_454_933.0}
             self.assertEqual('VERIFIED', runtime.refresh_provider_observation_local(self.config, refresh)['status'])
+            envelope = [json.dumps(runtime.provider_observation_context(self.config)),
+                        json.dumps(inspection), json.dumps(inspection), '192.0.2.10', '1788454933.0']
+            self.assertEqual('VERIFIED', runtime.refresh_inspected_provider_local(self.config, envelope)['status'])
+            with self.assertRaisesRegex(runtime.RuntimeContractError, 'envelope_invalid'):
+                runtime.refresh_inspected_provider_local(self.config, envelope[:-1])
+            changed_inspection = json.loads(json.dumps(inspection))
+            changed_inspection['Id'] = 'b'*64
+            with self.assertRaisesRegex(runtime.RuntimeContractError, 'changed_during_attestation'):
+                runtime.refresh_inspected_provider_local(self.config,
+                    [*envelope[:2], json.dumps(changed_inspection), *envelope[3:]])
             saved_observation = observation_path.read_bytes()
             with self.assertRaisesRegex(runtime.RuntimeContractError, 'baseline_mismatch'):
                 runtime.refresh_provider_observation_local(self.config, {**refresh, 'gate_baseline_version':'other'})

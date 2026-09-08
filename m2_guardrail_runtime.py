@@ -2884,6 +2884,24 @@ def refresh_provider_observation_on_host(*, docker_binary: str, worker_container
             'model_provider':binding, 'checked_at':time.time()}, sort_keys=True))
 
 
+def refresh_inspected_provider_local(config: Any, lines: list[str]) -> dict[str, Any]:
+    """Bash host adapter: bounded context/inspect/inspect/addresses/start-time input."""
+    from model_provider_evidence import capture_provider_binding
+    if len(lines) != 5:
+        raise RuntimeContractError('provider_inspection_envelope_invalid')
+    context, first, second = (json.loads(line) for line in lines[:3])
+    started = float(lines[4])
+    actual = provider_observation_context(config)
+    if context != actual:
+        raise RuntimeContractError('provider_observation_handoff_changed')
+    first_binding = capture_provider_binding(first, context['model_provider_endpoint'], lines[3].split(), observed_at=started)
+    second_binding = capture_provider_binding(second, context['model_provider_endpoint'], lines[3].split(), observed_at=started)
+    if first_binding != second_binding:
+        raise RuntimeContractError('model_provider_changed_during_attestation')
+    return refresh_provider_observation_local(config, {'gate_baseline_version':context['gate_baseline_version'],
+        'model_provider':first_binding, 'checked_at':started})
+
+
 def resolve_model_request_local(config: Any, evidence: Mapping[str, Any], *,
                                 state_path_override: str | Path | None = None) -> dict[str, Any]:
     """Host-controlled, paused handoff only; never arm or resume admission here."""
@@ -4002,7 +4020,7 @@ def _parser() -> argparse.ArgumentParser:
     refresh.add_argument('--worker-container', default='anime-subtitle-worker')
     refresh.add_argument('--model-provider-container', required=True)
     refresh.add_argument('--worker-config', default='/app/config.yaml')
-    for command_name in ('provider-context', 'provider-refresh-local'):
+    for command_name in ('provider-context', 'provider-refresh-local', 'provider-refresh-inspected'):
         provider_local = subparsers.add_parser(command_name, help=argparse.SUPPRESS)
         provider_local.add_argument('--config', required=True)
     resolve_local = subparsers.add_parser('resolve-model-local', help=argparse.SUPPRESS)
@@ -4077,6 +4095,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == 'provider-context':
             from config import load_config
             result = provider_observation_context(load_config(args.config))
+        elif args.command == 'provider-refresh-inspected':
+            from config import load_config
+            raw = sys.stdin.read(64 * 1024 + 1)
+            if len(raw) > 64 * 1024:
+                raise RuntimeContractError('provider_inspection_envelope_too_large')
+            result = refresh_inspected_provider_local(load_config(args.config), raw.splitlines())
         elif args.command == 'pause-reconciliation':
             from config import load_config
             result = pause_reconciliation_admission(load_config(args.config), args.reconciliation_id)

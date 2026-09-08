@@ -5,6 +5,31 @@ its frozen cohort, held sources and UNPROVEN preservation claims are unchanged.
 
 ## Scope
 
+## UNRAID host scheduler adapter (candidate, not installed)
+
+`m3-provider-observer.sh` uses host Bash/Docker and the Worker Python CLI, matching
+the existing UNRAID deployment environment without requiring host Python or a
+Docker socket mount. `--once` performs one bounded refresh;
+`--scheduled-minute` performs two bounded refreshes with a 20-second interval.
+Individual Docker calls have deadlines. A host `flock` prevents overlapping
+scheduler invocations, while the existing runtime writer lock protects Gate
+initialization/publication. Busy ownership is not removed or preempted.
+
+The adapter sends a size-bounded context/two-inspections/host-addresses/start-time
+envelope to `provider-refresh-inspected`; that entry revalidates context, direct
+endpoint, stable provider identity and timestamp before using the same publisher.
+It contains no Queue scan, restart, arm, recovery or self-install command.
+
+Server isolated adapter/runtime suite: 36 PASS,
+`provider-host-scheduler-adapter-server.log`. Tests execute the real Bash script
+with a disposable Docker command fixture and verify timeout/upstream failure,
+invalid mode, scheduler lock and correct stdin envelope; they are not installed
+Production scheduler proof. The final two-refresh scheduling assertion is in
+`provider-host-scheduler-final-server.log` under the same M3 evidence root.
+Installation/reboot persistence verification and post-response publication
+confirmation remain open; do not deploy this candidate before those contracts
+are complete.
+
 ## Cross-process observation writer serialization (candidate)
 
 Provider-bound Gate initialization and evidence refresh now share one nonblocking
