@@ -2,6 +2,11 @@
 
 ## Active Goal — M3 authorized (2026-09-08)
 
+Pending narrow parent post-source review convergence fix: exact real jobs showed
+paused/manual_review Queue but SUBTITLE_DETECTION formal state after source success.
+Deployed-image red reproduction;399 server regressions plus reopen/replay PASS.
+Not deployed; cache protections/68holds/Gate unchanged; model output still unproven.
+
 12:02UTC writer-reservation runtime57773b2 safely deployed;293 actualimage tests,
 freshFI7/7, recoveryARMED/admissionresumed, trueclaim+sourcecheckpoint proved.
 Original67holds retained;1 newmtime difference quarantined ->68holds total.

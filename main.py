@@ -8012,6 +8012,33 @@ def _reconcile_parent_pipeline_failure(
         return True
 
     current_state = str(current.get("state") or "").upper()
+    if (
+        target == "NEEDS_REVIEW"
+        and current_state == "SUBTITLE_DETECTION"
+        and not active_id
+        and str(stage) == "source_selection_review"
+        and str(error_code) == "source_selection_needs_review"
+        and callable(transition_job)
+        and any(
+            str(item.get("stage")) == "SUBTITLE_DETECTION"
+            and str(item.get("status")) == "SUCCEEDED"
+            for item in attempts
+            if isinstance(item, dict)
+        )
+    ):
+        # Source analysis may commit its valid checkpoint before cache lineage
+        # or materialization rejects downstream use. The parent has observed
+        # the child result: settle the job, not a fictitious second attempt.
+        # Keep the generic legacy bridge's late-telemetry safeguards intact.
+        transition_job(
+            job_id, "NEEDS_REVIEW", reason_code=reason_code,
+            evidence={**common_evidence, "source_stage_already_succeeded": True,
+                "error_code": str(error_code), "detail": str(detail or "")[:1000]},
+            confidence=1.0, expected_state="SUBTITLE_DETECTION",
+            idempotency_key=("ai-parent-post-source-review:" + str(delivery_attempt_id)
+                if delivery_attempt_id else None), actor="queue_parent",
+        )
+        return True
     if current_state in {"RETRYING", "NEEDS_REVIEW", "FAILED"}:
         # A child-side _set_stage(..., failed) already closed the real attempt.
         # Only align to a stricter queue terminal decision; never create a

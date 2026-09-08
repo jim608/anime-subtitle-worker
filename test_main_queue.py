@@ -24,6 +24,56 @@ from scan_state import ScanStateStore
 
 
 class MainQueueResultTest(unittest.TestCase):
+    def test_review_after_committed_source_stage_settles_job_without_new_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "episode.mkv"
+            video.write_bytes(b"source-read-only")
+            config = SimpleNamespace(work_path=root, log_path=root / "logs",
+                scanner_state_path=root / "scanner.sqlite3", ai_output_manifest_path="manifests",
+                control_state_path="control.sqlite3", auto_ai_failure_cooldown_seconds=0,
+                auto_ai_max_attempts=3)
+            state = ScanStateStore.from_config(config)
+            try:
+                state.upsert_ai_queue_candidate(video, video.stat().st_mtime_ns)
+                state.commit()
+                delivery_id = main_module._mark_queue_running(state, video, config)
+                pipeline = state.pipeline_jobs()
+                job = pipeline.job_for_path(video, size=video.stat().st_size,
+                    mtime_ns=video.stat().st_mtime_ns, create=False)
+                attempt = pipeline.transition_legacy_stage(job['job_id'], 'preflight', 'running',
+                    inputs={'fixture': True}, reason_code='source_started', evidence={'fixture': True}, confidence=1.0)
+                pipeline.finish_stage_attempt(attempt['stage_attempt_id'], 'SUCCEEDED',
+                    reason_code='source_committed', evidence={'fixture': True}, confidence=1.0)
+                before = pipeline.list_stage_attempts(job['job_id'])
+                state.update_ai_job_stage(video, 'source_selection_review', 'failed',
+                    'model_output_cache_lineage_unproven')
+                state.commit()
+                with patch('control_state.open_ai_quality_review_for_target', return_value=None):
+                    main_module._mark_queue_result(state, video, False, config,
+                        delivery_attempt_id=delivery_id)
+                current = pipeline.get_job(job['job_id'])
+                self.assertEqual(current['state'], 'NEEDS_REVIEW')
+                self.assertEqual(pipeline.list_stage_attempts(job['job_id']), before)
+                self.assertEqual(current['retry_count'], job['retry_count'])
+                self.assertEqual(video.read_bytes(), b'source-read-only')
+            finally:
+                state.close()
+            # Replay after reopening the durable store must not create a new
+            # stage or consume retry budget a second time.
+            resumed = ScanStateStore.from_config(config)
+            try:
+                pipeline = resumed.pipeline_jobs()
+                self.assertTrue(main_module._reconcile_parent_pipeline_failure(
+                    pipeline, job, delivery_attempt_id=delivery_id,
+                    target_state='NEEDS_REVIEW', stage='source_selection_review',
+                    reason_code='quality_review', error_code='source_selection_needs_review',
+                    detail='model_output_cache_lineage_unproven'))
+                self.assertEqual(pipeline.get_job(job['job_id'])['state'], 'NEEDS_REVIEW')
+                self.assertEqual(pipeline.list_stage_attempts(job['job_id']), before)
+            finally:
+                resumed.close()
+
     def test_ai_canary_once_parameters_bind_exact_failure_and_media_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

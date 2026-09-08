@@ -1,5 +1,32 @@
 # M2 remaining acceptance — 2026-09-08
 
+## Pending post-source review convergence fix
+
+Bounded actual-baseline evidence in /logs/m3-writer-reservation-20260908T1155/
+exact-model-jobs.json: three known jobs have no MODEL events. One is source
+candidate_analysis_inconclusive; two are model_output_cache_lineage_unproven.
+The latter Queue rows are paused/manual_review but formal jobs remain
+SUBTITLE_DETECTION after successful source checkpoints. Parent reconciliation
+previously fell through to the legacy bridge, which correctly refuses to invent
+a failed attempt after a successful stage but left the authoritative job unsettled.
+
+Candidate main.py adds a narrow parent-result transition: NEEDS_REVIEW only for
+source_selection_review/source_selection_needs_review, current SUBTITLE_DETECTION,
+no active attempt and an existing successful source attempt. It keeps the generic
+late-telemetry protections and immutable successful attempts, consumes no extra
+retry and does not permit legacy cache reuse. Existing expected-state transition
+provides conflict rejection.
+
+Real-store regression reproduces this exact mismatch against deployed image
+(red test fails as expected); candidate399 related tests PASS, plus durable
+store reopen/replay PASS with no new attempts and unchanged source fixture.
+Logs: review-convergence-red.log/exit1,
+review-convergence-regression.log/exit0, review-convergence-reopen.log/exit0.
+Earlier before.log contains an initial fixture-signature error, NOT the red proof.
+Candidate is not deployed. Runtime57773b2, current Gate,68 holds and formal output
+counts unchanged. M3 model-output acceptance and M2 production acceptance remain open.
+
+
 ## Writer-reservation deployed closeout — 2026-09-08 12:02 UTC
 
 Actual Worker57773b23f4f508a85b243b95f103f9f0106e1d86, WebUI
