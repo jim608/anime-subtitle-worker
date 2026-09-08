@@ -2,6 +2,11 @@
 
 ## Active Goal — M3 authorized (2026-09-08)
 
+13:16UTC real published target retained manifest digest resolves to exact prepared
+and provider-confirmed lineage; request watermark/Gate/time ordering verified.
+Finished/terminal-reprocess predicates PASS; no duplicate trigger attempted.
+AI delivery remains1; M3 closeout audit/M2 download-extraction/Gate remain open.
+
 13:12UTC real9f5394... COMPLETED/ledger succeeded;91 real model RESPONSEs,
 runtime/provider identities match,3preparations/1provider confirmation.
 Formal v2/hash/parse/Production-role hardQC PASS,source hashes unchanged:

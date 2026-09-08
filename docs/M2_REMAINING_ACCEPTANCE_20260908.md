@@ -1,5 +1,13 @@
 # M2 remaining acceptance — 2026-09-08
 
+13:16UTC follow-up: the newly delivered AI target9f5394... retained manifest
+digest matches exact prepared/provider-confirmed model lineage; runtime/Gate and
+request watermark agree. Existing finished-subtitle/terminal-reprocess predicates
+prevent ordinary reprocessing; formal hashes unchanged. No new dispatch/publication
+was attempted, no extra delivery counted (AI1/download0/extraction0 unchanged).
+Intermediate CN cache absent; evidence uses retained manifest digest, not invented
+bytes. See M3 doc and known-alternative-9f/manifest-lineage-idempotency.json.
+
 ## Real model response and formal AI publication — 2026-09-08 13:12 UTC
 
 Known job9f5394b655b340b2822cc43337dbcaf0 auto-claimed after7d0c98...

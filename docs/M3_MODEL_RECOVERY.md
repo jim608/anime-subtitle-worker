@@ -1,5 +1,28 @@
 # M3 — configured model recovery
 
+## Retained exact lineage and deduplication predicates — 2026-09-08 13:16 UTC
+
+For the succeeded9f5394... job, intermediate CN SRT is absent after completion.
+The initial current-byte probe failed honestly and is preserved; no cache was
+recreated. Retained manifest translation-memory target digest resolves to exact
+MODEL_OUTPUT_PREPARED token
+fdc0eff5710da818c71e770ab6c4cf68ac7aa0962a382bfc1d2a550f02940ca6,
+matching current runtime execution identity and original intermediate path hash.
+Exactly1 provider confirmation binds this token, output digest, stage, execution
+digest and unchanged request-event watermark. Its observation follows preparation;
+Gate baseline matches and confirmation precedes manifest delivery verification.
+This is retained manifest/event lineage, NOT a new hash of the absent intermediate.
+
+Production has_ai_finished_subtitle returns true; the existing terminal-delivery
+reprocess precondition refuses this succeeded identity. Formal hashes were identical
+before/after these checks. No duplicate dispatch/publication was attempted; these
+are real-state predicate checks, not a new duplicate-trigger end-to-end test.
+Newly counted delivery remains the prior1 AI target; this probe adds0.
+Evidence under known-alternative-9f/: exact-lineage-idempotency.json (missing
+intermediate failure), manifest-lineage-idempotency.json (retained evidence PASS).
+No runtime/config/deployment/Gate change. M2 download/extraction and strict Gate
+remain incomplete; M3 must still pass its requirement-by-requirement closeout audit.
+
 ## Real model response and formal AI publication — 2026-09-08 13:12 UTC
 
 Known job9f5394b655b340b2822cc43337dbcaf0 auto-claimed after7d0c98...
