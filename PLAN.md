@@ -34,6 +34,13 @@ ownership, non-replenishable budgets and immutable evidence. 36 component/shared
 tests PASS locally and in server isolation. Worker/Adapter/resource binding is
 not yet implemented; this is not runtime protection or deployment acceptance.
 
+Fourth candidate increment now binds all four Worker translation/repair entries
+to the committed Pipeline attempt and persists request/result evidence at the
+actual Translator boundary. Hidden SDK retries are disabled; ambiguous transport
+outcomes retain ownership. Stage-idempotency regression fixed. 324 server-isolated
+tests PASS. Persistent unload/resource/recovery integration and live deployment
+acceptance remain open; M2 evidence is unchanged.
+
 Extend the existing configured ASR/translation routes and resource admission,
 not a parallel queue or a wholesale backend rewrite. Preserve compatibility,
 source safety, strict QC and existing durable checkpoint/recovery contracts.

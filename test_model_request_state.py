@@ -42,7 +42,7 @@ class ModelRequestStateTest(unittest.TestCase):
                          request_sha256='b'*64, model='configured-model',
                          runtime_sha256='c'*64, attempt_limit=2)
 
-    def make_stage(self, name):
+    def make_stage(self, name, idempotency_key=None):
         media = self.root / (name + '.mkv')
         media.write_bytes(b'isolated-source')
         stat = media.stat()
@@ -52,7 +52,8 @@ class ModelRequestStateTest(unittest.TestCase):
                 evidence={'fixture': True}, confidence=1.0)
         stage = self.store.start_stage_attempt(obs['job_id'], 'TRANSLATING',
             inputs={'source': str(media)}, model={'name': 'configured-model'},
-            reason_code='fixture', evidence={'fixture': True}, confidence=1.0)
+            reason_code='fixture', evidence={'fixture': True}, confidence=1.0,
+            idempotency_key=idempotency_key)
         self.store.commit()
         return stage
 
@@ -74,6 +75,24 @@ class ModelRequestStateTest(unittest.TestCase):
             self.reserve(operation_id='operation-two')
         with self.assertRaisesRegex(ModelRequestStateError, 'operation_conflict'):
             self.reserve(model='another-model')
+
+    def test_receipts_do_not_change_stage_idempotency_identity(self):
+        from pipeline_state import PipelineStateConflict
+        stage = self.make_stage('idempotent', idempotency_key='stage-operation')
+        self.reserve(stage_attempt_id=stage['stage_attempt_id'])
+        kwargs = dict(inputs={'source': str(self.root / 'idempotent.mkv')},
+            model={'name': 'configured-model'}, reason_code='fixture',
+            evidence={'fixture': True}, confidence=1.0, idempotency_key='stage-operation')
+        restored = self.store.start_stage_attempt(stage['job_id'], 'TRANSLATING', **kwargs)
+        self.assertEqual(stage['stage_attempt_id'], restored['stage_attempt_id'])
+        with self.assertRaises(PipelineStateConflict):
+            self.store.start_stage_attempt(stage['job_id'], 'TRANSLATING',
+                **{**kwargs, 'model': {'name': 'different-model'}})
+        self.store.rollback()
+        from pipeline_state import StageAttemptError
+        with self.assertRaisesRegex(StageAttemptError, 'cannot be supplied'):
+            self.store.start_stage_attempt(stage['job_id'], 'TRANSLATING',
+                **{**kwargs, 'model': {'m3_request': {'state': 'SETTLED'}}})
 
     def test_endpoint_ownership_crosses_jobs(self):
         self.reserve()
@@ -215,6 +234,8 @@ class ModelRequestStateTest(unittest.TestCase):
             self.settle(receipt, 'NOT_DISPATCHED', {'cancelled_before_start': False})
         with self.assertRaisesRegex(ModelRequestStateError, 'ownership_unresolved'):
             self.reserve(operation_id='operation-two')
+        with self.assertRaisesRegex(ModelRequestStateError, 'invalid_http_evidence'):
+            self.settle(receipt, 'HTTP_ERROR', {'status_code': 504})
 
 
 if __name__ == '__main__':

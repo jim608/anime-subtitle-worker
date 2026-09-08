@@ -6,9 +6,11 @@ open while doing network/model work. No PID/age-based ownership reclamation.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import dataclass
 import hashlib
 import json
 import math
+from pathlib import Path
 import re
 import sqlite3
 import time
@@ -16,8 +18,50 @@ import uuid
 from typing import Any, Iterator, Mapping
 
 
+DEFINITIVE_HTTP_REJECTIONS = frozenset({400, 401, 403, 404, 405, 406, 413, 415, 422, 429})
+
+
 class ModelRequestStateError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class ModelRequestContext:
+    """Immutable attempt binding safe to capture in an executor callback.
+
+    Each operation opens its own connection. Never share the Worker's stage
+    transaction/connection with a model thread, or hold SQL locks over network IO.
+    The existing Pipeline store must already exist and contain the active stage.
+    """
+    database: Path
+    stage_attempt_id: str
+    runtime_sha256: str
+    attempt_limit: int
+
+    def _connection(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(Path(self.database).resolve().as_uri() + '?mode=rw',
+                               uri=True, timeout=60)
+        conn.execute('PRAGMA foreign_keys=ON')
+        return conn
+
+    def reserve(self, *, endpoint: str, request: Mapping[str, Any], model: str) -> dict[str, Any]:
+        conn = self._connection()
+        try:
+            return reserve_model_request(conn, stage_attempt_id=self.stage_attempt_id,
+                operation_id=uuid.uuid4().hex,
+                endpoint=hashlib.sha256(endpoint.encode('utf-8')).hexdigest(),
+                request_sha256=hashlib.sha256(_json(request).encode('utf-8')).hexdigest(),
+                model=model, runtime_sha256=self.runtime_sha256, attempt_limit=self.attempt_limit)
+        finally:
+            conn.close()
+
+    def record(self, token: str, outcome: str, evidence: Mapping[str, Any]) -> dict[str, Any]:
+        conn = self._connection()
+        try:
+            return record_model_request_result(conn, token=token,
+                runtime_sha256=self.runtime_sha256, outcome=outcome, evidence=evidence)
+        finally:
+            conn.close()
 
 
 def _json(value: Any) -> str:
@@ -174,7 +218,7 @@ def record_model_request_result(conn: sqlite3.Connection, *, token: str,
     if outcome == 'RESPONSE':
         _digest(proof.get('response_sha256'))
     elif outcome == 'HTTP_ERROR':
-        if type(proof.get('status_code')) is not int or not 400 <= proof['status_code'] <= 599:
+        if type(proof.get('status_code')) is not int or proof['status_code'] not in DEFINITIVE_HTTP_REJECTIONS:
             raise ModelRequestStateError("model_request_invalid_http_evidence")
     elif outcome == 'NOT_DISPATCHED':
         if proof.get('cancelled_before_start') is not True:

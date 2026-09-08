@@ -2607,6 +2607,8 @@ class PipelineJobStore:
             raise StageAttemptError(f"invalid executable stage: {target}")
         input_payload = self._structured(inputs, "inputs")
         model_payload = {"name": model} if isinstance(model, str) else self._structured(model, "model")
+        if "m3_request" in model_payload:
+            raise StageAttemptError("model request receipts cannot be supplied as model configuration")
         checkpoint_payload = self._structured(checkpoint, "checkpoint")
         retry_cap = max(0, int(retry_limit))
         timeout = max(0.0, float(timeout_seconds))
@@ -2628,7 +2630,10 @@ class PipelineJobStore:
                     if (
                         existing["stage"] != target
                         or existing["input_sha256"] != input_sha256
-                        or self._json(existing.get("model", {})) != model_json
+                        # Durable model-request receipts are mutable lifecycle
+                        # evidence, not part of the configured model identity.
+                        or self._json({key: value for key, value in existing.get("model", {}).items()
+                                       if key != "m3_request"}) != model_json
                         or int(existing["retry_limit"]) != retry_cap
                         or float(existing["timeout_seconds"]) != timeout
                     ):

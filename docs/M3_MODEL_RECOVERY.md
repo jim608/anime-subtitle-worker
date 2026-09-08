@@ -61,6 +61,39 @@ for the existing job/checkpoint/recovery stores.
 
 ## Remaining engineering and acceptance
 
+### Worker/Translator binding increment (candidate, not deployed)
+
+The durable receipt component is now connected to all four Worker Translator
+entry points. Required Pipeline mode resolves the committed active TRANSLATING
+attempt using the source identity; a missing/mismatched stage fails closed.
+The immutable context contains database, attempt, effective configuration/code
+digest and retry limit. Executor work captures that context, using independent
+short SQLite connections instead of sharing the Worker's stage transaction.
+
+Every model call commits a reservation before dispatch. Complete responses save
+a response digest before content parsing (transport completion is not QC PASS).
+Definitive HTTP rejections can use configured fallback; exhausted primary budget
+does not suppress an unused fallback budget. Transport errors and ambiguous
+gateway/server errors retain UNKNOWN ownership, including HTTP 504. SDK internal
+retries are disabled so adapter budgets cannot hide multiple network attempts.
+Missing required context or failed receipt persistence prevents further calls.
+
+A reproduced stage-idempotency regression was fixed: request lifecycle metadata
+does not change configured model identity, while an actual model change still
+conflicts. Callers cannot inject receipts through stage model configuration.
+
+324 focused/shared tests PASS in server isolation on the actual Worker image:
+`durable-binding-transport-final-server.log` under the M3 log root. Earlier logs
+`durable-binding-server.log` (299) and `durable-binding-stage-identity-server.log`
+(323) are intermediate evidence. Nine new composed tests cover the real
+Translator/SQLite boundary and Worker stage binding with isolated HTTP fixtures.
+The transport is a fixture, **not a live production/model-server acceptance**.
+
+Remaining before deployment: persistent model unload/resource exclusion;
+controlled resolution of UNKNOWN requests using real cancellation/completion
+evidence; route alias/endpoint identity review; restart/container integration
+and required runtime/baseline/Gate attestation. Existing holds remain untouched.
+
 Durable receipt component work-in-progress: `model_request_state.py` uses the
 existing Pipeline Job Store stage model metadata and stage events, not another
 Queue. Reservations commit before dispatch, retain UNKNOWN ownership across

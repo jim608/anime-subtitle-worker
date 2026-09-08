@@ -1026,7 +1026,7 @@ class VideoWorker:
             self.logger.info("Translating SRT: %s", paths.ja_srt)
             self._translator_progress_video = video
             try:
-                translator = self._get_translator()
+                translator = self._get_translator(video)
                 self._configure_translation_memory_plan(
                     video,
                     translator,
@@ -2478,7 +2478,7 @@ class VideoWorker:
             f"Translating source language={source_paths.language} to Chinese",
         )
         series_context = self._build_series_metadata_context(video)
-        translator = self._get_translator()
+        translator = self._get_translator(video)
         self._translator_progress_video = video
         try:
             translator.translate_blocks(
@@ -4253,7 +4253,7 @@ class VideoWorker:
         )
         try:
             series_context = self._build_series_metadata_context(video)
-            translator = self._get_translator()
+            translator = self._get_translator(video)
             translator.set_targeted_repair_context(
                 source_blocks,
                 translated_blocks,
@@ -4542,7 +4542,7 @@ class VideoWorker:
             )
             try:
                 series_context = self._build_series_metadata_context(video)
-                translator = self._get_translator()
+                translator = self._get_translator(video)
                 translator.set_targeted_repair_context(
                     source_blocks,
                     list(translated_by_index.values()),
@@ -6232,7 +6232,7 @@ class VideoWorker:
             except OSError as exc:
                 self.logger.debug("Unable to update audio provenance video=%s error=%s", video, exc)
 
-    def _get_translator(self) -> SubtitleTranslator:
+    def _get_translator(self, video: Path | None = None) -> SubtitleTranslator:
         if self._translator is None:
             translator_config = self.config
             effective = self._resource_effective_limits()
@@ -6262,6 +6262,30 @@ class VideoWorker:
                 self.logger,
                 progress_callback=self._translation_progress,
             )
+        if bool(getattr(self.config, 'pipeline_job_store_required', False)):
+            # Resolve from the committed formal stage, not progress UI state.
+            # Every request captures this immutable binding before its executor
+            # starts, so a later job cannot steal an old callback's identity.
+            from model_request_state import ModelRequestContext
+            from m2_guardrail_runtime import configuration_fingerprint, worker_runtime_code_revision
+
+            if video is None or self._stage_state is None:
+                raise RuntimeError('translation_request_active_stage_required')
+            pipeline = self._stage_state.pipeline_jobs()
+            inputs = self._pipeline_stage_inputs(video)
+            job = pipeline.job_for_path(video, size=int(inputs['media_size']),
+                                        mtime_ns=int(inputs['media_mtime_ns']), create=False)
+            attempt = pipeline._get_attempt(str((job or {}).get('active_stage_attempt_id') or ''))
+            if not attempt or attempt['status'] != 'RUNNING' or attempt['stage'] != 'TRANSLATING':
+                raise RuntimeError('translation_request_active_stage_required')
+            database = Path(self.config.scanner_state_path)
+            if not database.is_absolute():
+                database = self.config.work_path / database
+            identity = json.dumps({'code': worker_runtime_code_revision(self.config),
+                                   'config': configuration_fingerprint(self.config)}, sort_keys=True)
+            self._translator._request_context = ModelRequestContext(
+                database, str(attempt['stage_attempt_id']),
+                hashlib.sha256(identity.encode('utf-8')).hexdigest(), self.config.max_retries)
         return self._translator
 
     def _load_resource_launch_plan(self, video: Path) -> dict[str, object] | None:

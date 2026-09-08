@@ -10,6 +10,8 @@ import threading
 from typing import Callable, Sequence
 
 from config import AppConfig
+from model_request_state import (DEFINITIVE_HTTP_REJECTIONS, ModelRequestContext,
+                                 ModelRequestStateError)
 from ollama_lifecycle import unload_managed_translation_models
 from safe_files import sha256_file
 from srt_utils import (
@@ -243,7 +245,9 @@ class SubtitleTranslator:
             base_url=config.translator_base_url,
             api_key=config.translator_api_key,
             timeout=config.translator_timeout_seconds,
+            max_retries=0,  # Retry budget belongs to the durable adapter, not the SDK.
         )
+        self._request_context: ModelRequestContext | None = None
         self._translator_models = self._resolve_translator_models()
         self._translator_model_index = 0
         self._translator_model = self._translator_models[0]
@@ -1585,19 +1589,40 @@ class SubtitleTranslator:
     ) -> str:
         hard_timeout = _translation_request_hard_timeout_seconds(self.config)
         endpoint = self._translation_endpoint_key()
+        context = getattr(self, '_request_context', None)
+        if getattr(self.config, 'pipeline_job_store_required', False) and context is None:
+            raise TranslationRequestInFlightError('translation_request_context_required')
+        receipt = None
         with _TRANSLATION_REQUEST_LOCK:
             previous = _TRANSLATION_REQUESTS.get(endpoint)
             if previous is not None and not previous.done():
                 raise TranslationRequestInFlightError(
                     "translation_request_in_flight: previous endpoint request has not settled"
                 )
+            if context is not None:
+                try:
+                    receipt = context.reserve(endpoint=endpoint, model=model, request={
+                        'source_text': source_text, 'system_prompt': system_prompt,
+                        'max_tokens': _translation_request_max_tokens(self.config, system_prompt),
+                        'temperature': 0,
+                    })
+                except ModelRequestStateError as exc:
+                    if str(exc) == 'model_request_budget_exhausted':
+                        raise TranslationError('translation_model_request_budget_exhausted') from exc
+                    raise TranslationRequestInFlightError('translation_request_reservation_refused') from exc
+                except Exception as exc:
+                    raise TranslationRequestInFlightError('translation_request_reservation_refused') from exc
             executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="translation-request")
             try:
-                future = executor.submit(
-                    self._request_translation_direct, source_text, system_prompt, model,
-                )
+                if receipt is None:
+                    future = executor.submit(self._request_translation_direct, source_text, system_prompt, model)
+                else:
+                    future = executor.submit(self._request_translation_direct, source_text, system_prompt, model,
+                                             request_context=context, request_receipt=receipt)
             except BaseException:
                 executor.shutdown(wait=False, cancel_futures=True)
+                if receipt is not None:
+                    context.record(receipt['token'], 'NOT_DISPATCHED', {'cancelled_before_start': True})
                 raise
             _TRANSLATION_REQUESTS[endpoint] = future
         # A completed future may invoke its callback synchronously. Register it
@@ -1620,6 +1645,9 @@ class SubtitleTranslator:
         source_text: str,
         system_prompt: str,
         model: str | None = None,
+        *,
+        request_context: ModelRequestContext | None = None,
+        request_receipt: dict | None = None,
     ) -> str:
         active_model = str(model or getattr(self, "_translator_model", "")).strip()
         if not active_model:
@@ -1640,8 +1668,32 @@ class SubtitleTranslator:
                 ],
             )
         except Exception as exc:
+            if request_context is not None and request_receipt is not None:
+                from openai import APIStatusError
+                try:
+                    if isinstance(exc, APIStatusError) and exc.status_code in DEFINITIVE_HTTP_REJECTIONS:
+                        request_context.record(request_receipt['token'], 'HTTP_ERROR', {'status_code': exc.status_code})
+                    else:
+                        # A gateway/server failure can outlive this HTTP call;
+                        # it is not proof that the model stopped on the server.
+                        proof = {'reason_code': 'transport_error'}
+                        if isinstance(exc, APIStatusError):
+                            proof['status_code'] = exc.status_code
+                        request_context.record(request_receipt['token'], 'UNKNOWN', proof)
+                        raise TranslationRequestInFlightError('translation_request_transport_outcome_unknown') from exc
+                except TranslationRequestInFlightError:
+                    raise
+                except Exception as receipt_exc:
+                    raise TranslationRequestInFlightError('translation_request_result_not_persisted') from receipt_exc
             raise TranslationError(f"Translation API request failed: {exc}") from exc
 
+        if request_context is not None and request_receipt is not None:
+            try:
+                request_context.record(request_receipt['token'], 'RESPONSE', {
+                    'response_sha256': hashlib.sha256(response.model_dump_json().encode('utf-8')).hexdigest(),
+                })
+            except Exception as exc:
+                raise TranslationRequestInFlightError('translation_request_result_not_persisted') from exc
         content = response.choices[0].message.content if response.choices else None
         if not content or not content.strip():
             raise TranslationError(
