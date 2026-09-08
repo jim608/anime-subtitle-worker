@@ -1,5 +1,32 @@
 # M3 — configured model recovery
 
+## Retry and automatic continuation proof — 2026-09-08 11:31 UTC
+
+Exact known job 1fc3bd293f5e4f86be7fc0cbb589d9ee settled NEEDS_REVIEW;
+its Queue row is paused/asr_review, attempts=3, deterministic_asr_quality,
+retry_strategy=manual_review, next_retry_at=0. No unbounded retry is established.
+The existing main.py transcription_review branch explicitly preserves review.
+
+Server automatically started successors after this review: job
+85b16c697dcb4e97a0fc1962506219c9 performed SUBTITLE_DETECTION and retained a
+hash-valid source-decision checkpoint, then NEEDS_REVIEW for
+candidate_analysis_inconclusive. Job a98b82c521084e4fb54d33f68b534d42 also
+started SUBTITLE_DETECTION, then RETRYABLE_FAILURE: database is locked.
+A single bounded 256 KiB log excerpt confirms a second database-lock failure
+at 11:31:17. Root transaction/lock owner is NOT yet identified; no traceback
+was logged. Investigate this reproducible failure before claiming M3 complete;
+do not clear locks/DB fields or classify lock contention as bad media.
+Recovery-lane dispatch and actual isolated subprocess start at 11:29:34 are
+also recorded, distinct from normal queue continuation; neither is delivery.
+
+Read-only status at 11:30:10: Worker5f379e8, ARMED/runtime_baseline_match,
+admission unpaused, 67 holds, Gate m2-gate-20260908T110433538511Z-b43d836495
+unchanged. No new deployment, QC relaxation, formal delivery or Gate pass.
+Evidence under /logs/m3-runtime-handoff-20260908/: known-retry-authority.json,
+known-retry-process.txt, post-review-continuation.json,
+following-stage-reasons.json, database-lock-trace.log.
+
+
 ## Bounded post-deploy evidence — 2026-09-08 11:26 UTC
 
 No additional runtime change, deployment, Gate reset or hold release in this
