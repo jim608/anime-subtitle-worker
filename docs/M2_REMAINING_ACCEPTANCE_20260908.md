@@ -1,5 +1,11 @@
 # M2 remaining acceptance — 2026-09-08
 
+2026-09-08 10:36 UTC: runtime ARMED/baseline match at Worker a4829a5 / WebUI
+175a02a, original Gate retained. Active transcription with fresh heartbeat observed
+once via lite status; no deployment or interruption. Evidence under
+`logs/m3-baseline-20260908T070237Z/predeployment-runtime.json` and
+`predeployment-live-status.json`. Runtime Gate metadata is not live cohort progress.
+
 M3 targeted repair-merge lineage candidate: 211 server related tests PASS in
 `logs/m3-baseline-20260908T070237Z/provider-targeted-merge-lineage-server.log`.
 No Production deployment, Gate change or formal subtitle added. Not M2

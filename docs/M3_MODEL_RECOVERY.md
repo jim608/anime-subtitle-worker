@@ -5,6 +5,35 @@ its frozen cohort, held sources and UNPROVEN preservation claims are unchanged.
 
 ## Scope
 
+## Predeployment live boundary — 2026-09-08 10:36 UTC
+
+Read-only runtime verification still reports ARMED / runtime_baseline_match,
+Worker `a4829a5298304f9e2dc20dd02ecde883ea53ec23`, WebUI
+`175a02a7bad46e0b6fa2372c59f39e8dd272911e`, original Gate baseline
+`m2-guardrail-v1:6a39511185854d6d968c637b`. The Gate fields in runtime state are
+initialization metadata, not a newly measured live cohort count.
+
+A single lite-status read at 10:35:33 UTC shows an active transcription task with
+fresh heartbeat, scheduler processing, no deployment hold, zero reported running
+extractions and Mikan not busy. Do not kill the active task or treat this snapshot
+as a stable deployment window. Evidence: `predeployment-live-status.json` and
+`predeployment-runtime.json` in the M3 baseline log directory.
+
+Existing ASS restyling is called only by `refresh_ass`, whose CLI orchestrator
+`_refresh_ass_exports` scans the full library and reports refreshed/skipped, rather
+than claiming normal/recovery jobs. It is not executed in this recovery scope and
+is not counted as new model processing or formal delivery. No restyling change or
+full-library refresh is required to deploy the normal Queue repair candidate.
+Provider-bound standalone cache refresh still fails closed without pipeline
+authority; do not claim that optional command has M3 acceptance.
+
+Host scheduler discovery confirms `/usr/local/sbin/update_cron` and existing
+Dynamix/User Scripts. The actual script builds root cron from plugin `.cron`
+files, including `/boot/config/plugins/dynamix/*.cron`. Evidence is retained in
+`host-scheduler-entry.txt` and `host-update-cron-entry.txt`. No scheduler installed
+yet; use this existing persistence mechanism during controlled deployment, with
+an owned, pinned observer script and rollback evidence, not a parallel daemon.
+
 ## Targeted model repair merge lineage (candidate)
 
 Safe-omission and CPS repair already use the durable Translator commit for their

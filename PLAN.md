@@ -9,6 +9,11 @@ relabeled PASS or mixed with future M3 runtime results.
 
 ### M3 — Configured model fallback and resource-aware recovery
 
+2026-09-08 10:36 UTC live check: original runtime ARMED/baseline match, active
+transcription heartbeat and no maintenance hold. No safe idle window demonstrated.
+ASS restyling is outside the normal Queue path and is not run/countable here.
+Existing host update_cron mechanism verified read-only; installation still pending.
+
 Targeted omission/CPS model repair merges now record both original and partial
 repair preparations, requiring exact merge bytes and unchanged unselected cues.
 Server 211 related tests PASS. Existing ASS restyling authority and scheduler /
