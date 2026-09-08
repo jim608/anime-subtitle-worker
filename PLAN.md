@@ -2,6 +2,12 @@
 
 ## Active Goal — M3 authorized (2026-09-08)
 
+12:02UTC writer-reservation runtime57773b2 safely deployed;293 actualimage tests,
+freshFI7/7, recoveryARMED/admissionresumed, trueclaim+sourcecheckpoint proved.
+Original67holds retained;1 newmtime difference quarantined ->68holds total.
+New frozenGate120036 preservesoldresults separately. Model output/download
+formal acceptance remains open, additions0. Details in M3_MODEL_RECOVERY.md.
+
 Pending writer-upgrade fix: isolated two-connection WAL reproduced database lock
 in PipelineJobStore._savepoint. Self-owned BEGIN IMMEDIATE candidate preserves
 caller transactions;24 local/261 server related testsPASS. Not yet deployed;

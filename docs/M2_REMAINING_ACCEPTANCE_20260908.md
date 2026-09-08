@@ -1,5 +1,46 @@
 # M2 remaining acceptance — 2026-09-08
 
+## Writer-reservation deployed closeout — 2026-09-08 12:02 UTC
+
+Actual Worker57773b23f4f508a85b243b95f103f9f0106e1d86, WebUI
+175a02a7bad46e0b6fa2372c59f39e8dd272911e, image
+sha256:5d17cc2591b8c9a089a0e5784bd345ef41e3e4944971c86614bd6e3355730695.
+Safe deployment20260908T115510Z-1179712 exit0; backup retained.
+Actual-image293 related tests PASS; fresh isolated breakers7/7 PASS.
+Official recovery exit0, ARMED/admission resumed. New reconciliation
+m3-recon-writer-reservation-20260908T1155, receipt SHA
+ee7327fafd9ab58a9e3907d34e02632b403030080a3d9d038d0d021b3db4f427.
+Original planned receipt SHA0c748a73f88b002e6ccd1e5558b23507d3f3bbd4bc6b00ba7c6c9e3870cf12df.
+Original67 source holds preserved. One additional post-pause source mtime change
+was classified PENDING_REVIEW/UNKNOWN/checkpoint-incompatible, not absorbed as
+safe: total holds now68. Old/current queue membership both true; mtime changed
+1788867000012000000 ->1788868601216869500. Historical preservation UNPROVEN.
+7079 recoverable identities,6950 retained other states; not delivery counts.
+
+New Gate m2-gate-20260908T120036464868Z-2e44d4c28b,
+start2026-09-08T12:00:36.464868Z, baseline
+m2-guardrail-v1:590b25cdec507b8a8c21dd1a initialized0/20. Old evidence retained.
+A bounded sample proved actual automatic claim1788868885.3830643; first frozen
+member remained NEEDS_REVIEW/strict0 and is not replaceable. Pipeline job
+a9aa915b39c549968013823ce5799846 completed source-analysis checkpoint
+80cb26ac1193340dcd5547b3d4d569b9f197426cfe4599b4574e294a18caf22d (bytes hash matches).
+This proves new runtime persistence/claim, not general elimination of contention
+or M3 model-response/formal-output acceptance. Formal additions0; M2/M3 incomplete.
+
+Exact E3 download follow-up: hash439ca54daae64082d358e64404bd94ee3b87b496 was
+retained in failed_info_hashes with did not start; no torrent/extraction artifact,
+no partial files retained. Existing policy owns alternate-source retries (600s
+no-candidate backoff recorded). Not re-added and not counted as successful delivery.
+
+Evidence root /logs/m3-writer-reservation-20260908T1155/:
+safe-deploy.log/deploy.exit, actual-image-validation.log,
+actual-runtime-before-recovery.json, attestation.json, recovery-closeout.json,
+classified-request-*.json, post-recovery-probe.json, download-e3-check.log.
+Fresh FI /logs/m2-guardrail-fi-20260908T120020916157Z-cb01849f/result.json.
+Next: verify real model/provider-confirmed output without replacing frozen
+members or bypassing old-cache lineage/source/QC review. Do not redeploy for docs.
+
+
 ## Reproduced writer-upgrade defect — candidate, not deployed
 
 A two-connection isolated WAL test reproduced database is locked at the
