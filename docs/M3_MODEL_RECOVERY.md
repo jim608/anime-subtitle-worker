@@ -1,5 +1,29 @@
 # M3 — configured model recovery
 
+## Automatic second claim verified — 2026-09-08 12:48 UTC
+
+This supersedes the earlier statement that the canary second claim was unobserved.
+Job7d0c98eb4a9947a9a65ce61f051c6461 finished NEEDS_REVIEW; Queue paused,
+attempts4/manual_review/deterministic_asr_quality. No MODEL events.
+The server then automatically claimed e15760a3eac4466eb2ea02c430d64418 at
+1788871596.785272: Queue running/attempts2, Pipeline ASR, live childPID1852332.
+Heartbeat1788871607.6413944 records configured faster-whisper-large-v3.
+Source-selection checkpoint0462ced110b84c38a274cfb4c0e52b6e hash matches
+fbfc432c5f66782bde14d8b42978d6781a55ea384f6fd9c514b67e6bce5b0c16.
+ASR has not produced a validated checkpoint/output; empty ASR checkpoint hashes
+are not counted as valid checkpoints. Model events remain0; formal additions0.
+No manual scheduling intervention, runtime edit, deployment or Gate reset.
+
+Fresh runtime check1788871696.1845965 confirms Worker738e96e, WebUI175a02a,
+ARMED/runtime_baseline_match, admission unpaused,68 holds and unchanged Gate
+m2-gate-20260908T121706917079Z-5900a7525f.
+Evidence in /logs/m3-review-convergence-20260908T1210/:
+successor-followup-1.json, successor-followup-1-process.txt,
+two-attempt-evidence.json, current-runtime-1249.json.
+Next bounded observation must follow existing child1852332; no restart based
+on an observation timeout. M3 model/provider-confirmed publication and M2
+download/extraction formal publication/strict Gate still require actual proof.
+
 ## Bounded follow-up — 2026-09-08 12:45 UTC
 
 Runtime remains Worker738e96eafec66a6f62db31b9247cd58bf0aec6df /

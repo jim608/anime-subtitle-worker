@@ -2,6 +2,10 @@
 
 ## Active Goal — M3 authorized (2026-09-08)
 
+12:48UTC second canary attempt e15760... actually auto-claimed after7d0c98...
+paused for ASR review. Live ASR child1852332 and source checkpoint hash verified.
+Fresh runtime738e96e/ARMED/68holds/currentGate unchanged; noMODEL events/output.
+
 12:45UTC canary ASR failed quality; server requeued attempts2, not delivered.
 Different successor7d0c98... actually auto-claimed/ASR/smaller fallback heartbeat.
 Source/archive safety PASS; formal additions0. No runtime/Gate change.
