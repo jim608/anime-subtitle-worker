@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from asr_review_checkpoint import (
     ASR_REVIEW_CHECKPOINT_MANIFEST_NAME,
@@ -16,6 +17,44 @@ from safe_files import atomic_write_text, sha256_file
 
 
 class AsrReviewCheckpointTest(unittest.TestCase):
+    def test_publisher_wins_between_manifest_and_directory_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video, rejected, diagnostics, _ = self._inputs(root)
+            original_exists = Path.exists
+            winner = []
+            publishing = False
+
+            def publish():
+                return create_asr_review_checkpoint(root / "work", target_path=video,
+                    language="ja", rejected_srt_path=rejected, diagnostics_path=diagnostics)
+
+            def interleaved_exists(path):
+                nonlocal publishing
+                if (path.name == ASR_REVIEW_CHECKPOINT_MANIFEST_NAME
+                        and not publishing and not original_exists(path)):
+                    publishing = True
+                    winner.append(publish())
+                    return False  # The first reader observed absence before the winner.
+                return original_exists(path)
+
+            with patch.object(Path, "exists", interleaved_exists):
+                result = publish()
+            self.assertEqual(result, winner[0])
+            self.assertEqual(video.read_bytes(), b"video")
+
+    def test_existing_incomplete_checkpoint_is_not_repaired(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video, rejected, diagnostics, _ = self._inputs(root)
+            kwargs = dict(target_path=video, language="ja", rejected_srt_path=rejected,
+                diagnostics_path=diagnostics)
+            checkpoint = create_asr_review_checkpoint(root / "work", **kwargs)
+            checkpoint.manifest_path.unlink()  # Isolated fixture only.
+            with self.assertRaises(AsrReviewCheckpointError):
+                create_asr_review_checkpoint(root / "work", **kwargs)
+            self.assertFalse(checkpoint.manifest_path.exists())
+
     def test_concurrent_publishers_reuse_one_immutable_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

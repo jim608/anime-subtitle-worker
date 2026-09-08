@@ -1,5 +1,23 @@
 # M2 Circuit Breaker Test Results
 
+## Checkpoint publication race addendum (2026-09-08 04:02 UTC)
+
+Leading-gap fix `460619e47f49aa3e67dacf66112663644c97ef77` was deployed safely
+(deployment `20260908T035610Z-3705934`, exit 0), but actual-image tests reproduced
+a separate checkpoint race. Recovery did not run; admission hold and breaker
+remain protected. Failed proof is preserved under
+`/logs/m2-leading-gap-evidence-repair-20260908/actual-image-validation.log`.
+A deterministic interleaving test proves a complete concurrent publisher was
+misclassified between manifest/parent existence checks. The minimal candidate
+uses the unchanged strict loader for an existing directory; an incomplete checkpoint
+still fails closed and is never repaired in place. Candidate 225 tests plus actual
+isolated container restart PASS at
+`/logs/m2-asr-postprocess-isolated-20260908T040238664284Z/`.
+The next handoff retains the same owned admission hold and seals a new snapshot
+under `/logs/m2-checkpoint-race-evidence-repair-20260908/`, linked to the failed
+460619e handoff. Old snapshots, tests, receipts and cohort results are not rewritten.
+No formal new subtitle is claimed.
+
 ## Current override: leading-gap evidence repair (2026-09-08)
 
 Worker `47d522ab940f5b84ced7170397ce86fe7cd63782` was safely deployed

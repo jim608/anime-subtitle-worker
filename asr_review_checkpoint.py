@@ -133,7 +133,10 @@ def create_asr_review_checkpoint(
         raise AsrReviewCheckpointError(
             f"checkpoint directory must not be a symlink: {checkpoint_dir}"
         )
-    if manifest_path.exists():
+    # A winner can atomically rename its complete directory after our manifest
+    # absence check. Validate that winner with the same strict loader instead
+    # of treating the newly visible directory as an incomplete checkpoint.
+    if manifest_path.exists() or checkpoint_dir.exists():
         return load_asr_review_checkpoint(
             manifest_path,
             expected_checkpoint_id=checkpoint_id,
@@ -142,10 +145,6 @@ def create_asr_review_checkpoint(
             expected_review_ranges=normalized_ranges,
             expected_repair_fingerprint=normalized_repair_fingerprint,
             expected_fingerprints=normalized_fingerprints,
-        )
-    if checkpoint_dir.exists():
-        raise AsrReviewCheckpointError(
-            f"existing checkpoint directory is incomplete or unsafe: {checkpoint_dir}"
         )
     shard_dir.mkdir(parents=True, exist_ok=True)
     if shard_dir.is_symlink():
