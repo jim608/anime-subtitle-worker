@@ -1,5 +1,15 @@
 # M2 Production Observation
 
+## Checkpoint aggregate clarification — 2026-09-08 16:17 UTC
+
+Exact20member snapshot gate-member-diagnosis-1788884136367898483.json (under the
+current download-revalidation evidence root) confirms all strict stage/checkpoint
+history fields false. m2_observation_store computes checkpoint_loss_count by counting
+non-true stage_checkpoint_history_complete, not filesystem disappearance events.
+Therefore20 denotes unavailable/incomplete strict history evidence; no claim of20
+physical deletions is supported. FAILED2/NEEDS_REVIEW18/strict0 remains FAIL; do not
+relabel members, alter historical summary or reset Gate. Runtime recheck ARMED.
+
 ## Frozen result read — 2026-09-08 16:12 UTC
 
 Gate m2-gate-20260908T144756513012Z-ad0fe3a765 automatically SETTLED20/20:

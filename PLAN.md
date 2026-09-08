@@ -2,6 +2,13 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+16:17UTC exact-source diagnosis complete: independent empty and same-style overlap
+failures remain, so no QC exemption/runtime edit justified for this canary. Retain
+failed source and let existing alternative-source request proceed with backoff;
+next acceptance evidence must be a real alternative claim and valid formal product.
+Gate checkpoint_loss20 means20 incomplete strict histories, not proven physical
+deletions; exact member snapshot retained. Formal0, GateFAIL, M2 still incomplete.
+
 Latest16:12UTC: exact download completed and Worker automatically extracted E12;
 both bilingual ASS tracks parse PASS/hardQC FAIL, formal deliveries0. Preserve
 failed hash; do not re-add or relax QC. Next diagnose bilingual import behavior

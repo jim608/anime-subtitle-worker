@@ -1,5 +1,41 @@
 # M2 remaining acceptance — 2026-09-08
 
+## Exact source and member diagnosis — 2026-09-08 16:17 UTC
+
+Read-only actual-image extraction into evidence-only scratch reproduced the same
+QC rejection for both tracks; downloaded source hash/stat unchanged, publications0.
+Evidence `/logs/m2-download-revalidation-20260908T1445/bilingual-diagnosis-f09tgu3s/`
+contains extracted original ASS, ffmpeg logs and result.json. TC styles: Text-CH373
+events/1overlap/1empty; Text-JP371/1overlap; Screen10/0; OP-JP58/27; OP-CH8/0.
+SC also has one empty Text-CH event and one overlap in each dialogue-language style.
+Global overlap detection does not distinguish ASS presentation channels, but the
+candidate still fails independent empty/same-style checks. A style-only exemption
+cannot establish acceptance; no QC relaxation, source rewriting or runtime fix was
+performed. Existing watchable-bilingual test covers one cue containing both languages,
+not independent concurrent style events. Do not expand QC merely to pass this canary.
+
+Exact frozen-member read: `gate-member-diagnosis-1788884136367898483.json`,20members,
+18review/2failed, all stage_checkpoint_history_complete=false. The summary code
+counts every non-true value as checkpoint_loss_count; this is incomplete strict
+history evidence, not20 demonstrated deleted files. Member0 qualification reasons
+also lack final output/QC/source/decision evidence, so strict failure is not based
+solely on that metric. ARMED remains confirmed. Gate result stays FAIL and immutable.
+
+Recorded terminal source disposition: failed_info_hashes includes3aeb9cf..., pending
+target_due=true; existing replacement request includes this target among584targets,
+next_retry_at1788883990.920198. This proves durable alternative-source intent, NOT
+a subsequent download claim. No duplicate request, direct DB edit or failed-hash
+re-add was made. Next bounded step: inspect this same target's existing automatic
+alternative-source decision/claim; if unavailable retain policy backoff. No need
+to re-extract this unchanged rejected source. Formal download/extraction0; M2 open.
+
+One final exact-target read at1788884420 (`alternative-after-source-diagnosis.json`)
+still finds no new info_hash/queued_at, despite retained request next_retry_at now
+past. This is NOT verified live waiting and NOT proof that another source is
+unavailable. Next inspect the existing replacement scheduler owner/job/lease and
+its actual failure/backoff reason; do not simply repeat status or claim automation
+has selected a successor. No admission/lease/protection was altered.
+
 ## Terminal canary and frozen Gate disposition — 2026-09-08 16:12 UTC
 
 The existing bounded observer expired, not the download. A subsequent exact-hash
