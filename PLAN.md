@@ -2,6 +2,12 @@
 
 ## Active Goal — M3 authorized (2026-09-08)
 
+11:47UTC: diagnostic runtime3f800c8 safely deployed;216 actual-image tests,
+freshFI7/7, official recoveryARMED/admission resumed/67holds. New frozen Gate
+m2-gate-20260908T114539007821Z-7a4995553b; old evidence retained. Two actual
+source-stage continuations/checkpoints verified, no formal output added.
+SQLite root cause and real M3 model-output acceptance remain open.
+
 2026-09-08 11:35 UTC: runtime continuation proved after ASR manual review,
 but two SQLite lock failures need root-cause evidence. Targeted traceback logging
 candidate passed 5 local/5 isolated server tests; not yet deployed, not a lock fix.

@@ -1,5 +1,39 @@
 # M3 — configured model recovery
 
+## Diagnostic deployment closeout — 2026-09-08 11:47 UTC
+
+Worker runtime **3f800c8e5cd9a20110f14e8631dc8d380b988f02** is deployed,
+WebUI175a02a7bad46e0b6fa2372c59f39e8dd272911e unchanged.
+Image sha256:3359f9bf6577969310e8512e3763b5cd2cc3f4328f932df95a5c666e9bc4a179.
+Safe deployment20260908T113952Z-993033 exit0, rollback backup retained.
+Owned drain first refused non-idle; work naturally finished, no kill/state clearing.
+Source/test verification and actual-image216 tests passed; fresh isolated breakers7/7.
+Formal recovery exit0, ARMED, admission resumed. Reconciliation
+m3-recon-sqlite-diagnostic-20260908T1137, receipt SHA
+739a126da84abbb625fdebab6fdf8ea2592ee7da316a03a1fcf237ff2f98a902:
+67 holds retained, zero new pending differences, 7087 recoverable and6942
+other-state identities retained. Preservation remains UNPROVEN.
+Original receipt SHA06c38c52e2196ae3002103cb7e64a52b41b0e08882b78d7949f0f13424bbd42d.
+Old Gate archived under existing runtime-change policy, never relabeled PASS.
+New Gate m2-gate-20260908T114539007821Z-7a4995553b,
+start2026-09-08T11:45:39.007821Z, baseline
+m2-guardrail-v1:0e6946e11adbf1bc0d532584, initialized0/20.
+One bounded post-recovery sample proves first frozen claim at1788867976.2228823,
+then NEEDS_REVIEW/strict0; not replaceable. Pipeline jobs da5eb7f40f3a4cf99095195e4ae295d7
+and9d50d991ce72490391f32388a370b6c2 automatically started source analysis,
+each retained a hash-valid checkpoint before review. No operator Retry.
+New formal delivery0; M2/M3 acceptance still incomplete.
+Bounded post-deploy lock excerpt contained only PRE-deployment failures through
+11:37:43. It does not prove the defect is fixed or provide a new stack.
+Next use the new original-error traceback when contention recurs; do not force
+jobs, poll the Queue, or treat absence in this short sample as resolution.
+Evidence root /logs/m3-sqlite-diagnostic-20260908T1137/:
+safe-deploy.log/deploy.exit, actual-runtime-before-recovery.json,
+actual-image-validation.log, attestation.json, recovery-closeout.json,
+post-recovery-probe.json, post-deploy-lock-trace.log.
+Fresh FI /logs/m2-guardrail-fi-20260908T114531868344Z-cd32368d/result.json.
+
+
 ## Pending diagnostic patch — 2026-09-08 11:35 UTC
 
 The repeated runtime SQLite error still has no proven lock owner. Inspection
