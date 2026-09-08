@@ -1,5 +1,24 @@
 # Incremental Delivery Plan
 
+## Source-decision lane isolation (2026-09-08 04:15 UTC)
+
+`5fc079223a9943c8216db19fd2673fb3e01ee247` deployed successfully; controlled recovery
+`m2breakerrec_9041e0635e124e518f563d8aff4c2fa9` armed Gate
+`m2-gate-20260908T040840367821Z-b04fc1a504`, preserving 66 holds and 7140 recoverable
+Queue identities. Historical reconciliation preserved 1176 retry counters and all
+checkpoint/output identities. A real historical claim reached SUBTITLE_DETECTION,
+then its untrustworthy old decision (`source_decision_attempt_reference_invalid`)
+was incorrectly classified as a global system error, pausing the recovery lane.
+
+The exact rejection remains a local review failure; only its failure classification
+is corrected. Generic unknown system errors still pause the lane. No decision is
+blessed or replaced, no checkpoint bypass or QC relaxation is introduced. The
+specific failed obligation will be logically held by the existing reconciliation
+flow; all prior holds and failed receipts remain intact. Candidate 245 tests plus
+isolated actual container restart PASS:
+`/logs/m2-asr-postprocess-isolated-20260908T041522712563Z/`.
+Actual deployment/next claim for this correction is pending; no new subtitle claimed.
+
 ## Checkpoint publication race addendum (2026-09-08 04:02 UTC)
 
 Leading-gap fix `460619e47f49aa3e67dacf66112663644c97ef77` was deployed safely

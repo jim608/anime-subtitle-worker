@@ -540,7 +540,7 @@ class M2ProductionRecoveryTests(unittest.TestCase):
         self.assertEqual(second_result["status"], "BLOCKED_NO_PROGRESS")
         self.assertTrue(second_result["no_progress"])
 
-    def _assert_local_canary_failure_allows_next(self, stage: str, error_code: str) -> None:
+    def _assert_local_canary_failure_allows_next(self, stage: str, error_code: str, detail: str = "") -> None:
         first = self._media("first.mkv")
         second = self._media("second.mkv")
         self._queue(first)
@@ -551,7 +551,7 @@ class M2ProductionRecoveryTests(unittest.TestCase):
         selected = first if dispatched["recovery_id"] == self._recovery_row(first)["recovery_id"] else second
         attempt_id = self._claim_dispatched(selected)
         self.state.finish_ai_delivery_attempt(
-            attempt_id, status="retryable_failure", stage=stage, error_code=error_code,
+            attempt_id, status="retryable_failure", stage=stage, error_code=error_code, detail=detail,
         )
         result = settle_recovery_attempt(self.connection, selected, attempt_id, now=base + 1)
         self.assertEqual(result["status"], "EXCLUDED")
@@ -570,6 +570,13 @@ class M2ProductionRecoveryTests(unittest.TestCase):
 
     def test_bad_input_canary_isolated_and_next_canary_continues(self) -> None:
         self._assert_local_canary_failure_allows_next("source_analysis", "unsupported_media")
+
+    def test_unverified_source_decision_is_reviewable_without_global_lane_pause(self) -> None:
+        detail = "existing source decision is not trustworthy: source_decision_attempt_reference_invalid"
+        self.assertEqual(classify_failure("worker", "worker_unknown", detail), "QUALITY_BLOCKED")
+        self.assertEqual(classify_failure("worker", "worker_unknown", "unexplained system fault"),
+                         "PERMANENT_SYSTEM_ERROR")
+        self._assert_local_canary_failure_allows_next("worker", "worker_unknown", detail)
 
     def test_reconciliation_does_not_touch_source_or_formal_output(self) -> None:
         media = self._media("safe-source.mkv")

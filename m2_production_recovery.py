@@ -142,6 +142,12 @@ def classify_failure(
     fixed = {_safe_code(item, "", 120) for item in fixed_failure_codes}
     if code in fixed:
         return "CODE_VERSION_FIXED"
+    if code == "worker_unknown" and str(detail or "").strip() == (
+        "existing source decision is not trustworthy: source_decision_attempt_reference_invalid"
+    ):
+        # Preserve this task for source-evidence review. This exact local
+        # rejection does not establish a global database/runtime failure.
+        return "QUALITY_BLOCKED"
     if str(detail or "").strip().casefold().startswith(
         "materialized subtitle language conflicts with persisted strategy:"
     ):
