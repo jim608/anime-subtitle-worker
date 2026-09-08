@@ -44,14 +44,16 @@ class ModelRequestContext:
         conn.execute('PRAGMA foreign_keys=ON')
         return conn
 
-    def reserve(self, *, endpoint: str, request: Mapping[str, Any], model: str) -> dict[str, Any]:
+    def reserve(self, *, endpoint: str, request: Mapping[str, Any], model: str,
+                operation_kind: str = 'INFERENCE') -> dict[str, Any]:
         conn = self._connection()
         try:
             return reserve_model_request(conn, stage_attempt_id=self.stage_attempt_id,
                 operation_id=uuid.uuid4().hex,
                 endpoint=hashlib.sha256(endpoint.encode('utf-8')).hexdigest(),
                 request_sha256=hashlib.sha256(_json(request).encode('utf-8')).hexdigest(),
-                model=model, runtime_sha256=self.runtime_sha256, attempt_limit=self.attempt_limit)
+                model=model, runtime_sha256=self.runtime_sha256, attempt_limit=self.attempt_limit,
+                operation_kind=operation_kind)
         finally:
             conn.close()
 
@@ -157,7 +159,8 @@ def _write_current(conn: sqlite3.Connection, request: Mapping[str, Any]) -> None
 
 def reserve_model_request(conn: sqlite3.Connection, *, stage_attempt_id: str,
                           operation_id: str, endpoint: str, request_sha256: str,
-                          model: str, runtime_sha256: str, attempt_limit: int) -> dict[str, Any]:
+                          model: str, runtime_sha256: str, attempt_limit: int,
+                          operation_kind: str = 'INFERENCE') -> dict[str, Any]:
     """Commit before dispatch. A replay is evidence only, never a resend permit."""
     if not isinstance(operation_id, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{8,128}", operation_id):
         raise ModelRequestStateError("model_request_invalid_operation")
@@ -167,9 +170,12 @@ def reserve_model_request(conn: sqlite3.Connection, *, stage_attempt_id: str,
         raise ModelRequestStateError("model_request_invalid_model")
     if type(attempt_limit) is not int or not 1 <= attempt_limit <= 128:
         raise ModelRequestStateError("model_request_invalid_budget")
+    if operation_kind not in {'INFERENCE', 'UNLOAD'}:
+        raise ModelRequestStateError('model_request_invalid_operation_kind')
     basis = dict(stage_attempt_id=stage_attempt_id, operation_id=operation_id,
                  endpoint=endpoint, request_sha256=request_sha256, model=model,
-                 runtime_sha256=runtime_sha256, attempt_limit=attempt_limit)
+                 runtime_sha256=runtime_sha256, attempt_limit=attempt_limit,
+                 operation_kind=operation_kind)
     with _transaction(conn):
         replay = conn.execute("""SELECT payload_json FROM pipeline_stage_events
             WHERE event_type='MODEL_REQUEST_RESERVED' AND json_extract(payload_json,'$.operation_id')=?""",
@@ -182,7 +188,8 @@ def reserve_model_request(conn: sqlite3.Connection, *, stage_attempt_id: str,
         stage = conn.execute("""SELECT a.job_id,a.status,j.active_stage_attempt_id
             FROM pipeline_stage_attempts a JOIN pipeline_jobs j ON j.job_id=a.job_id
             WHERE a.stage_attempt_id=?""", (stage_attempt_id,)).fetchone()
-        if not stage or stage[1] != 'RUNNING' or stage[2] != stage_attempt_id:
+        if not stage or (operation_kind == 'INFERENCE' and
+                         (stage[1] != 'RUNNING' or stage[2] != stage_attempt_id)):
             raise ModelRequestStateError("model_request_stage_not_active")
         owned = conn.execute("""SELECT stage_attempt_id FROM pipeline_stage_attempts
             WHERE json_extract(model_json,'$.m3_request.state') IN ('RESERVED','UNKNOWN')

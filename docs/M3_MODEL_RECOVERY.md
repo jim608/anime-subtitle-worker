@@ -63,6 +63,21 @@ for the existing job/checkpoint/recovery stores.
 
 ### Worker/Translator binding increment (candidate, not deployed)
 
+Lifecycle follow-up: managed Ollama unload now uses the same durable endpoint
+reservation as inference. UNLOAD receipts may reference their completed attempt
+(cleanup runs after processing); this does not permit a new inference on a
+finished attempt. Required Pipeline mode refuses unbound cleanup. Each unload
+POST is reserved before transmission and saves a response digest; ambiguous
+failures retain UNKNOWN ownership. `/api/ps` remains bounded read-only inspection,
+and existing VRAM admission still determines whether ASR can start. No long SQL
+transaction is held across HTTP calls. No independent lifecycle Queue was added.
+
+327 focused/shared tests PASS in server isolation:
+`durable-unload-server.log`. Three composed lifecycle tests verify refusal while
+an UNKNOWN inference exists, endpoint ownership after stage completion, and
+retained UNKNOWN after unload transport failure. This is fixture evidence;
+shared GPU admission and controlled resolution of UNKNOWN still require work.
+
 The durable receipt component is now connected to all four Worker Translator
 entry points. Required Pipeline mode resolves the committed active TRANSLATING
 attempt using the source identity; a missing/mismatched stage fails closed.

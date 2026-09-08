@@ -41,6 +41,12 @@ outcomes retain ownership. Stage-idempotency regression fixed. 324 server-isolat
 tests PASS. Persistent unload/resource/recovery integration and live deployment
 acceptance remain open; M2 evidence is unchanged.
 
+Fifth candidate increment: managed model unload shares durable endpoint ownership
+with inference, including cleanup after stage completion. Required unbound cleanup
+is refused and ambiguous unload outcomes remain UNKNOWN. 327 server-isolated
+tests PASS. Shared-device admission and controlled UNKNOWN reconciliation are
+still required before safe deployment.
+
 Extend the existing configured ASR/translation routes and resource admission,
 not a parallel queue or a wholesale backend rewrite. Preserve compatibility,
 source safety, strict QC and existing durable checkpoint/recovery contracts.

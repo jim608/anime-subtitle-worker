@@ -274,6 +274,7 @@ class SubtitleTranslator:
                 self.config,
                 self.logger,
                 model_names=tuple(getattr(self, "_requested_model_names", ())),
+                request_context=getattr(self, '_request_context', None),
             )
         finally:
             _release_translation_request(endpoint, reservation)

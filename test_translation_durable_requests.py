@@ -136,6 +136,60 @@ class TranslationDurableRequestTest(unittest.TestCase):
         self.assertEqual('UNKNOWN', self.receipts()[-1]['state'])
         self.assertEqual(504, self.receipts()[-1]['result_evidence']['status_code'])
 
+    def unload_config(self):
+        config = self.translator(self.response).config
+        config.translator_ollama_auto_unload_enabled = True
+        config.translator_model = 'primary'
+        config.translator_fallback_models = []
+        return config
+
+    def test_unknown_request_blocks_model_unload_without_post(self):
+        from ollama_lifecycle import unload_managed_translation_models
+        context = self.context
+        config = self.unload_config()
+        request = context.reserve(endpoint=config.translator_base_url,
+                                  request={'fixture': True}, model='primary')
+        context.record(request['token'], 'UNKNOWN', {'reason_code': 'transport_error'})
+        with patch('ollama_lifecycle._running_models', return_value=('primary',)), \
+                patch('ollama_lifecycle._post_json') as post:
+            result = unload_managed_translation_models(config, logging.getLogger('test'),
+                request_context=context, model_names=('primary',))
+        self.assertEqual((), result)
+        post.assert_not_called()
+
+    def test_unload_owns_endpoint_even_after_stage_has_finished(self):
+        from ollama_lifecycle import unload_managed_translation_models
+        self.fixture.store.finish_stage_attempt(self.context.stage_attempt_id, 'RETRYABLE_FAILURE',
+            reason_code='fixture', evidence={'fixture': True}, confidence=1.0)
+        self.fixture.store.commit()
+        config = self.unload_config()
+        def post(*args):
+            current = self.receipts()[-1]
+            self.assertEqual('UNLOAD', current['operation_kind'])
+            self.assertEqual('RESERVED', current['state'])
+            from model_request_state import ModelRequestStateError
+            with self.assertRaisesRegex(ModelRequestStateError, 'ownership_unresolved'):
+                self.context.reserve(endpoint=config.translator_base_url,
+                    request={'operation': 'another unload'}, model='primary', operation_kind='UNLOAD')
+            return {'done': True}
+        with patch('ollama_lifecycle._running_models', side_effect=[('primary',), ()]), \
+                patch('ollama_lifecycle._post_json', side_effect=post):
+            self.assertEqual(('primary',), unload_managed_translation_models(config,
+                logging.getLogger('test'), request_context=self.context, model_names=('primary',)))
+        self.assertEqual('SETTLED', self.receipts()[-1]['state'])
+
+    def test_unload_transport_failure_retains_unknown(self):
+        from ollama_lifecycle import unload_managed_translation_models
+        config = self.unload_config()
+        with patch('ollama_lifecycle._running_models', return_value=('primary',)), \
+                patch('ollama_lifecycle._post_json', side_effect=ConnectionError('fixture')):
+            self.assertEqual((), unload_managed_translation_models(config, logging.getLogger('test'),
+                request_context=self.context, model_names=('primary',)))
+        self.assertEqual('UNKNOWN', self.receipts()[-1]['state'])
+        with self.assertRaises(TranslationRequestInFlightError):
+            self.translator(self.response)._request_translation('1\tsource')
+        self.assertEqual([], self.calls)
+
     def test_timeout_completion_keeps_original_context(self):
         release, finished = threading.Event(), threading.Event()
         def create(**kwargs):

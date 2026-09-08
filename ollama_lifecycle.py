@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import time
 from typing import Any, Callable, Iterable
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
+from model_request_state import ModelRequestContext
 
 
 def unload_managed_translation_models(
@@ -18,6 +20,7 @@ def unload_managed_translation_models(
     opener: Callable[..., Any] | None = None,
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
+    request_context: ModelRequestContext | None = None,
 ) -> tuple[str, ...]:
     """Unload only configured translation models that are already resident.
 
@@ -27,6 +30,9 @@ def unload_managed_translation_models(
     """
 
     if not bool(getattr(config, "translator_ollama_auto_unload_enabled", False)):
+        return ()
+    if bool(getattr(config, 'pipeline_job_store_required', False)) and request_context is None:
+        logger.info('Deferring managed model unload: durable request context required')
         return ()
 
     requested = _requested_models(config, model_names)
@@ -52,15 +58,30 @@ def unload_managed_translation_models(
 
     accepted: list[str] = []
     for model in targets:
+        receipt = None
         try:
-            _post_json(
+            if request_context is not None:
+                receipt = request_context.reserve(
+                    endpoint=str(config.translator_base_url).strip().rstrip('/'),
+                    request={'operation': 'unload', 'model': model}, model=model,
+                    operation_kind='UNLOAD')
+            response = _post_json(
                 generate_url,
                 {"model": model, "keep_alive": 0, "stream": False},
                 timeout,
                 active_opener,
             )
+            if receipt is not None:
+                request_context.record(receipt['token'], 'RESPONSE', {
+                    'response_sha256': hashlib.sha256(json.dumps(response, sort_keys=True).encode('utf-8')).hexdigest(),
+                })
             accepted.append(model)
         except Exception as exc:  # noqa: BLE001 - another target may still release successfully.
+            if receipt is not None:
+                try:
+                    request_context.record(receipt['token'], 'UNKNOWN', {'reason_code': 'transport_error'})
+                except Exception:
+                    logger.warning('Managed model unload result could not be persisted; retaining ownership')
             logger.warning("Unable to request Ollama model unload model=%s error=%s", model, exc)
 
     if not accepted:
