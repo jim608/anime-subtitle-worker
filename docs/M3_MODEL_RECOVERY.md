@@ -5,6 +5,31 @@ its frozen cohort, held sources and UNPROVEN preservation claims are unchanged.
 
 ## Scope
 
+## Current controlled entry increment (candidate, not deployed)
+
+The existing host `recover` command accepts one optional `--model-request-token`
+only with an explicit model-provider container and planned/authorized
+reconciliation. It captures the provider before recovery, rechecks before the
+single-request resolution, and rechecks again through the existing arm flow.
+Resolution occurs after controlled breaker recovery and before arm/resume, not
+through a new queue or a general-purpose clear command.
+
+The internal `resolve-model-local` command requires a DISARMED pending-handoff
+state, the controlled-recovery pause owner, durable admission pause, the exact
+hash-bound recovery log inside the configured log directory and matching current
+code/configuration/container-instance identity. It preserves the pause, old Gate,
+recovery log and source/output data. Interrupted recovery selects the original
+recovery log, not the subsequent resume log. Persisted sender proof and provider
+restart ordering are still required; unbound historical requests remain held.
+
+Server isolated related suite: 152 PASS (`provider-controlled-entry-server.log`).
+Final additional runtime/fence checks are in
+`provider-controlled-entry-final-server.log`. These tests exercise actual isolated
+SQLite transactions and local files with fixture host identity; they are not a
+live Production recovery. Full host-command composition, real provider termination
+fixture, ongoing provider drift enforcement and safe deployment remain open.
+Earlier paragraphs saying no controlled entry exists describe prior increments.
+
 ## Provider identity binding (candidate, not deployed)
 
 The host arm/recover path now optionally accepts `--model-provider-container`.

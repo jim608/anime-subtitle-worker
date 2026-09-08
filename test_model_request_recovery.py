@@ -1,5 +1,9 @@
 """Isolated state-level controlled settlement; no live provider or DB access."""
 import unittest
+import hashlib
+import json
+from contextlib import ExitStack
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import test_model_request_state as fixtures
@@ -92,6 +96,96 @@ class ModelRequestRecoveryTest(unittest.TestCase):
         request = self.prepare()
         with self.assertRaisesRegex(ModelRequestStateError, 'invalid_outcome'):
             self.settle(request, 'PROVIDER_TERMINATED', {'recovery_record_sha256':'f'*64})
+
+    def local_fixture(self):
+        self.prepare()
+        self.config = SimpleNamespace(m2_recovery_enabled=True, work_path=self.root,
+            log_path=self.root/'logs', scanner_state_path=self.database, translator_base_url=self.url)
+        self.config.log_path.mkdir()
+        self.log = self.config.log_path/'recovery.json'
+        self.log.write_text(json.dumps({'recovery_record_id':'fixture-recovery',
+            'recovery_mode':'authorized_reconciliation', 'completion_runtime': {
+                'worker_runtime_code_revision':'code', 'configuration_fingerprint':'config',
+                'worker_runtime_instance_fingerprint':'instance'}}), encoding='utf-8')
+        self.control = self.root/'ai_control.json'
+        self.control.write_text(json.dumps({'paused':True, 'requested_by':'m2-controlled-breaker-recovery'}), encoding='utf-8')
+        self.state_path = self.root/'runtime.json'
+        self.state_path.write_text(json.dumps({'status':'DISARMED',
+            'disarm_reason':'controlled_breaker_recovery_pending_new_gate', 'recovery_record': {
+                'recovery_record_id':'fixture-recovery',
+                'log_sha256':'sha256:'+hashlib.sha256(self.log.read_bytes()).hexdigest()}}), encoding='utf-8')
+        self.local_evidence = {'token':self.kwargs['token'], 'model_provider':self.new,
+                               'recovery_log_path':str(self.log)}
+
+    def local_resolve(self):
+        from m2_guardrail_runtime import resolve_model_request_local
+        with ExitStack() as stack:
+            for target, value in [
+                ('m2_guardrail_runtime.worker_runtime_code_revision', 'code'),
+                ('m2_guardrail_runtime.configuration_fingerprint', 'config'),
+                ('m2_guardrail_runtime.worker_runtime_instance_fingerprint', {'runtime_instance_fingerprint':'instance'}),
+                ('m2_production_observation.require_durable_claim_pause', {'paused':True})]:
+                stack.enter_context(patch(target, return_value=value))
+            return resolve_model_request_local(self.config, self.local_evidence, state_path_override=self.state_path)
+
+    def test_local_controlled_handoff_resolves_without_arming_or_resuming(self):
+        self.local_fixture()
+        before = (self.state_path.read_bytes(), self.control.read_bytes(), self.log.read_bytes())
+        result = self.local_resolve()
+        self.assertEqual('DISARMED', result['status'])
+        self.assertFalse(result['claims_resumed'])
+        self.assertEqual(before, (self.state_path.read_bytes(), self.control.read_bytes(), self.log.read_bytes()))
+        self.assertTrue(self.local_resolve()['replay'])
+
+    def test_local_other_pause_owner_or_unpaused_handoff_is_rejected(self):
+        from m2_guardrail_runtime import RuntimeContractError
+        self.local_fixture()
+        for control in ({'paused':True,'requested_by':'another-operator'},
+                        {'paused':False,'requested_by':'m2-controlled-breaker-recovery'}):
+            self.control.write_text(json.dumps(control), encoding='utf-8')
+            with self.assertRaisesRegex(RuntimeContractError, 'pause_owner_mismatch'):
+                self.local_resolve()
+        with self.assertRaisesRegex(ModelRequestStateError, 'ownership_unresolved'):
+            self.reserve(operation_id='operation-two')
+
+    def test_local_modified_recovery_log_is_rejected(self):
+        from m2_guardrail_runtime import RuntimeContractError
+        self.local_fixture()
+        self.log.write_text('{}', encoding='utf-8')
+        with self.assertRaisesRegex(RuntimeContractError, 'log_mismatch'):
+            self.local_resolve()
+
+    def test_local_armed_gate_cannot_be_used_to_release_request(self):
+        from m2_guardrail_runtime import RuntimeContractError
+        self.local_fixture()
+        state = json.loads(self.state_path.read_text(encoding='utf-8'))
+        state['status'] = 'ARMED'
+        self.state_path.write_text(json.dumps(state), encoding='utf-8')
+        with self.assertRaisesRegex(RuntimeContractError, 'controlled_handoff_required'):
+            self.local_resolve()
+
+    def test_local_runtime_change_rejects_even_hash_matching_record(self):
+        from m2_guardrail_runtime import RuntimeContractError
+        self.local_fixture()
+        record = json.loads(self.log.read_text(encoding='utf-8'))
+        record['completion_runtime']['configuration_fingerprint'] = 'different'
+        self.log.write_text(json.dumps(record), encoding='utf-8')
+        state = json.loads(self.state_path.read_text(encoding='utf-8'))
+        state['recovery_record']['log_sha256'] = 'sha256:'+hashlib.sha256(self.log.read_bytes()).hexdigest()
+        self.state_path.write_text(json.dumps(state), encoding='utf-8')
+        with self.assertRaisesRegex(RuntimeContractError, 'runtime_mismatch'):
+            self.local_resolve()
+
+    def test_host_requires_explicit_provider_and_planned_handoff_before_commands(self):
+        from m2_guardrail_runtime import RuntimeContractError, recover_runtime_on_host
+        with patch('m2_guardrail_runtime._inspect_container') as inspect:
+            with self.assertRaisesRegex(RuntimeContractError, 'planned_provider_handoff_required'):
+                recover_runtime_on_host(expected_worker_commit_sha='a'*40,
+                    expected_webui_commit_sha='b'*40, expected_old_gate_id='old',
+                    fault_summary_path='fixture', model_request_token='token',
+                    docker_binary='docker', worker_container='worker', webui_container='webui',
+                    expected_breaker_reason='fixture', affected_stage='TRANSLATING', failure_code='fixture')
+            inspect.assert_not_called()
 
 
 if __name__ == '__main__':

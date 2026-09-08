@@ -2325,6 +2325,7 @@ def _prepare_pending_recovery_resume(
         "breaker_before": "TRIPPED",
         "breaker_after": "ARMED_PENDING_NEW_GATE",
         "log_path": str(resume_log_path),
+        "original_recovery_log_path": str(candidates[0]),
         "log_sha256": completion["log_sha256"],
         "reconciliation": recovery_log.get("reconciliation"),
         "production_resources_affected": False,
@@ -2789,6 +2790,69 @@ def recover_runtime_local(
     }
 
 
+def resolve_model_request_local(config: Any, evidence: Mapping[str, Any], *,
+                                state_path_override: str | Path | None = None) -> dict[str, Any]:
+    """Host-controlled, paused handoff only; never arm or resume admission here."""
+    import sqlite3
+    from model_request_state import resolve_model_request_after_provider_restart
+    from m2_production_observation import require_durable_claim_pause
+
+    if not bool(getattr(config, 'm2_recovery_enabled', False)):
+        raise RuntimeContractError('m2_recovery_policy_not_loaded')
+    state = _read_json(runtime_state_path(config, state_path_override)) or {}
+    if (state.get('status') != 'DISARMED' or
+            state.get('disarm_reason') != 'controlled_breaker_recovery_pending_new_gate'):
+        raise RuntimeContractError('model_resolution_controlled_handoff_required')
+    control_path = Path(config.work_path) / 'ai_control.json'
+    control = _read_json(control_path) or {}
+    if control.get('paused') is not True or control.get('requested_by') != 'm2-controlled-breaker-recovery':
+        raise RuntimeContractError('model_resolution_pause_owner_mismatch')
+    require_durable_claim_pause(config)
+    recovery = state.get('recovery_record') or {}
+    log_path = Path(str(evidence.get('recovery_log_path') or '')).resolve()
+    log_root = Path(config.log_path).resolve()
+    if not log_path.is_relative_to(log_root) or not log_path.is_file():
+        raise RuntimeContractError('model_resolution_recovery_log_missing')
+    log_digest = sha256_file(log_path)
+    if recovery.get('log_sha256') != 'sha256:' + log_digest:
+        raise RuntimeContractError('model_resolution_recovery_log_mismatch')
+    record = _read_json(log_path) or {}
+    if (record.get('recovery_record_id') != recovery.get('recovery_record_id') or
+            record.get('recovery_mode') not in {'planned_runtime_change', 'authorized_reconciliation'}):
+        raise RuntimeContractError('model_resolution_recovery_record_mismatch')
+    actual = record.get('completion_runtime') or {}
+    if (actual.get('worker_runtime_code_revision') != worker_runtime_code_revision(config) or
+            actual.get('configuration_fingerprint') != configuration_fingerprint(config) or
+            actual.get('worker_runtime_instance_fingerprint') !=
+            worker_runtime_instance_fingerprint(config)['runtime_instance_fingerprint']):
+        raise RuntimeContractError('model_resolution_runtime_mismatch')
+    database = Path(config.scanner_state_path)
+    if not database.is_absolute():
+        database = Path(config.work_path) / database
+    connection = sqlite3.connect(database.resolve().as_uri() + '?mode=rw', uri=True, timeout=10)
+    try:
+        connection.execute('PRAGMA foreign_keys=ON')
+        token = str(evidence.get('token') or '')
+        original = connection.execute("""SELECT payload_json FROM pipeline_stage_events
+            WHERE event_type='MODEL_REQUEST_RESERVED' AND json_extract(payload_json,'$.token')=?""",
+            (token,)).fetchone()
+        if not original:
+            raise RuntimeContractError('model_resolution_request_missing')
+        owner = json.loads(original[0])
+        # Recheck fence immediately before the short atomic request transaction.
+        if _read_json(control_path) != control or _read_json(runtime_state_path(config, state_path_override)) != state:
+            raise RuntimeContractError('model_resolution_handoff_changed')
+        result = resolve_model_request_after_provider_restart(connection, token=token,
+            runtime_sha256=owner['runtime_sha256'], endpoint=str(config.translator_base_url),
+            current_provider_binding=evidence.get('model_provider') or {},
+            recovery_record_sha256=log_digest)
+    finally:
+        connection.close()
+    return {'status': 'DISARMED', 'claims_resumed': False, 'token': token,
+            'outcome': result['outcome'], 'replay': result['replay'],
+            'recovery_record_id': recovery['recovery_record_id']}
+
+
 def resume_claims_local(
     config: Any,
     *,
@@ -2895,9 +2959,14 @@ def recover_runtime_on_host(
     runtime_state_path_override: str = "",
     root_cause_evidence: Mapping[str, Any] | None = None,
     model_provider_container: str = "",
+    model_request_token: str = "",
     runner: CommandRunner | None = None,
 ) -> dict[str, Any]:
     """Attest, recover, re-arm, and seed one recovery canary without waiting."""
+
+    if model_request_token and (not model_provider_container or
+            (root_cause_evidence or {}).get('mode') not in {'planned_runtime_change', 'authorized_reconciliation'}):
+        raise RuntimeContractError('model_resolution_planned_provider_handoff_required')
 
     worker_name = _require_container_name(worker_container)
     webui_name = _require_container_name(webui_container)
@@ -3036,6 +3105,21 @@ def recover_runtime_on_host(
     )
     if recovered.get("status") != "DISARMED":
         raise RuntimeContractError("controlled_breaker_recovery_incomplete")
+    if model_request_token:
+        fresh_binding = _capture_model_provider_binding(docker_binary, model_provider_container, probe_result, run)
+        if fresh_binding != expected_provider_binding:
+            raise RuntimeContractError('model_provider_changed_during_recovery')
+        resolve_command = [docker_binary, 'exec', '-i', worker_name, 'python',
+            '/app/m2_guardrail_runtime.py', 'resolve-model-local', '--config', worker_config_path]
+        if runtime_state_path_override:
+            resolve_command.extend(['--state-path', runtime_state_path_override])
+        resolved = _run_json(resolve_command, run, 'model_request_resolution_failed', stdin=json.dumps({
+            'token': model_request_token, 'model_provider': fresh_binding,
+            'recovery_log_path': recovered.get('original_recovery_log_path') or recovered.get('log_path')}, sort_keys=True))
+        if (resolved.get('status') != 'DISARMED' or resolved.get('claims_resumed') is not False
+                or resolved.get('token') != model_request_token
+                or resolved.get('outcome') != 'PROVIDER_TERMINATED'):
+            raise RuntimeContractError('model_resolution_fence_not_preserved')
     armed = arm_runtime_on_host(
         docker_binary=docker_binary,
         worker_container=worker_name,
@@ -3768,6 +3852,7 @@ def _parser() -> argparse.ArgumentParser:
     recover.add_argument("--worker-container", default="anime-subtitle-worker")
     recover.add_argument("--webui-container", default="anime-subtitle-worker-webui")
     recover.add_argument('--model-provider-container', default='')
+    recover.add_argument('--model-request-token', default='')
     recover.add_argument("--expected-worker-commit-sha", required=True)
     recover.add_argument("--expected-webui-commit-sha", required=True)
     recover.add_argument("--expected-old-gate-id", required=True)
@@ -3817,6 +3902,9 @@ def _parser() -> argparse.ArgumentParser:
     recover_local.add_argument("--config", required=True)
     recover_local.add_argument("--source-revision-file", required=True)
     recover_local.add_argument("--state-path", default="")
+    resolve_local = subparsers.add_parser('resolve-model-local', help=argparse.SUPPRESS)
+    resolve_local.add_argument('--config', required=True)
+    resolve_local.add_argument('--state-path', default='')
     resume_local = subparsers.add_parser("resume-local", help=argparse.SUPPRESS)
     resume_local.add_argument("--config", required=True)
     resume_local.add_argument("--source-revision-file", required=True)
@@ -3877,6 +3965,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 webui_source_revision_file=args.webui_source_revision_file,
                 runtime_state_path_override=args.state_path,
                 root_cause_evidence=planned,
+                model_request_token=args.model_request_token,
             )
         elif args.command == 'pause-reconciliation':
             from config import load_config
@@ -3923,7 +4012,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise RuntimeContractError("runtime_evidence_invalid") from exc
             if not isinstance(evidence, dict):
                 raise RuntimeContractError("runtime_evidence_invalid")
-            if args.command == "recover-local":
+            if args.command == 'resolve-model-local':
+                result = resolve_model_request_local(config, evidence, state_path_override=args.state_path or None)
+            elif args.command == "recover-local":
                 result = recover_runtime_local(
                     config,
                     evidence,

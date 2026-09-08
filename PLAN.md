@@ -9,6 +9,12 @@ relabeled PASS or mixed with future M3 runtime results.
 
 ### M3 — Configured model fallback and resource-aware recovery
 
+Candidate host integration now resolves one explicitly selected model request
+inside existing controlled recovery, between persisted pause/recovery and arm.
+Hash-bound recovery record, pause ownership and actual runtime identity are
+required. 152 related server-isolated tests PASS; host-composed/real-provider
+verification and live drift enforcement remain required before safe deployment.
+
 Controlled model settlement state primitive is implemented and isolated-tested:
 74 related server tests PASS. It preserves UNKNOWN history/budget and stage status,
 requires persisted sender evidence and exact provider restart ordering, and safely
