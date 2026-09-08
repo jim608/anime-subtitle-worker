@@ -1,5 +1,36 @@
 # M2 remaining acceptance — 2026-09-08
 
+## Resumed M2 and frozen Gate disposition — 2026-09-08 13:49 UTC
+
+Gate m2-gate-20260908T121706917079Z-5900a7525f automatically SETTLED20/20;
+18NEEDS_REVIEW,2FAILED,strict_verified0. Automatic summary safety_gateFAIL.
+This is a failed acceptance result, not a missing observation or request to reset.
+Summary emitted1788874881.027214; fixed cohort and evidence remain untouched.
+Summary /work/m2_server_canary_observations/m2-gate-20260908T121706917079Z-5900a7525f.json
+SHA2687618aba2cd19f102582ec507cf7f7b8c3ac859619cec3892cdab26d56c837
+matches immutable stored digest. Breaker remains ARMED/runtime_baseline_match;
+Worker738e96eafec66a6f62db31b9247cd58bf0aec6df,
+WebUI175a02a7bad46e0b6fa2372c59f39e8dd272911e. No deployment/Gate mutation.
+Current Worker child2527267 was live at initial read; no forced interruption.
+
+Existing5-case refresh (no library scan):3380:6 and2911:10 each have2indexed
+targets, retained identity review;2565:12,3085:13,3932:3 each have1target but no
+verified TC completion. None of their historical project torrents is present.
+One bounded existing-policy alternate-source search for260:E1/E2/E3/E8 returned
+35releases,6successful sources,0failed sources and0selected candidates. Source
+service availability does not prove suitable matching media or swarm availability.
+No failed/seen reset, torrent add, source mutation, or formal publication.
+Next: investigate suitable sources for the3uniquely indexed existing old targets.
+M3 AI1 is historical separate evidence, never counted as download/extraction or
+replacement Gate membership. New formal download/extraction additions0.
+
+Logs /logs/m2-resumed-acceptance-20260908/:
+initial-gate-runtime.json,initial-worker.json,initial-process.txt,
+old-five-check.log,alternate-source-check.log,gate-summary-resolved.json.
+Full source reports linked by those logs under m2-recovery-unblock-20260905T064508843990Z.
+Initial gate-summary-evidence.json interpreted basename as cwd-relative;
+resolved report uses the actual configured output directory and verifies its hash.
+
 13:27UTC M3 model/recovery engineering closeout completed separately; actual-image
 duplicate ingress/promote/scanner refusal2cycles passed in isolation. No additional
 subtitle delivery, no runtime/Gate reset. M2 remains incomplete: download/extraction

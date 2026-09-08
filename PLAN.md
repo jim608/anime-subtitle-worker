@@ -1,5 +1,17 @@
 # Incremental Delivery Plan
 
+## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
+
+2026-09-08 13:49UTC: resumed M2; M3 engineering evidence remains accepted separately.
+Current frozen Gate121706 has automatically SETTLED20/20:18NEEDS_REVIEW,2FAILED,
+strict_verified0; server summary safety_gateFAIL. Preserve failed cohort/summary,
+do not backfill/reset or claim M2 acceptance. Runtime738e96e/ARMED unchanged.
+Five known old-completed cases:2identity-review/3unverified completion, no retained
+project torrents. One existing-policy alternative source cycle returned35releases
+from6successful sources, selected0. No re-add/reset/Whisper bypass performed.
+Next safe work: bounded source suitability investigation for the3uniquely indexed
+old targets; no full library scan. New download/extraction formal delivery0.
+
 ## M3 engineering delivered — M2 acceptance remains open (2026-09-08)
 
 13:27UTC final audit closes configured-model/recovery engineering scope:

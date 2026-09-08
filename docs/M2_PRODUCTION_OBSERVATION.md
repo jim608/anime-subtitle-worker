@@ -1243,3 +1243,14 @@ Circuit-breaker semantics are fail-closed for **new claims only**:
 - Rolling 500-job production SLO evidence.
 - Any measured 99% or 99.9% autonomy claim.
 - Final disposition of the full queued backlog; this closeout intentionally does not wait for or monitor it job by job.
+# M2 resumed Gate disposition — 2026-09-08 13:49 UTC
+
+Current Gate m2-gate-20260908T121706917079Z-5900a7525f automatically SETTLED20/20:
+18NEEDS_REVIEW,2FAILED,strict_verified0; persisted automatic safety_gateFAIL.
+M2 is NOT accepted. No backfill, cohort replacement, reset or new Gate authorized
+by this query. Original receipt/baseline and automatic summary remain unchanged.
+Summary /work/m2_server_canary_observations/m2-gate-20260908T121706917079Z-5900a7525f.json
+matches journalSHA2687618aba2cd19f102582ec507cf7f7b8c3ac859619cec3892cdab26d56c837.
+Evidence /logs/m2-resumed-acceptance-20260908/gate-summary-resolved.json.
+Runtime738e96e/ARMED; no deployment or admission override. Prior M3 AI delivery
+does not replace any failed frozen member. No waiting for20 was performed.
