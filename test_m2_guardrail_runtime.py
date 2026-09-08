@@ -355,10 +355,27 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
             evidence = self._evidence()
             evidence['model_provider'] = capture_provider_binding(inspection,
                 direct_endpoint_descriptor(self.config.translator_base_url), ['192.0.2.10'], observed_at=observed)
+            evidence['model_provider_checked_at'] = 1_788_454_923.0
             states.append(runtime.initialize_gate(self.config, evidence,
                 source_revision_file=self.revision, now=1_788_454_923.0))
         self.assertEqual(states[0]['gate']['gate_id'], states[1]['gate']['gate_id'])
         self.assertEqual('a'*64, states[0]['baseline']['model_provider']['container_id'])
+        observation_path = self.config.work_path / 'm3-provider-observation.json'
+        original = json.loads(observation_path.read_text(encoding='utf-8'))
+        with mock.patch('m2_guardrail_runtime.time.time', return_value=1_788_454_933.0):
+            self.assertEqual('ARMED', runtime.runtime_guardrail_status(self.config,
+                source_revision_file=self.revision)['status'])
+            for change, reason in [({'checked_at':1_788_454_000.0}, 'expired_or_clock_invalid'),
+                                   ({'checked_at':1_788_455_000.0}, 'expired_or_clock_invalid'),
+                                   ({'model_provider':{}}, 'identity_unproven'),
+                                   ({'gate_baseline_version':'other'}, 'baseline_mismatch')]:
+                observation_path.write_text(json.dumps({**original, **change}), encoding='utf-8')
+                result = runtime.runtime_guardrail_status(self.config, source_revision_file=self.revision)
+                self.assertEqual('DEGRADED', result['status'])
+                self.assertIn(reason, result['reason_code'])
+            observation_path.unlink()
+            self.assertEqual('DEGRADED', runtime.runtime_guardrail_status(self.config,
+                source_revision_file=self.revision)['status'])
 
     def test_gate_claim_requires_post_start_matching_baseline_and_not_preexisting(self) -> None:
         state = runtime.initialize_gate(

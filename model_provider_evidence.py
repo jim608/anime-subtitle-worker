@@ -18,6 +18,24 @@ class ModelProviderEvidenceError(RuntimeError):
     pass
 
 
+PROVIDER_OBSERVATION_MAX_AGE = 90.0
+
+
+def validate_provider_observation(baseline: Mapping[str, Any], observation: Mapping[str, Any], *,
+                                  gate_baseline_version: str, now: float) -> None:
+    """Fresh host inspection is necessary, not proof of request completion."""
+    if (observation.get('contract') != 'm3-provider-observation-v1' or
+            observation.get('gate_baseline_version') != gate_baseline_version):
+        raise ModelProviderEvidenceError('provider_observation_baseline_mismatch')
+    checked = observation.get('checked_at')
+    if (type(now) not in (int, float) or not math.isfinite(now) or
+            type(checked) not in (int, float) or not math.isfinite(checked) or
+            checked <= 0 or not 0 <= now - checked <= PROVIDER_OBSERVATION_MAX_AGE):
+        raise ModelProviderEvidenceError('provider_observation_expired_or_clock_invalid')
+    if observation.get('status') != 'VERIFIED' or observation.get('model_provider') != dict(baseline):
+        raise ModelProviderEvidenceError('provider_observation_identity_unproven')
+
+
 def _digest(payload: Mapping[str, Any]) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 

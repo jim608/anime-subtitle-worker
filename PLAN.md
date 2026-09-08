@@ -9,6 +9,11 @@ relabeled PASS or mixed with future M3 runtime results.
 
 ### M3 — Configured model fallback and resource-aware recovery
 
+Provider observation consumer/arm seed now fails closed for missing, stale,
+future or baseline-mismatched host evidence. Autonomous host publishing and
+post-response generation confirmation remain incomplete; freshness alone is not
+continuous provider identity proof. This candidate is not deployment-ready yet.
+
 Real isolated provider termination is now verified (09:16 UTC): real HTTP sender,
 durable UNKNOWN, Docker-confirmed sender exit, same-provider restart, exact fresh
 binding, controlled settlement/replay and unchanged source/checkpoint/budget.

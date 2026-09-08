@@ -5,6 +5,30 @@ its frozen cohort, held sources and UNPROVEN preservation claims are unchanged.
 
 ## Scope
 
+## Provider observation admission contract (candidate, not deployed)
+
+For a provider-bound baseline, runtime status now requires a host observation
+bound to the same Gate baseline and exact provider identity. Missing evidence,
+non-VERIFIED status, a different identity/baseline, future/non-finite timestamps
+or an observation older than 90 seconds fails closed as DEGRADED. Existing
+admission and terminal-observation callers consume that status. Legacy baselines
+without provider binding are not silently retrofitted.
+
+Host arm supplies its inspection timestamp, and initialization validates it and
+atomically seeds `work/m3-provider-observation.json`. Re-attesting the same
+baseline does not change cohort membership or Gate start. The timestamp is not
+part of the frozen baseline identity. Tests cover fresh acceptance, missing,
+expired, future, mismatched provider and mismatched Gate observations.
+Server isolated related suite: 76 PASS (70.061 seconds),
+`/logs/m3-baseline-20260908T070237Z/provider-observation-seed-server.log`.
+
+This is the consumer/initial-seed contract only. The autonomous host publisher
+and post-response verification barrier are not implemented yet. A 90-second
+freshness window alone is NOT proof that no provider change occurred during a
+request; it must not be presented as continuous generation validation or used
+to accept mixed-version output. Do not deploy this increment before those
+producer and publication/terminal boundaries are complete.
+
 ## Real isolated provider termination evidence (2026-09-08 09:16 UTC)
 
 `m3_provider_restart_test.sh` and `m3_provider_restart_probe.py` exercised a real

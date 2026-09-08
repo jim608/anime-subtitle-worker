@@ -448,6 +448,14 @@ def runtime_guardrail_status(
             raise RuntimeContractError("live_worker_runtime_code_revision_mismatch")
         if baseline.get("configuration_fingerprint") != configuration_fingerprint(config):
             raise RuntimeContractError("live_configuration_fingerprint_mismatch")
+        if baseline.get('model_provider') is not None:
+            from model_provider_evidence import validate_provider_observation, ModelProviderEvidenceError
+            try:
+                validate_provider_observation(baseline['model_provider'],
+                    _read_json(Path(config.work_path) / 'm3-provider-observation.json') or {},
+                    gate_baseline_version=str(state.get('gate_baseline_version') or ''), now=time.time())
+            except ModelProviderEvidenceError as exc:
+                raise RuntimeContractError(str(exc)) from exc
         from m2_observation_store import ELIGIBILITY_POLICY_VERSION
 
         if (
@@ -907,6 +915,18 @@ def initialize_gate(
         except (ModelProviderEvidenceError, TypeError, ValueError) as exc:
             raise RuntimeContractError('model_provider_binding_invalid') from exc
     baseline_version = _baseline_version(baseline)
+    provider_observation = None
+    if baseline.get('model_provider') is not None:
+        from model_provider_evidence import validate_provider_observation, ModelProviderEvidenceError
+        provider_observation = {'contract':'m3-provider-observation-v1',
+            'gate_baseline_version':baseline_version, 'status':'VERIFIED',
+            'model_provider':baseline['model_provider'],
+            'checked_at':evidence.get('model_provider_checked_at')}
+        try:
+            validate_provider_observation(baseline['model_provider'], provider_observation,
+                gate_baseline_version=baseline_version, now=timestamp)
+        except ModelProviderEvidenceError as exc:
+            raise RuntimeContractError(str(exc)) from exc
     target = runtime_state_path(config, state_path_override)
     existing = _read_json(target)
     if isinstance(existing, dict) and existing.get("status") == "ARMED":
@@ -919,6 +939,9 @@ def initialize_gate(
         ):
             from m2_production_observation import initialize_observation_gate
 
+            if provider_observation is not None:
+                atomic_write_text(Path(config.work_path) / 'm3-provider-observation.json',
+                                  json.dumps(provider_observation, sort_keys=True) + '\n')
             observation_gate = initialize_observation_gate(config, existing, now=timestamp)
             existing_gate["gate_id"] = str(observation_gate["gate_id"])
             existing_gate["eligibility_policy_version"] = ELIGIBILITY_POLICY_VERSION
@@ -974,6 +997,9 @@ def initialize_gate(
     # manifest exists; it can never count jobs against a half-created gate.
     from m2_production_observation import initialize_observation_gate
 
+    if provider_observation is not None:
+        atomic_write_text(Path(config.work_path) / 'm3-provider-observation.json',
+                          json.dumps(provider_observation, sort_keys=True) + '\n')
     observation_gate = initialize_observation_gate(config, state, now=timestamp)
     state["gate"]["gate_id"] = str(observation_gate["gate_id"])
     state["gate_start_at"] = str(observation_gate["gate_start_at"])
@@ -3329,6 +3355,7 @@ def arm_runtime_on_host(
     if model_provider_container:
         evidence['model_provider'] = _capture_model_provider_binding(
             docker_binary, model_provider_container, probe_result, run)
+        evidence['model_provider_checked_at'] = time.time()
         if expected_model_provider_binding is not None and evidence['model_provider'] != expected_model_provider_binding:
             raise RuntimeContractError('model_provider_changed_during_recovery')
     initialize_command = [
