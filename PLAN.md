@@ -2,6 +2,11 @@
 
 ## Active Goal — M3 authorized (2026-09-08)
 
+12:55UTC e15760... canary naturally exited: NEEDS_REVIEW/paused/attempts3,
+ASR quality failure after configured fallbacks; no further forced retry.
+Source/archive preservation verified; MODEL0/formal additions0.
+Runtime738e96e/ARMED/admission open/68holds/Gate unchanged. M3 not accepted.
+
 12:48UTC second canary attempt e15760... actually auto-claimed after7d0c98...
 paused for ASR review. Live ASR child1852332 and source checkpoint hash verified.
 Fresh runtime738e96e/ARMED/68holds/currentGate unchanged; noMODEL events/output.

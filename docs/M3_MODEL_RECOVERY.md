@@ -1,5 +1,29 @@
 # M3 — configured model recovery
 
+## Canary terminal closeout — 2026-09-08 12:55 UTC
+
+The bounded existing ASR chain (large-v3 -> large-v2 -> independent medium)
+did not yield accepted ASR output. Job e15760a3eac4466eb2ea02c430d64418
+naturally exited: child1852332 absent; Pipeline NEEDS_REVIEW, Queue paused,
+attempts3, deterministic_asr_quality/manual_review. MODEL events0.
+Do not force another retry, reset its budget, or repeat the one-shot retranslate.
+This is real bounded fallback/exhaustion evidence, NOT model publication success.
+Formal additions0. Source and original sidecar checksums unchanged (2 files);
+original retranslate manifest and both archived intermediates preserved.
+
+Runtime check1788872149.3226001: Worker738e96e, ARMED/runtime_baseline_match,
+admission unpaused,68 holds, same Gate121706. No code/config/deployment change.
+Evidence /logs/m3-review-convergence-20260908T1210/:
+bounded-asr-wait-4.json, bounded-asr-terminal-6.json,
+bounded-asr-terminal-6-process.txt, final-canary-safety.json,
+final-canary-runtime.json. Do not continue waiting on the exited child.
+
+M3 real translation/provider-confirmed publication remains unverified because
+this canary did not pass upstream ASR quality. A different verified eligible
+source must use existing admission/ownership; do not bypass quality/lineage.
+M2 download/extraction requires usable matching download; prior failed torrents
+must not be repeatedly re-added. Strict Gate remains unaccepted, no backfill.
+
 ## Actual configured ASR fallback — 2026-09-08 12:51 UTC
 
 Bounded follow-up of live child1852332 (no new dispatch) shows e15760... running,
