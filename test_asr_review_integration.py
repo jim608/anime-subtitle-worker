@@ -20,11 +20,115 @@ from transcriber import (
     LowConfidenceTranscriptionError,
     asr_diagnostics_path,
     asr_transcription_hold_path,
+    validate_transcription_srt_quality,
 )
 from worker import VideoWorker
 
 
 class AsrReviewIntegrationTest(unittest.TestCase):
+    def test_final_rejection_retains_only_hash_bound_diagnostics(self) -> None:
+        for matching in (True, False):
+            with self.subTest(matching=matching), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                config = _config(root, asr_diagnostics_enabled=True,
+                    transcription_quality_check_enabled=False,
+                    asr_prompt_free_allow_recovered_primary_artifacts=True,
+                    whisper_initial_prompt=None, op_ed_initial_prompt=None,
+                    whisper_condition_on_previous_text=False)
+                output = root / "episode.srt"
+                write_srt(output, [SrtBlock(1, "00:00:02,100 --> 00:00:03,000", ["な"])])
+                diagnostics = asr_diagnostics_path(output, config)
+                diagnostics.parent.mkdir(parents=True, exist_ok=True)
+                diagnostics.write_text(json.dumps({
+                    "status": "accepted", "srt_sha256": sha256_file(output) if matching else "stale",
+                    "confidence_segments": [{"avg_logprob": -0.2}],
+                    "repair_attempted": True,
+                    "repair_attempts": [{"fingerprint": "already-consumed"}],
+                }), encoding="utf-8")
+                for _ in range(2):
+                    with self.assertRaises(LowConfidenceTranscriptionError):
+                        validate_transcription_srt_quality(root / "audio.wav", output, config, _logger())
+                payload = json.loads(diagnostics.read_text(encoding="utf-8"))
+                self.assertEqual(payload["status"], "selective_retry_required")
+                self.assertEqual(payload["review_ranges"], [[2.1, 3.0]])
+                self.assertEqual(payload["srt_sha256"], sha256_file(output))
+                self.assertEqual(bool(payload.get("repair_attempted")), matching)
+                self.assertEqual(bool(payload.get("confidence_segments")), matching)
+                self.assertEqual(bool(payload.get("repair_attempts")), matching)
+
+    def test_fragment_repair_requires_durable_budget_for_active_source(self) -> None:
+        for disabled in (True, False):
+            with self.subTest(diagnostics_disabled=disabled), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                video = root / "episode.mkv"
+                audio = root / "episode.wav"
+                video.write_bytes(b"source-video")
+                audio.write_bytes(b"source-audio")
+                config = _config(root, asr_diagnostics_enabled=not disabled,
+                    transcription_quality_check_enabled=False,
+                    asr_prompt_free_allow_recovered_primary_artifacts=True,
+                    asr_selective_retry_enabled=True, whisper_initial_prompt=None,
+                    op_ed_initial_prompt=None, whisper_condition_on_previous_text=False)
+                worker = VideoWorker(config, _logger())
+                worker._active_transcription_video = video
+                output = paths_for_video(video, config).ja_srt
+                write_srt(output, [SrtBlock(1, "00:00:02,100 --> 00:00:03,000", ["な"])])
+                with self.assertRaises(LowConfidenceTranscriptionError) as caught:
+                    validate_transcription_srt_quality(audio, output, config, _logger())
+                with patch("worker.claim_asr_repair_attempt", return_value=False), \
+                     patch("worker.repair_low_confidence_ranges") as repair:
+                    self.assertFalse(worker._try_japanese_recovery_fragment_repair(
+                        audio, output, config, caught.exception))
+                repair.assert_not_called()
+                self.assertEqual(video.read_bytes(), b"source-video")
+                self.assertEqual(read_srt(output)[0].text, ["な"])
+
+    def test_final_fragment_rejection_preserves_checkpoint_and_consumed_repair(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "episode.mkv"
+            audio = root / "episode.wav"
+            video.write_bytes(b"source-video")
+            audio.write_bytes(b"source-audio")
+            config = _config(root, asr_diagnostics_enabled=True,
+                transcription_quality_check_enabled=False,
+                asr_prompt_free_allow_recovered_primary_artifacts=True,
+                asr_selective_retry_enabled=True, whisper_initial_prompt=None,
+                op_ed_initial_prompt=None, whisper_condition_on_previous_text=False)
+            worker = VideoWorker(config, _logger())
+            worker._active_transcription_video = video
+            paths = paths_for_video(video, config)
+
+            def backend(_audio, output, _config, _logger):
+                write_srt(output, [SrtBlock(1, "00:00:02,100 --> 00:00:03,000", ["な"])])
+
+            def reject_repair(_audio, output, _ranges, _config, _logger):
+                write_srt(output, [SrtBlock(1, "00:00:02,100 --> 00:00:03,000", ["……"])])
+                return Mock(segment_confidences=())
+
+            with patch("worker.transcribe_to_srt", side_effect=backend), \
+                 patch("worker.repair_low_confidence_ranges", side_effect=reject_repair) as repair, \
+                 patch.object(worker, "_transcribe_with_fallback",
+                    side_effect=lambda a, s: worker._transcribe_with_config(a, s, config)), \
+                 self.assertRaises(LowConfidenceTranscriptionError) as caught:
+                worker._transcribe(audio, paths.ja_srt)
+            repair.assert_called_once()
+            context = worker._asr_review_context(video, caught.exception)
+            self.assertTrue(context["repair_attempted"])
+            evidence = context["asr_review_checkpoint"]
+            checkpoint = load_asr_review_checkpoint(evidence["manifest_path"],
+                expected_manifest_sha256=evidence["manifest_sha256"],
+                expected_target_path=paths.ja_srt, expected_language="ja")
+            self.assertEqual(checkpoint.review_ranges, ((2.1, 3.0),))
+            self.assertTrue(evidence["repair_attempted"])
+            self.assertEqual(read_srt(checkpoint.rejected_srt_path)[0].text, ["な"])
+            self.assertFalse(paths.ja_srt.exists())
+            self.assertEqual(video.read_bytes(), b"source-video")
+            self.assertEqual(audio.read_bytes(), b"source-audio")
+            restarted = VideoWorker(config, _logger())
+            self.assertFalse(any(c.get("action") == "ai.retry_selective_asr"
+                for c in restarted._asr_review_candidates(context)))
+
     def test_worker_preserves_ja_checkpoint_before_fail_closed_and_orders_candidates(
         self,
     ) -> None:

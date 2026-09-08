@@ -7240,6 +7240,22 @@ class VideoWorker:
 
         repair_root = Path(self.config.work_path) / "asr_recovery"
         repair_root.mkdir(parents=True, exist_ok=True)
+        if self._active_transcription_video is not None:
+            context = self._attach_asr_failure_context(
+                rejection, audio_path, output_srt
+            )
+            try:
+                claimed = claim_asr_repair_attempt(
+                    output_srt, active_config,
+                    str(context.get("repair_fingerprint") or ""),
+                )
+            except OSError:
+                claimed = False
+            if not claimed:
+                self.logger.warning(
+                    "Skipping fragment repair: durable repair budget unavailable or consumed"
+                )
+                return False
         digest = hashlib.sha1(str(output_srt.resolve()).encode("utf-8")).hexdigest()[:16]
         token = time.time_ns()
         temporary = repair_root / f"fragment-{digest}-{token}.srt"

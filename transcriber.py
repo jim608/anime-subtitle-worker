@@ -2103,8 +2103,37 @@ def validate_transcription_srt_quality(
             )
         chunks.append((start, end, text))
 
-    _raise_for_japanese_recovery_fragments(chunks, config)
-    _validate_transcription_quality(audio_path, chunks, config, logger)
+    try:
+        _raise_for_japanese_recovery_fragments(chunks, config)
+        _validate_transcription_quality(audio_path, chunks, config, logger)
+    except LowConfidenceTranscriptionError as exc:
+        # The shared gate runs after backend diagnostics were written. Bind its
+        # rejection to these exact bytes before Worker checkpoints and removes
+        # the rejected live cache. Never reset an already consumed repair.
+        if bool(getattr(config, "asr_diagnostics_enabled", True)):
+            payload = read_asr_diagnostics(output, config)
+            current_hash = _sha256_if_file(output)
+            if not payload or payload.get("srt_sha256") != current_hash:
+                _write_asr_diagnostics(
+                    output, audio_path, chunks, [], config,
+                    status="selective_retry_required",
+                    review_ranges=list(exc.review_ranges),
+                    reason_code=exc.reason_code,
+                )
+            else:
+                payload.update(
+                    status="selective_retry_required",
+                    review_ranges=[list(item) for item in exc.review_ranges],
+                    reason_code=exc.reason_code,
+                )
+                try:
+                    atomic_write_text(
+                        asr_diagnostics_path(output, config),
+                        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                    )
+                except OSError:
+                    logger.warning("Could not persist final ASR rejection evidence")
+        raise
 
 
 def repair_low_confidence_ranges(
