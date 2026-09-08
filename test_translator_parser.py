@@ -1857,12 +1857,58 @@ class TranslatorParserTest(unittest.TestCase):
 
         self.assertEqual(seen_contexts, ["series context\n\nepisode context"])
 
+    def test_does_not_substitute_unrelated_sole_advertised_model(self) -> None:
+        self.assertEqual(
+            _select_available_translator_model("configured-primary", ["unapproved-model"]),
+            "configured-primary",
+        )
+
+    def test_model_discovery_does_not_collapse_configured_fallback_chain(self) -> None:
+        translator = object.__new__(SubtitleTranslator)
+        translator.config = SimpleNamespace(
+            translator_model="configured-primary",
+            translator_fallback_models=["configured-secondary"],
+            translator_base_url="http://translator.invalid/v1",
+        )
+        translator.logger = logging.getLogger("test.translator.authorized-chain")
+        translator.client = SimpleNamespace(models=SimpleNamespace(
+            list=lambda: SimpleNamespace(data=[SimpleNamespace(id="configured-secondary")])
+        ))
+        self.assertEqual(translator._resolve_translator_models(),
+            ("configured-primary", "configured-secondary"))
+
     def test_selects_only_available_translator_model_when_configured_alias_is_missing(self) -> None:
         available = ["hf.co/SakuraLLM/Sakura-7B-Qwen2.5-v1.0-GGUF:latest"]
 
         selected = _select_available_translator_model("SakuraLLM:latest", available)
 
         self.assertEqual(selected, available[0])
+
+    def test_unrelated_discovery_never_receives_translation_request(self) -> None:
+        translator = object.__new__(SubtitleTranslator)
+        translator.config = SimpleNamespace(
+            translator_model="configured-primary",
+            translator_fallback_models=["configured-secondary"],
+            translator_base_url="http://translator.invalid/v1",
+        )
+        translator.logger = logging.getLogger("test.translator.discovery-request")
+        translator._progress_callback = None
+        translator.client = SimpleNamespace(models=SimpleNamespace(
+            list=lambda: SimpleNamespace(data=[SimpleNamespace(id="unapproved-model")])
+        ))
+        translator._translator_models = translator._resolve_translator_models()
+        translator._translator_model_index = 0
+        translator._translator_model = translator._translator_models[0]
+        attempted = []
+
+        def unavailable(_source, _system, model):
+            attempted.append(model)
+            raise TranslationError("configured route unavailable")
+
+        translator._request_translation_with_model_timeout = unavailable
+        with self.assertRaises(TranslationError):
+            translator._request_translation("1\t原文")
+        self.assertEqual(attempted, ["configured-primary", "configured-secondary"])
 
     def test_selects_unique_alias_match_from_multiple_translator_models(self) -> None:
         available = [

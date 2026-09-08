@@ -1785,8 +1785,9 @@ def _select_available_translator_model(configured_model: str, available_models: 
     available = [model.strip() for model in available_models if model and model.strip()]
     if not configured or configured in available or not available:
         return configured
-    if len(available) == 1:
-        return available[0]
+    # Discovery is not authorization: a server exposing only one unrelated
+    # model must not silently replace the configured primary/fallback chain.
+    # Keep the existing unique alias match below for compatible model IDs.
 
     configured_name = configured.split(":", 1)[0].rsplit("/", 1)[-1].lower()
     if not configured_name:

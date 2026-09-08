@@ -1,5 +1,48 @@
 # Incremental Delivery Plan
 
+## Active Goal — M3 authorized (2026-09-08)
+
+The user explicitly authorized starting M3. This supersedes earlier **no-M3 scope
+restrictions**, not M2 evidence: M2 production acceptance is still incomplete.
+M2 download/extraction and frozen-Gate evidence remain separate and must not be
+relabeled PASS or mixed with future M3 runtime results.
+
+### M3 — Configured model fallback and resource-aware recovery
+
+Initial isolated baseline: 118 resource-admission/runtime/Worker integration,
+translation-checkpoint and translator-parser tests PASS, exit 0.
+Evidence: `/logs/m3-baseline-20260908T070237Z/tests.log`.
+First review target: `_select_available_translator_model` currently substitutes
+the sole advertised model when the configured model is unavailable. Assess an
+explicit, compatible route-authorization contract before changing live behavior.
+No M3 runtime or model configuration change has been deployed yet.
+
+First M3 code increment reproduced and removed implicit unrelated sole-model
+substitution; the configured primary/fallback chain now remains intact.
+121 focused tests PASS; see [M3 evidence and remaining contracts](docs/M3_MODEL_RECOVERY.md).
+Durable failed-route budgeting and in-flight timeout/resource ownership remain
+open; this increment does not complete M3 or authorize a production deployment.
+
+Extend the existing configured ASR/translation routes and resource admission,
+not a parallel queue or a wholesale backend rewrite. Preserve compatibility,
+source safety, strict QC and existing durable checkpoint/recovery contracts.
+
+- [ ] Establish focused baseline of existing model routes, resource admission,
+  retry bounds and restart behavior; identify evidence-backed gaps.
+- [ ] Implement the smallest missing Adapter/fallback contract, using configured
+  models only, with persistent route/reason/attempt evidence and bounded retries.
+- [ ] Verify timeout/crash/OOM, exhausted or unavailable fallback, resume without
+  repeating valid checkpoints, and unchanged quality/publication protections.
+- [ ] Run targeted integration and necessary shared-boundary regressions in the
+  server isolation environment; do not count fixtures as production delivery.
+- [ ] Deploy only verified runtime changes through existing safe idle/update and
+  controlled recovery. Preserve old receipts, held obligations and Gate cohorts.
+- [ ] Verify actual runtime parity and bounded real processing/publication evidence;
+  report remaining external/M2 Gate blockers independently.
+
+No new model download, QC relaxation, source hold release or production
+configuration change is implied merely by starting this milestone.
+
 ## Current M2 acceptance status (2026-09-08 06:33 UTC)
 
 **M2 incomplete; M3 not started.** Previously pending repair is now actually
