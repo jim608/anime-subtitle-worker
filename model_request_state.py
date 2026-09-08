@@ -369,3 +369,55 @@ def record_model_request_result(conn: sqlite3.Connection, *, token: str,
         _event(conn,result,'MODEL_REQUEST_UNKNOWN' if outcome=='UNKNOWN' else 'MODEL_REQUEST_SETTLED')
         _write_current(conn,result)
         return {**result,'replay':False}
+
+
+def resolve_model_request_after_provider_restart(
+    conn: sqlite3.Connection, *, token: str, runtime_sha256: str,
+    endpoint: str, current_provider_binding: Mapping[str, Any],
+    recovery_record_sha256: str,
+) -> dict[str, Any]:
+    """Controlled-host recovery only, after attestation and admission fencing.
+
+    The caller must supply a fresh host-captured binding and persist its recovery
+    record before calling. No generic result API accepts this outcome. Sender
+    evidence is loaded from immutable local events, never from supplied JSON.
+    A settlement means remote ownership ended, NOT that the job/output succeeded.
+    """
+    from model_provider_evidence import prove_provider_restart_after_sender_exit
+    _digest(runtime_sha256)
+    _digest(recovery_record_sha256)
+    with _transaction(conn):
+        row = conn.execute("""SELECT payload_json FROM pipeline_stage_events
+            WHERE event_type='MODEL_REQUEST_RESERVED' AND json_extract(payload_json,'$.token')=?""",
+            (token,)).fetchone()
+        if not row:
+            raise ModelRequestStateError('model_request_token_unknown')
+        original = json.loads(row[0])
+        if original['runtime_sha256'] != runtime_sha256:
+            raise ModelRequestStateError('model_request_owner_runtime_mismatch')
+        sender = conn.execute("""SELECT payload_json FROM pipeline_stage_events
+            WHERE event_type='MODEL_REQUEST_SENDER_EXITED' AND json_extract(payload_json,'$.token')=?""",
+            (token,)).fetchone()
+        if not sender:
+            raise ModelRequestStateError('model_request_sender_exit_missing')
+        proof = prove_provider_restart_after_sender_exit(
+            original, json.loads(sender[0]), current_provider_binding, endpoint=endpoint)
+        proof['recovery_record_sha256'] = recovery_record_sha256
+        settled = conn.execute("""SELECT payload_json FROM pipeline_stage_events
+            WHERE event_type='MODEL_REQUEST_SETTLED' AND json_extract(payload_json,'$.token')=?""",
+            (token,)).fetchone()
+        if settled:
+            previous = json.loads(settled[0])
+            if previous['outcome'] != 'PROVIDER_TERMINATED' or previous['result_evidence'] != proof:
+                raise ModelRequestStateError('model_request_result_conflict')
+            return {**previous, 'replay': True}
+        stage = conn.execute('SELECT model_json FROM pipeline_stage_attempts WHERE stage_attempt_id=?',
+                             (original['stage_attempt_id'],)).fetchone()
+        current = json.loads(stage[0]).get('m3_request', {}) if stage else {}
+        if current.get('token') != token or current.get('state') not in {'RESERVED', 'UNKNOWN'}:
+            raise ModelRequestStateError('model_request_current_owner_mismatch')
+        result = {**original, 'state': 'SETTLED', 'outcome': 'PROVIDER_TERMINATED',
+                  'result_evidence': proof, 'observed_at': _timestamp()}
+        _event(conn, result, 'MODEL_REQUEST_SETTLED')
+        _write_current(conn, result)
+        return {**result, 'replay': False}

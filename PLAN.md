@@ -9,6 +9,12 @@ relabeled PASS or mixed with future M3 runtime results.
 
 ### M3 — Configured model fallback and resource-aware recovery
 
+Controlled model settlement state primitive is implemented and isolated-tested:
+74 related server tests PASS. It preserves UNKNOWN history/budget and stage status,
+requires persisted sender evidence and exact provider restart ordering, and safely
+replays after restart. Trusted host command integration, admission fencing and
+provider/Gate transition enforcement are still required before deployment.
+
 Provider binding candidate: host arm/recover can attest an explicitly published
 Docker model provider and bind its stable generation to the Gate and request
 receipts. Server related tests 258 PASS, final targeted tests 77 PASS (overlap).

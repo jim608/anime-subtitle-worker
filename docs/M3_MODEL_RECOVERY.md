@@ -30,6 +30,23 @@ restart, deployment, arm, recovery or Gate mutation occurred for this increment.
 
 ### Existing scope
 
+State-level controlled resolution now uses the same Pipeline transaction and
+immutable request events. `resolve_model_request_after_provider_restart` loads
+sender-exit evidence from the database (not caller JSON), validates the exact
+request/runtime/provider ordering, and links a recovery-record digest. It records
+`PROVIDER_TERMINATED` in a SETTLED ownership receipt, not a successful inference or
+COMPLETED job. Original UNKNOWN events and consumed route budget remain intact.
+The ordinary result API rejects this special outcome. Transaction interruption
+rolls back both settlement and ownership; restart/replay is idempotent and an old
+replay cannot release a new owner's request.
+
+This is an internal state primitive, not yet a production recovery command. Its
+caller still must fence admission, capture trusted fresh host evidence, persist
+the linked record and enforce Gate/runtime transition policy. No such production
+resolution was invoked. Server image isolated suite: 74 PASS in
+`provider-resolution-state-server.log`; final history-retention assertion checked
+in `provider-resolution-final-server.log` under the same evidence log root.
+
 The next candidate adds `prove_provider_restart_after_sender_exit`, a pure
 ordering validator, not an ownership-release entry point. It requires the exact
 request token/sender/runtime/endpoint and original provider binding, supervised
