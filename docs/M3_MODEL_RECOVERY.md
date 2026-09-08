@@ -1,5 +1,37 @@
 # M3 — configured model recovery
 
+## Bounded follow-up — 2026-09-08 12:45 UTC
+
+Runtime remains Worker738e96eafec66a6f62db31b9247cd58bf0aec6df /
+WebUI175a02a7bad46e0b6fa2372c59f39e8dd272911e. No code/config/deployment
+or Gate change in this follow-up; latest guardrail check ARMED/unpaused.
+
+Canary e15760a3eac4466eb2ea02c430d64418 ended its ASR attempt in
+NEEDS_REVIEW: deterministic_asr_quality (one-character/punctuation-only fragments).
+Existing server review remediation requeued it with attempts2 and
+asr-full-retranscribe-v1; this second attempt has NOT been observed claimed.
+No MODEL events and no formal delivery. Do not repeat the one-shot retranslate.
+Source and original media-side subtitles checksum unchanged (2 files);
+retranslate manifest hash unchanged and both archived intermediates preserved.
+
+The scheduler is not globally stuck. At1788871190.2082245 it automatically
+claimed a different successor, job7d0c98eb4a9947a9a65ce61f051c6461.
+At1788871518.5316741: Queue running/attempts3, Pipeline ASR,
+heartbeat1788871499.9581223; existing independent smaller ASR fallback
+Systran/faster-whisper-medium active. Host childPID1771896 was alive.
+Current waiting reason for the queued canary is another task using the worker;
+the preceding idle interval was not established as a scheduler defect.
+No forced retry/lock clearing, and no waiting for this successor to complete.
+
+Evidence /logs/m3-review-convergence-20260908T1210/:
+canary-followup-check4.json, canary-source-safety-after-asr.json,
+canary-wait-protection.json, canary-scheduler-evidence.log,
+canary-next-claimed.json (despite name, e157 remains queued),
+canary-next-claimed-process.txt, actual-successor.json.
+This follow-up added0 formal subtitles; M3 real model/provider-confirmed
+publication and M2 download/extraction formal publication/strict Gate remain
+unaccepted. Original Gate and68 holds preserved; preservation UNPROVEN.
+
 ## One controlled cache recovery actually claimed — 2026-09-08 12:30 UTC
 
 No code/config/deployment/Gate change. Runtime738e96e remains baseline.

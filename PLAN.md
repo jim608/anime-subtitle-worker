@@ -2,6 +2,11 @@
 
 ## Active Goal — M3 authorized (2026-09-08)
 
+12:45UTC canary ASR failed quality; server requeued attempts2, not delivered.
+Different successor7d0c98... actually auto-claimed/ASR/smaller fallback heartbeat.
+Source/archive safety PASS; formal additions0. No runtime/Gate change.
+M3 real model publication and M2 formal download/extraction/Gate still incomplete.
+
 12:30UTC one existing revision-bound retranslate recovery actually auto-claimed
 (jobe15760a3eac4466eb2ea02c430d64418),2work artifacts reversibly archived,
 retry budget preserved. Cached JA opening rejected -> bounded existing ASR fallback
