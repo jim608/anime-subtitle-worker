@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from pathlib import Path
 import hashlib
 import logging
 import re
 import time
+import threading
 from typing import Callable, Sequence
 
 from config import AppConfig
@@ -202,6 +203,20 @@ class TranslationTimeoutError(TranslationError):
     pass
 
 
+class TranslationRequestInFlightError(TranslationTimeoutError):
+    """A timed-out request still owns its endpoint; do not launch a fallback."""
+
+
+_TRANSLATION_REQUEST_LOCK = threading.Lock()
+_TRANSLATION_REQUESTS: dict[str, Future] = {}
+
+
+def _release_translation_request(endpoint: str, future: Future) -> None:
+    with _TRANSLATION_REQUEST_LOCK:
+        if _TRANSLATION_REQUESTS.get(endpoint) is future:
+            del _TRANSLATION_REQUESTS[endpoint]
+
+
 class AsrReviewError(SrtFormatError):
     """Raised when translation detects source text that needs fresh ASR."""
 
@@ -242,12 +257,26 @@ class SubtitleTranslator:
 
     def unload_requested_models(self) -> tuple[str, ...]:
         """Release only Ollama models this translator actually requested."""
+        endpoint = self._translation_endpoint_key()
+        reservation = Future()
+        with _TRANSLATION_REQUEST_LOCK:
+            previous = _TRANSLATION_REQUESTS.get(endpoint)
+            if previous is not None and not previous.done():
+                self.logger.info("Deferring model unload while endpoint request is in flight")
+                return ()
+            _TRANSLATION_REQUESTS[endpoint] = reservation
+        try:
+            return unload_managed_translation_models(
+                self.config,
+                self.logger,
+                model_names=tuple(getattr(self, "_requested_model_names", ())),
+            )
+        finally:
+            _release_translation_request(endpoint, reservation)
 
-        return unload_managed_translation_models(
-            self.config,
-            self.logger,
-            model_names=tuple(getattr(self, "_requested_model_names", ())),
-        )
+    def _translation_endpoint_key(self) -> str:
+        endpoint = str(getattr(self.config, "translator_base_url", "") or "").strip().rstrip("/")
+        return endpoint or f"client:{id(getattr(self, 'client', self))}"
 
     def set_translation_memory_plan(
         self,
@@ -792,6 +821,8 @@ class SubtitleTranslator:
                         _validate_translated_text(translated, self.config)
                     _validate_translation_output_size(batch, translated, self.config)
                     return translated
+                except TranslationRequestInFlightError:
+                    raise
                 except TranslationTimeoutError as exc:
                     last_error = exc
                     self.logger.warning(
@@ -1514,6 +1545,8 @@ class SubtitleTranslator:
                     system_prompt,
                     model,
                 )
+            except TranslationRequestInFlightError:
+                raise
             except (TranslationError, TranslationTimeoutError) as exc:
                 last_error = exc
                 if model_index + 1 >= len(models):
@@ -1551,17 +1584,33 @@ class SubtitleTranslator:
         model: str,
     ) -> str:
         hard_timeout = _translation_request_hard_timeout_seconds(self.config)
-        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="translation-request")
-        future = executor.submit(
-            self._request_translation_direct,
-            source_text,
-            system_prompt,
-            model,
-        )
+        endpoint = self._translation_endpoint_key()
+        with _TRANSLATION_REQUEST_LOCK:
+            previous = _TRANSLATION_REQUESTS.get(endpoint)
+            if previous is not None and not previous.done():
+                raise TranslationRequestInFlightError(
+                    "translation_request_in_flight: previous endpoint request has not settled"
+                )
+            executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="translation-request")
+            try:
+                future = executor.submit(
+                    self._request_translation_direct, source_text, system_prompt, model,
+                )
+            except BaseException:
+                executor.shutdown(wait=False, cancel_futures=True)
+                raise
+            _TRANSLATION_REQUESTS[endpoint] = future
+        # A completed future may invoke its callback synchronously. Register it
+        # outside the lock, and release by identity so an old completion cannot
+        # remove ownership of a newer request.
+        future.add_done_callback(lambda done: _release_translation_request(endpoint, done))
         try:
             return future.result(timeout=hard_timeout)
         except FutureTimeoutError as exc:
-            future.cancel()
+            if not future.cancel() and not future.done():
+                raise TranslationRequestInFlightError(
+                    f"translation_request_in_flight: hard timeout after {hard_timeout}s; cancellation unconfirmed"
+                ) from exc
             raise TranslationTimeoutError(f"Translation API request timed out after {hard_timeout}s") from exc
         finally:
             executor.shutdown(wait=False, cancel_futures=True)

@@ -23,6 +23,11 @@ substitution; the configured primary/fallback chain now remains intact.
 Durable failed-route budgeting and in-flight timeout/resource ownership remain
 open; this increment does not complete M3 or authorize a production deployment.
 
+Second candidate increment: reproduced timeout-overlap with real executor threads;
+same-process endpoint ownership now spans Translator instances and model unload.
+255 focused/shared tests PASS. Cross-process/restart ownership and durable failed
+route budgets remain required before M3 deployment; see the M3 evidence document.
+
 Extend the existing configured ASR/translation routes and resource admission,
 not a parallel queue or a wholesale backend rewrite. Preserve compatibility,
 source safety, strict QC and existing durable checkpoint/recovery contracts.
