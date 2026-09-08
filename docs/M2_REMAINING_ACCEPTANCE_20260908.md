@@ -1,5 +1,12 @@
 # M2 remaining acceptance — 2026-09-08
 
+13:27UTC M3 model/recovery engineering closeout completed separately; actual-image
+duplicate ingress/promote/scanner refusal2cycles passed in isolation. No additional
+subtitle delivery, no runtime/Gate reset. M2 remains incomplete: download/extraction
+formal acceptance and strict frozen Gate still open; AI1 is not download/extraction
+or Gate substitution. Final runtime ARMED/admission open/68 holds preserved.
+See docs/M3_ACCEPTANCE_AUDIT_20260908.md for exact evidence boundary.
+
 13:16UTC follow-up: the newly delivered AI target9f5394... retained manifest
 digest matches exact prepared/provider-confirmed model lineage; runtime/Gate and
 request watermark agree. Existing finished-subtitle/terminal-reprocess predicates

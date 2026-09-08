@@ -1,5 +1,10 @@
 # M3 — configured model recovery
 
+M3 configured-model/recovery engineering closeout verified2026-09-08 13:27UTC.
+Actual-image duplicate ingress now includes real promotion and scanner refusal
+across2 watcher restarts; source/outputs unchanged. See final audit below.
+M2 download/extraction and strict Gate remain unaccepted; no reliability claim.
+
 Current requirement-by-requirement audit:
 [M3_ACCEPTANCE_AUDIT_20260908.md](M3_ACCEPTANCE_AUDIT_20260908.md).
 It separates verified implementation/runtime/publication, isolated fault evidence,

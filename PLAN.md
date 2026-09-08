@@ -1,6 +1,13 @@
 # Incremental Delivery Plan
 
-## Active Goal — M3 authorized (2026-09-08)
+## M3 engineering delivered — M2 acceptance remains open (2026-09-08)
+
+13:27UTC final audit closes configured-model/recovery engineering scope:
+actual-image real OS duplicate ingress/promotion/scanner/admission2cycles PASS,
+no runnable duplicates/unchanged files. Runtime738e96e/ARMED/68holds/Gate stable,
+host provider VERIFIED. RealAI TC1; download/extraction0. M2 is NOT accepted.
+Authoritative final scope/evidence: docs/M3_ACCEPTANCE_AUDIT_20260908.md.
+Earlier timestamped pending notes below are history, not current deployment state.
 
 13:19UTC requirement/evidence matrix saved in
 docs/M3_ACCEPTANCE_AUDIT_20260908.md. Existing server test results and real

@@ -1,5 +1,31 @@
 # M3 acceptance evidence audit — 2026-09-08 13:19 UTC
 
+## Final M3 engineering closeout — 2026-09-08 13:27 UTC
+
+M3 configured-model/recovery engineering scope is verified and delivered.
+This does not accept M2 or overall unattended Production reliability.
+
+The remaining duplicate-ingress check now passed on actual image
+sha256:e34372dc6ae9f1e28b293ce6f9dd61414f7c0b292ad32588f43dcd2613f1c617.
+Real ffmpeg media, watchdog OS events, ffprobe, durable SQLite ingest, scanner
+classification and exact admission lookup ran without business-logic mocks.
+Two watcher/scanner restart cycles each observed10 OS events and1 completed
+promotion; each ended with1 done Queue row,0 runnable jobs,0 new obligations,
+unchanged source/manifest/ASS hashes and mtimes. No model/publication was invoked.
+Only fixture artifacts were mounted, network disabled, no Production media/work DB.
+This is complete ingress-to-admission refusal evidence, not a second model E2E.
+
+Evidence `/logs/m3-review-convergence-20260908T1210/duplicate-ingress-XioDjW/`:
+`full.log`, `result.json`, `exit.txt` (0). Harness
+`work/m3_duplicate_ingress_probe.py`. Earlier `duplicate-ingress-UN53qE/`
+ended before full debounce/promotion and is retained as narrower evidence only.
+
+Final runtime1788874027.252612 remains ARMED/runtime_baseline_match, admission
+open,68 holds and same Gate. Host provider observation1788874021.8963742 VERIFIED.
+Evidence `known-alternative-9f/final-m3-runtime.json`.
+No runtime/config/deployment/Gate change in this final test/documentation step.
+New verified AI TC delivery remains1, download0/extraction0; no recount.
+
 Scope: configured model adapters/fallback, durable bounded request ownership,
 resource-aware recovery, safe deployment and actual AI publication. This is not
 M2_PRODUCTION_ACCEPTED, a new Gate, or a 99% reliability claim.
@@ -15,7 +41,7 @@ M2_PRODUCTION_ACCEPTED, a new Gate, or a 99% reliability claim.
 | Actual safe deployment | deployment20260908T121255Z-1408116 exit0, recovery exit0, actual-image439/OK; isolated breaker7/7; backup/receipt retained | Deployed image verified; no repeat deployment for documentation |
 | Actual processing and publication | job9f5394b655b340b2822cc43337dbcaf0 auto claim, real models, COMPLETED/ledger succeeded; formal285cue ASS files parse/QC and manifest-v2/hash PASS | One new AI TC target verified, not three deliveries; download0/extraction0 |
 | Exact retained lineage | manifest target digest matches prepared token and unique confirmation, runtime/Gate/watermark/time ordering match | Verified against retained manifest/events; intermediate CN SRT no longer exists and was not recreated |
-| Idempotency | Actual completed-subtitle predicate true, terminal reprocess predicate refuses, final hashes unchanged; restart fixture proves no duplicate send | Predicate + isolated lifecycle proof; a duplicate filesystem-event end-to-end run against this formal target was NOT performed |
+| Idempotency | Real completed-target predicates; real OS duplicate ingress through promotion/scanner/admission on actual image across2 fixture restarts; no runnable job, unchanged files; prior restart fixture no duplicate send | Verified without reprocessing the valid Production target; fixture artifacts are not additional delivery |
 | Source and historical safety | Pre/post source/JA/original sidecar hashes unchanged; current68 holds; preservation UNPROVEN retained | Source preservation for the real canary verified; no historical continuity upgrade |
 
 ## Authoritative evidence locations
@@ -60,11 +86,9 @@ Gate m2-gate-20260908T121706917079Z-5900a7525f unchanged.
 The first two frozen members remain NEEDS_REVIEW/strict_verified0; the successful
 historical recovery did not replace them. This is not current whole-cohort progress.
 
-M3's engineering/deployment/real-publication evidence above is verified within
-the stated bounds. Do not equate the predicate check with a duplicate-event E2E
-test or claim complete milestone acceptance without resolving its required scope.
-Next safe step: verify the existing duplicate-ingress contract in isolation against
-representative completed artifacts; never overwrite or retranslate the valid real output.
+M3's engineering/deployment/real-publication and duplicate-ingress requirements
+are verified within the stated bounds. The final closeout above resolves the
+previously open ingress check. Never overwrite or retranslate the valid real output.
 
 M2 remains incomplete: download/extraction formal publication lacks a complete,
 matching usable source; prior no-start torrents retain failed-hash/backoff policy.
