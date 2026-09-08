@@ -1,5 +1,9 @@
 # M2 remaining acceptance — 2026-09-08
 
+11:35 UTC: pending diagnostic-only logger traceback patch, 5 isolated server
+tests PASS. Not deployed; SQLite lock owner remains unproven. No change to Gate,
+formal output count, source holds or M2 acceptance. See M3_MODEL_RECOVERY.md.
+
 ## Retry and automatic continuation proof — 2026-09-08 11:31 UTC
 
 Exact known job 1fc3bd293f5e4f86be7fc0cbb589d9ee settled NEEDS_REVIEW;

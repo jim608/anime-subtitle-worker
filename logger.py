@@ -126,7 +126,17 @@ def log_failure(log_path: str | Path, video_path: str | Path, stage: str, error:
     with failure_path.open("a", encoding="utf-8", newline="\n") as file:
         file.write(message)
 
-    logging.getLogger(LOGGER_NAME).error("Failed at %s for %s: %s", stage, video_path, error)
+    # Preserve the actual failure stack, including when logging occurs after
+    # its except block. Never attach an unrelated ambient exception to a string
+    # error. Standard logging formats frames without dumping local values.
+    exc_info = (
+        (type(error), error, error.__traceback__)
+        if isinstance(error, BaseException) and error.__traceback__ is not None
+        else None
+    )
+    logging.getLogger(LOGGER_NAME).error(
+        "Failed at %s for %s: %s", stage, video_path, error, exc_info=exc_info
+    )
 
 
 def _rotate_plain_log_if_needed(path: Path, *, incoming_bytes: int, max_bytes: int, backup_count: int) -> None:

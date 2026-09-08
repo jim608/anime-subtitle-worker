@@ -2,6 +2,11 @@
 
 ## Active Goal — M3 authorized (2026-09-08)
 
+2026-09-08 11:35 UTC: runtime continuation proved after ASR manual review,
+but two SQLite lock failures need root-cause evidence. Targeted traceback logging
+candidate passed 5 local/5 isolated server tests; not yet deployed, not a lock fix.
+See docs/M3_MODEL_RECOVERY.md; M2/M3 acceptance remains open.
+
 The user explicitly authorized starting M3. This supersedes earlier **no-M3 scope
 restrictions**, not M2 evidence: M2 production acceptance is still incomplete.
 M2 download/extraction and frozen-Gate evidence remain separate and must not be

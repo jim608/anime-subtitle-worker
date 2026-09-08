@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 from pathlib import Path
 import tempfile
 import unittest
@@ -11,6 +12,45 @@ from logger import LOGGER_NAME, log_failure, setup_logging
 
 
 class LoggerTest(unittest.TestCase):
+    def test_failure_preserves_original_database_exception_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            logger = setup_logging(root)
+            self._remove_console_handler(logger)
+            secret_local = "LOCAL_VALUE_MUST_NOT_BE_LOGGED"
+            try:
+                raise sqlite3.OperationalError("database is locked")
+            except sqlite3.OperationalError as error:
+                saved_error = error
+            # Logging may happen after the original exception handler exited.
+            log_failure(root, "video.mkv", "worker", saved_error)
+            for handler in logger.handlers:
+                handler.flush()
+            report = (root / "app.log").read_text(encoding="utf-8")
+            self._close_logger()
+            self.assertIn("Traceback (most recent call last)", report)
+            self.assertIn("test_failure_preserves_original_database_exception_traceback", report)
+            self.assertIn("sqlite3.OperationalError: database is locked", report)
+            self.assertNotIn(secret_local, report)
+            self.assertEqual(len((root / "failed.log").read_text(encoding="utf-8").splitlines()), 1)
+
+    def test_string_failure_does_not_attach_unrelated_active_exception(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            logger = setup_logging(root)
+            self._remove_console_handler(logger)
+            try:
+                raise ValueError("unrelated exception")
+            except ValueError:
+                log_failure(root, "video.mkv", "worker", "explicit failure")
+            for handler in logger.handlers:
+                handler.flush()
+            report = (root / "app.log").read_text(encoding="utf-8")
+            self._close_logger()
+            self.assertIn("explicit failure", report)
+            self.assertNotIn("unrelated exception", report)
+            self.assertNotIn("Traceback", report)
+
     def tearDown(self) -> None:
         self._close_logger()
 

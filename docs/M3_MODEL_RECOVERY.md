@@ -1,5 +1,20 @@
 # M3 — configured model recovery
 
+## Pending diagnostic patch — 2026-09-08 11:35 UTC
+
+The repeated runtime SQLite error still has no proven lock owner. Inspection
+confirmed logger.log_failure discarded the original traceback. Candidate now
+preserves the original exception stack in the existing rotating app.log, without
+locals; failed.log retains its one-line compatibility and bounded rotation.
+String errors never attach an unrelated ambient exception. Regression reproduced
+the missing stack before the fix, then all 5 logger tests passed locally and in
+an isolated server container using the deployed image (read-only candidate,
+no network or Production media). Evidence: /logs/m3-runtime-handoff-20260908/
+traceback-targeted-20260908T1135.log and .exit (0).
+This is diagnostic readiness, NOT a fix/proof for SQLite contention. Not deployed;
+Worker5f379e8/Gate/67holds unchanged. Next deploy only through the existing owned
+safe handoff if needed for real stack evidence; never patch live container code.
+
 ## Retry and automatic continuation proof — 2026-09-08 11:31 UTC
 
 Exact known job 1fc3bd293f5e4f86be7fc0cbb589d9ee settled NEEDS_REVIEW;
