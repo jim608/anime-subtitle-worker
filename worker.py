@@ -4946,19 +4946,32 @@ class VideoWorker:
                 review_range,
             )
             changed = after_sha256 != before_sha256
+            if changed:
+                # finalize_repaired_transcription has already written fresh,
+                # quality-accepted evidence for these merged bytes. Do not
+                # delete that evidence together with the stale translations.
+                diagnostic = read_asr_diagnostics(paths.ja_srt, self.config)
+                accepted = bool(
+                    isinstance(diagnostic, dict)
+                    and diagnostic.get("status") == "accepted_after_selective_retry"
+                    and diagnostic.get("srt_sha256") == after_sha256
+                )
+                if not accepted:
+                    if bool(getattr(self.config, "m2_server_canary_observer_enabled", False)):
+                        raise TranscriptionError(
+                            "Cached Japanese opening ASR repair lacks current accepted diagnostic evidence"
+                        )
+                    # Legacy diagnostics-disabled runs still invalidate a
+                    # stale pre-repair diagnostic instead of blessing it.
+                    asr_diagnostics_path(paths.ja_srt, self.config).unlink(missing_ok=True)
+                # The translated intermediates no longer have the same source
+                # bytes.  Keep the ASR hold until invalidation is durable.
+                self._invalidate_translation_intermediates(paths)
             self._write_leading_gap_cache_probe(
                 paths.ja_srt,
                 updated_signature,
                 status="repaired" if changed else "verified_unchanged",
             )
-            if changed:
-                asr_diagnostics_path(
-                    paths.ja_srt,
-                    self.config,
-                ).unlink(missing_ok=True)
-                # The translated intermediates no longer have the same source
-                # bytes.  Keep the ASR hold until invalidation is durable.
-                self._invalidate_translation_intermediates(paths)
             self._finish_asr_commit(
                 paths.ja_srt,
                 hold,

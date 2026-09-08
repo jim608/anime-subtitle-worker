@@ -1,5 +1,36 @@
 # M2 Circuit Breaker Policy
 
+## Current override: leading-gap evidence repair (2026-09-08)
+
+Worker `47d522ab940f5b84ced7170397ce86fe7cd63782` was safely deployed
+(`20260908T031328Z-3188843`, exit 0). Line-repair recovery receipt
+`m2breakerrec_eaa178852a68466d976765b6e0ef64a2` armed a new Gate and retained 65 holds.
+A subsequent normal claim reached TRANSLATING with a real heartbeat/checkpoint,
+but tripped `incorrect_completion` at 1788837825.967674: cached leading-gap repair
+deleted the fresh accepted ASR diagnostic written by finalization. It is a distinct
+incident, not a reason to replay the old recovery receipt.
+
+The minimal candidate retains current hash-bound accepted diagnostics and rejects
+missing evidence before writing a reusable probe marker. No QC/model/source policy
+is relaxed. Server isolated candidate: 223 tests and actual container restart PASS,
+`/logs/m2-asr-postprocess-isolated-20260908T035250308238Z/`.
+An earlier unchanged concurrent-checkpoint test failed once; its failure remains at
+`/logs/m2-asr-postprocess-isolated-20260908T033945375727Z/tests.log`; two subsequent
+candidate suites passed. Do not describe that first run as PASS.
+
+Historical lane was still PAUSED on an older version. The existing indexed-history
+reconciler passes on an isolated DB: all 65 holds, 1176 retry counters, Queue identity,
+366 checkpoint identities and 1111 output records preserved; 158 READY, no dispatch.
+Evidence `/logs/m2-historical-lane-isolated-20260908T035101105868Z/`.
+Planned controlled handoff `m2-recon-leading-gap-20260908` will retain all original
+receipts/Gates and add the exact new incident; historical continuity stays UNKNOWN.
+New runtime deployment/recovery and real resumed claims are not yet complete.
+
+The bounded real download attempt for `m2dl_9e2ac34428c091432381` passed source enqueue,
+but qB reported zero bytes and zero peers, then no exact torrent at the follow-up.
+No usable download, extraction or new formal subtitle was verified (all 0).
+Current runtime remains TRIPPED; no Gate success or Production acceptance is claimed.
+
 ## Restricted line-repair incident recovery (candidate, 2026-09-08)
 
 `authorized_reconciliation` may identify `line_repair_evidence_incomplete` only

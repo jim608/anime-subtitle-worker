@@ -1353,6 +1353,7 @@ class VideoWorkerTest(unittest.TestCase):
                 gap_rescue_log_prob_threshold=-1.5,
                 gap_rescue_compression_ratio_threshold=2.4,
                 asr_diagnostics_path="asr_diagnostics",
+                asr_diagnostics_enabled=True,
             )
             paths = paths_for_video(video, config)
             original = SrtBlock(1, "00:00:20,000 --> 00:00:22,000", ["二十秒才開始"])
@@ -1419,9 +1420,38 @@ class VideoWorkerTest(unittest.TestCase):
             self.assertEqual(read_srt(paths.ja_srt)[0].text, ["補回第一句"])
             self.assertFalse(paths.zh_cn_srt.exists())
             self.assertFalse(paths.zh_tw_srt.exists())
-            self.assertFalse(diagnostic.exists())
+            self.assertTrue(diagnostic.exists())
+            accepted = json.loads(diagnostic.read_text(encoding="utf-8"))
+            self.assertEqual(accepted["status"], "accepted_after_selective_retry")
+            self.assertEqual(accepted["srt_sha256"], sha256_file(paths.ja_srt))
             self.assertFalse(hold.exists())
             self.assertTrue(worker._leading_gap_cache_probe_path(paths.ja_srt).exists())
+
+    def test_cached_opening_missing_diagnostic_fails_closed_in_m2(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "Anime S01E01.mkv"
+            video.write_bytes(b"source-video")
+            audio = root / "audio.wav"
+            audio.write_bytes(b"source-audio")
+            config = _config(root, enable_leading_gap_rescue=True,
+                gap_rescue_leading_threshold_seconds=1.5,
+                gap_rescue_leading_max_seconds=120.0,
+                asr_diagnostics_enabled=True, m2_server_canary_observer_enabled=True)
+            paths = paths_for_video(video, config)
+            write_srt(paths.ja_srt, [SrtBlock(1, "00:00:20,000 --> 00:00:22,000", ["元の字幕"])])
+            worker = VideoWorker(config, _logger())
+
+            def repair(*_args, **_kwargs):
+                write_srt(paths.ja_srt, [SrtBlock(1, "00:00:00,500 --> 00:00:02,000", ["新しい字幕"])])
+
+            with patch("worker.repair_low_confidence_ranges", side_effect=repair), \
+                 patch("worker.finalize_repaired_transcription"):
+                with self.assertRaisesRegex(TranscriptionError, "current accepted diagnostic"):
+                    worker._refresh_cached_japanese_leading_gap(video, audio, paths, audio_ready=True)
+            self.assertFalse(worker._leading_gap_cache_probe_path(paths.ja_srt).exists())
+            self.assertEqual(video.read_bytes(), b"source-video")
+            self.assertEqual(audio.read_bytes(), b"source-audio")
 
     def test_cached_japanese_opening_artifact_rejection_runs_full_prompt_free_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
