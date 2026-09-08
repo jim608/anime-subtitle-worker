@@ -75,9 +75,23 @@ class ModelRequestContext:
                                      (self.stage_attempt_id,)).fetchone()
                 if not stage or stage[1] != 'RUNNING' or stage[2] != 'TRANSLATING':
                     raise ModelRequestStateError('model_output_active_translation_required')
+                requests = conn.execute("""SELECT payload_json FROM pipeline_stage_events
+                    WHERE stage_attempt_id=? AND event_type='MODEL_REQUEST_RESERVED'
+                    AND COALESCE(json_extract(payload_json,'$.operation_kind'),'INFERENCE')='INFERENCE'""",
+                    (self.stage_attempt_id,)).fetchall()
+                for request_row in requests:
+                    request = json.loads(request_row[0])
+                    if request['runtime_sha256'] != self.runtime_sha256 or request.get('provider_binding') != dict(self.provider_binding):
+                        raise ModelRequestStateError('model_output_request_execution_mismatch')
+                if conn.execute("""SELECT 1 FROM pipeline_stage_attempts WHERE stage_attempt_id=?
+                    AND json_extract(model_json,'$.m3_request.state') IN ('RESERVED','UNKNOWN')
+                    AND COALESCE(json_extract(model_json,'$.m3_request.operation_kind'),'INFERENCE')='INFERENCE'""",
+                    (self.stage_attempt_id,)).fetchone():
+                    raise ModelRequestStateError('model_output_requests_unresolved')
                 request_watermark = conn.execute("""SELECT COALESCE(MAX(rowid),0) FROM pipeline_stage_events
                     WHERE stage_attempt_id=? AND event_type IN
-                    ('MODEL_REQUEST_RESERVED','MODEL_REQUEST_UNKNOWN','MODEL_REQUEST_SETTLED')""",
+                    ('MODEL_REQUEST_RESERVED','MODEL_REQUEST_UNKNOWN','MODEL_REQUEST_SETTLED')
+                    AND COALESCE(json_extract(payload_json,'$.operation_kind'),'INFERENCE')='INFERENCE'""",
                     (self.stage_attempt_id,)).fetchone()[0]
                 key = hashlib.sha256(_json({'stage_attempt_id':self.stage_attempt_id,
                     'output_path_sha256':path_digest, 'output_sha256':output_sha256,
@@ -141,6 +155,51 @@ def find_model_output_lineage(conn: sqlite3.Connection, *, job_id: str, output_p
         AND json_extract(payload_json,'$.execution_digest')=? ORDER BY id DESC LIMIT 1""",
         (job_id, path_digest, output_sha256, execution_digest)).fetchone()
     return json.loads(row[0]) if row else None
+
+
+def confirm_model_output_provider(conn: sqlite3.Connection, *, prepared_token: str,
+                                  gate_baseline_version: str,
+                                  observation: Mapping[str, Any]) -> dict[str, Any]:
+    """Persist provider continuity only; output bytes/QC/publication remain caller checks."""
+    from model_provider_evidence import validate_provider_observation
+    if not isinstance(gate_baseline_version, str) or not gate_baseline_version:
+        raise ModelRequestStateError('model_output_gate_baseline_missing')
+    with _transaction(conn):
+        row = conn.execute("""SELECT payload_json FROM pipeline_stage_events
+            WHERE event_type='MODEL_OUTPUT_PREPARED' AND json_extract(payload_json,'$.token')=?""",
+            (prepared_token,)).fetchone()
+        if not row:
+            raise ModelRequestStateError('model_output_preparation_missing')
+        prepared = json.loads(row[0])
+        watermark = conn.execute("""SELECT COALESCE(MAX(rowid),0) FROM pipeline_stage_events
+            WHERE stage_attempt_id=? AND event_type IN
+            ('MODEL_REQUEST_RESERVED','MODEL_REQUEST_UNKNOWN','MODEL_REQUEST_SETTLED')
+            AND COALESCE(json_extract(payload_json,'$.operation_kind'),'INFERENCE')='INFERENCE'""",
+            (prepared['stage_attempt_id'],)).fetchone()[0]
+        if watermark != prepared['request_event_watermark']:
+            raise ModelRequestStateError('model_output_request_history_changed')
+        pending = conn.execute("""SELECT 1 FROM pipeline_stage_attempts WHERE stage_attempt_id=?
+            AND json_extract(model_json,'$.m3_request.state') IN ('RESERVED','UNKNOWN')
+            AND COALESCE(json_extract(model_json,'$.m3_request.operation_kind'),'INFERENCE')='INFERENCE'""",
+            (prepared['stage_attempt_id'],)).fetchone()
+        if pending:
+            raise ModelRequestStateError('model_output_requests_unresolved')
+        validate_provider_observation(prepared['provider_binding'], observation,
+            gate_baseline_version=gate_baseline_version, now=_timestamp())
+        if observation['checked_at'] <= prepared['prepared_at']:
+            raise ModelRequestStateError('model_output_provider_confirmation_pending')
+        key = hashlib.sha256(_json({'prepared_token':prepared_token,
+            'gate_baseline_version':gate_baseline_version}).encode('utf-8')).hexdigest()
+        prior = conn.execute("""SELECT payload_json FROM pipeline_stage_events
+            WHERE event_type='MODEL_OUTPUT_PROVIDER_CONFIRMED' AND json_extract(payload_json,'$.token')=?""", (key,)).fetchone()
+        if prior:
+            return {**json.loads(prior[0]), 'replay':True}
+        result = {**prepared, 'contract':'m3-model-output-provider-confirmation-v1',
+            'token':key, 'prepared_token':prepared_token, 'gate_baseline_version':gate_baseline_version,
+            'provider_observation':dict(observation), 'confirmed_at':_timestamp(),
+            'provider_continuity_verified':True, 'publication_verified':False}
+        _event(conn, result, 'MODEL_OUTPUT_PROVIDER_CONFIRMED')
+        return {**result, 'replay':False}
 
 
 def pending_model_resource_request(database: Path, *, endpoint: str | None = None) -> dict[str, Any] | None:
@@ -210,6 +269,10 @@ def ensure_model_request_schema(conn: sqlite3.Connection) -> None:
             )
             BEGIN SELECT RAISE(ABORT,'model_request_ownership_unresolved'); END""")
     for action in ('DELETE', 'UPDATE'):
+        conn.execute(f"""CREATE TRIGGER IF NOT EXISTS m3_output_confirmation_no_{action.lower()}
+            BEFORE {action} ON pipeline_stage_events
+            WHEN OLD.event_type='MODEL_OUTPUT_PROVIDER_CONFIRMED'
+            BEGIN SELECT RAISE(ABORT,'model_output_confirmation_immutable'); END""")
         conn.execute(f"""CREATE TRIGGER IF NOT EXISTS m3_output_lineage_no_{action.lower()}
             BEFORE {action} ON pipeline_stage_events
             WHEN OLD.event_type='MODEL_OUTPUT_PREPARED'

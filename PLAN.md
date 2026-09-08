@@ -9,6 +9,11 @@ relabeled PASS or mixed with future M3 runtime results.
 
 ### M3 — Configured model fallback and resource-aware recovery
 
+Post-preparation provider confirmation state primitive now persists exact Gate /
+provider evidence newer than SRT preparation, rejects changed/pending inference,
+and preserves immutable replay. Worker publication consumption remains required;
+this is provider continuity evidence, not a successful subtitle delivery.
+
 Complete SRT preparation now has hash-bound immutable Pipeline lineage including
 execution/provider identity and request watermark (204 related server tests PASS).
 Worker cache admission/publication consumption and post-preparation confirmation

@@ -140,6 +140,59 @@ class ModelRequestRecoveryTest(unittest.TestCase):
         self.assertNotEqual(proof['token'], later['token'])
         self.assertGreater(later['request_event_watermark'], proof['request_event_watermark'])
 
+    def test_confirmation_requires_later_matching_evidence_and_current_request_history(self):
+        from model_request_state import ModelRequestContext, confirm_model_output_provider
+        from model_provider_evidence import ModelProviderEvidenceError
+        import sqlite3
+        request = self.prepare()
+        self.settle(request)
+        context = ModelRequestContext(self.database, self.stage['stage_attempt_id'], 'c'*64, 2,
+                                      provider_binding=self.args['provider_binding'])
+        with patch('model_request_state._timestamp', return_value=1788000000.0):
+            prepared = context.record_output_lineage(endpoint=self.url, output_path=self.root/'fixture.srt',
+                                                     output_sha256='a'*64)
+        observation = {'contract':'m3-provider-observation-v1', 'status':'VERIFIED',
+            'gate_baseline_version':'fixture-gate', 'model_provider':dict(context.provider_binding),
+            'checked_at':1788000001.0}
+        def confirm(proof=observation, gate='fixture-gate'):
+            return confirm_model_output_provider(self.store._conn, prepared_token=prepared['token'],
+                                                  gate_baseline_version=gate, observation=proof)
+        with patch('model_request_state._timestamp', return_value=1788000010.0):
+            for timestamp in (1787999999.0, 1788000000.0):
+                with self.assertRaisesRegex(ModelRequestStateError, 'confirmation_pending'):
+                    confirm({**observation, 'checked_at':timestamp})
+            for changed in ({'model_provider':{}}, {'status':'UNPROVEN'},
+                            {'checked_at':1788000999.0}, {'gate_baseline_version':'other'}):
+                with self.assertRaises(ModelProviderEvidenceError):
+                    confirm({**observation, **changed})
+            proof = confirm()
+            self.assertTrue(proof['provider_continuity_verified'])
+            self.assertFalse(proof['publication_verified'])
+            self.store.close()
+            self.store = fixtures.PipelineJobStore(self.database)
+            self.assertTrue(confirm()['replay'])
+            with self.assertRaisesRegex(sqlite3.IntegrityError, 'confirmation_immutable'):
+                self.store._conn.execute("DELETE FROM pipeline_stage_events WHERE event_type='MODEL_OUTPUT_PROVIDER_CONFIRMED'")
+            self.store._conn.rollback()
+            self.reserve(operation_id='operation-two')
+            with self.assertRaisesRegex(ModelRequestStateError, 'request_history_changed'):
+                confirm()
+
+    def test_preparation_refuses_pending_or_different_execution_requests(self):
+        from model_request_state import ModelRequestContext
+        from dataclasses import replace
+        request = self.prepare()
+        context = ModelRequestContext(self.database, self.stage['stage_attempt_id'], 'c'*64, 2,
+                                      provider_binding=self.args['provider_binding'])
+        kwargs = dict(endpoint=self.url, output_path=self.root/'fixture.srt', output_sha256='a'*64)
+        with self.assertRaisesRegex(ModelRequestStateError, 'requests_unresolved'):
+            context.record_output_lineage(**kwargs)
+        self.settle(request)
+        for changed in (replace(context, runtime_sha256='d'*64), replace(context, provider_binding=self.new)):
+            with self.assertRaisesRegex(ModelRequestStateError, 'execution_mismatch'):
+                changed.record_output_lineage(**kwargs)
+        self.assertFalse(context.record_output_lineage(**kwargs)['publication_verified'])
+
     def local_fixture(self):
         self.prepare()
         self.config = SimpleNamespace(m2_recovery_enabled=True, work_path=self.root,

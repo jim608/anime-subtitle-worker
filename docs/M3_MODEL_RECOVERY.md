@@ -5,6 +5,27 @@ its frozen cohort, held sources and UNPROVEN preservation claims are unchanged.
 
 ## Scope
 
+## Post-preparation provider confirmation primitive (candidate)
+
+`confirm_model_output_provider` loads immutable preparation evidence, requires a
+fresh matching host observation strictly later than preparation, checks the exact
+Gate baseline, and appends an immutable provider-confirmation event. It rejects
+changed inference history and unresolved inference ownership, including on replay.
+Confirmation is replayable across restart but remains `publication_verified:false`:
+the caller still must verify actual bytes, QC, source and atomic publication.
+
+Preparation itself now cross-checks stage request runtime/provider identities and
+rejects unresolved inference, rather than trusting a supplied context alone.
+Inference watermarks deliberately exclude UNLOAD resource-cleanup requests.
+Tests cover old/equal/future observations, wrong provider/Gate, UNPROVEN evidence,
+restart replay, immutable confirmation and subsequent-request invalidation.
+Local related suite: 47 PASS. Server related suite: 206 PASS. Evidence:
+`provider-output-confirmation-server.log` under the M3 evidence root.
+
+Worker cache/publication consumption is still not wired. This primitive is not
+an end-to-end publication barrier, and no production deployment is authorized by
+these component results alone.
+
 ## Complete SRT preparation lineage (candidate)
 
 Translator's existing guarded SRT commit now records `MODEL_OUTPUT_PREPARED` in
