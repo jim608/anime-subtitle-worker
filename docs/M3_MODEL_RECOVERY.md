@@ -61,6 +61,46 @@ for the existing job/checkpoint/recovery stores.
 
 ## Remaining engineering and acceptance
 
+Durable receipt component work-in-progress: `model_request_state.py` uses the
+existing Pipeline Job Store stage model metadata and stage events, not another
+Queue. Reservations commit before dispatch, retain UNKNOWN ownership across
+reopen, reject replay dispatch, and count model/request attempts across stage
+retries. Receipts do not imply output QC success. Twelve isolated component
+tests plus 21 existing Pipeline Job Store tests PASS on local Windows Python
+(33 total); the concurrency test uses two real spawned processes. Source bytes,
+mtime, model metadata and checkpoint fields remain unchanged. The log is stored
+on the server share at `/logs/m3-baseline-20260908T070237Z/durable-request-local.log`;
+execution was local, not in the production image.
+
+This component is **not wired into Worker or deployed**. Remaining before wiring:
+review metadata/event retention and mutation boundaries; bind active stage,
+request identity and runtime identity at every translation/repair entry; classify
+remote completion versus ambiguous transport failure; integrate resource and
+controlled recovery evidence. Then run server isolated integration/restart tests.
+No production DB was opened or modified for these component tests.
+
+Follow-up boundary verification: three additional regressions first reproduced
+metadata erasure of an unresolved owner, receipt deletion/rewrite, and expansion
+of an already established request budget. Additive SQLite triggers now preserve
+owned metadata unless its matching result event exists, and prohibit mutation or
+deletion of request receipts (including retention cascades). Existing budgets can
+be tightened but not replenished by adapter re-creation. Other metadata remains
+preserved. Receipt retention needs an explicit future archival policy; it must
+not silently discard pending ownership or spent attempts.
+
+Final component suite: 15 request-state tests plus 21 existing Pipeline tests,
+**36 PASS locally and in server isolation using the current Worker image**.
+Server runs used a read-only candidate mount, no production work/media mount,
+and no network. Logs: `durable-request-server.log` (35) and
+`durable-request-boundaries-server.log` (36), under the same M3 log root.
+This proves the component on the actual image, not live Worker integration.
+
+Integration inspection located all four `_get_translator` call sites: ordinary
+Japanese/non-Japanese translation and two targeted repairs. Binding must use the
+committed active Pipeline attempt, not `_translator_progress_video` alone (one
+path sets it after creating the Translator, and repairs cannot rely on it).
+The existing stage-finish/checkpoint methods do not overwrite `model_json`.
+
 - Explicit compatible alias/route identity and durable route-attempt evidence.
 - Verify failure-budget persistence when failure occurs before a completed batch:
   current translation checkpoint writes follow successful batches and restore

@@ -28,6 +28,12 @@ same-process endpoint ownership now spans Translator instances and model unload.
 255 focused/shared tests PASS. Cross-process/restart ownership and durable failed
 route budgets remain required before M3 deployment; see the M3 evidence document.
 
+Third candidate component: durable request receipts in the existing Pipeline
+stage metadata/events, with cross-process reservation, restart-preserved UNKNOWN
+ownership, non-replenishable budgets and immutable evidence. 36 component/shared
+tests PASS locally and in server isolation. Worker/Adapter/resource binding is
+not yet implemented; this is not runtime protection or deployment acceptance.
+
 Extend the existing configured ASR/translation routes and resource admission,
 not a parallel queue or a wholesale backend rewrite. Preserve compatibility,
 source safety, strict QC and existing durable checkpoint/recovery contracts.
@@ -50,7 +56,7 @@ configuration change is implied merely by starting this milestone.
 
 ## Current M2 acceptance status (2026-09-08 06:33 UTC)
 
-**M2 incomplete; M3 not started.** Previously pending repair is now actually
+**M2 incomplete; M3 candidate work started but not deployed.** Previously pending repair is now actually
 deployed as `a4829a5298304f9e2dc20dd02ecde883ea53ec23`; safe deployment and formal
 controlled recovery completed, Breaker ARMED. New actual-image 312 related tests
 and isolated restart PASS; fresh breakers 7/7 PASS. All 67 holds preserved.
