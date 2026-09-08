@@ -9,6 +9,12 @@ relabeled PASS or mixed with future M3 runtime results.
 
 ### M3 — Configured model fallback and resource-aware recovery
 
+Real isolated provider termination is now verified (09:16 UTC): real HTTP sender,
+durable UNKNOWN, Docker-confirmed sender exit, same-provider restart, exact fresh
+binding, controlled settlement/replay and unchanged source/checkpoint/budget.
+See `provider-termination-O2PvZp/` evidence in the M3 document. No Production
+runtime changed. Ongoing provider drift enforcement and safe deployment remain.
+
 Candidate host integration now resolves one explicitly selected model request
 inside existing controlled recovery, between persisted pause/recovery and arm.
 Hash-bound recovery record, pause ownership and actual runtime identity are

@@ -5,6 +5,38 @@ its frozen cohort, held sources and UNPROVEN preservation claims are unchanged.
 
 ## Scope
 
+## Real isolated provider termination evidence (2026-09-08 09:16 UTC)
+
+`m3_provider_restart_test.sh` and `m3_provider_restart_probe.py` exercised a real
+HTTP request across disposable containers using the deployed Worker image, no
+GPU, a read-only tracked-code snapshot and a dedicated fixture volume. No
+Production media/work volume was mounted. The sender timed out while the fixture
+provider was still handling the request, persisted UNKNOWN, exited, and was
+confirmed exited by Docker before sender-exit evidence was recorded. Only that
+label-verified fixture provider was restarted. Fresh Docker identity/port evidence
+then allowed controlled ownership settlement, with idempotent replay, unchanged
+source/checkpoint, unchanged consumed retry budget and no COMPLETED job.
+
+PASS evidence: `/logs/m3-baseline-20260908T070237Z/provider-termination-O2PvZp/`:
+`full.log`, `bind-old-inspect.json`, `bind-new-inspect.json`,
+`container-evidence.log`, `cleanup.log`, and `fixture/result.json` with its bound
+receipt/source/checkpoint evidence. Both dedicated containers were removed after
+label checks; fixture files and logs remain. Provider container identity was
+`57a2a2d8b2496164443c1ace7d188f644cd8469ee51356d315ec49a1a8fc5265`,
+with start generations `2026-09-08T09:15:52.64574374Z` and
+`2026-09-08T09:16:00.67946566Z`.
+
+The earlier `provider-termination-rMcthi/` attempt is retained as a failed test:
+after restart its original published-port binding could not be proven and no
+settlement was allowed. The fixture switched from Docker-assigned to an explicit
+temporary high port and retained before/after inspection. No Production provider
+restart or protection override was used to make the test pass.
+
+This is real transport/container lifecycle evidence for the state primitive, not
+actual model inference, an end-to-end Production recovery, or formal subtitle
+delivery. Ongoing provider drift enforcement and safe Production deployment are
+still required; M2 acceptance remains incomplete.
+
 ## Current controlled entry increment (candidate, not deployed)
 
 The existing host `recover` command accepts one optional `--model-request-token`
