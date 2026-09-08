@@ -55,6 +55,12 @@ related tests plus 16 final targeted tests PASS (overlapping suites, not summed)
 Production configuration/runtime unchanged. UNKNOWN controlled resolution,
 route contracts and deployment/live acceptance remain open.
 
+Seventh increment: provider read-only discovery confirms exact configured IDs;
+implicit substring/short-alias substitution is removed. Verified Future
+cancellation records NOT_DISPATCHED; submit failure without a Future retains
+UNKNOWN. 345 server-isolated tests PASS. Post-dispatch UNKNOWN cancellation
+attestation and real restart/deployment acceptance remain unproven.
+
 Extend the existing configured ASR/translation routes and resource admission,
 not a parallel queue or a wholesale backend rewrite. Preserve compatibility,
 source safety, strict QC and existing durable checkpoint/recovery contracts.

@@ -3,6 +3,7 @@ import json
 import logging
 import sqlite3
 import threading
+from concurrent.futures import Future
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -109,6 +110,27 @@ class TranslationDurableRequestTest(unittest.TestCase):
         instance._request_context = None
         with self.assertRaisesRegex(TranslationRequestInFlightError, 'context_required'):
             instance._request_translation('1\tsource')
+        self.assertEqual([], self.calls)
+
+    def test_submit_failure_does_not_assert_cancellation(self):
+        instance = self.translator(self.response)
+        with patch('translator.ThreadPoolExecutor') as executor:
+            executor.return_value.submit.side_effect = RuntimeError('fixture submit failure')
+            with self.assertRaisesRegex(TranslationRequestInFlightError, 'dispatch_outcome_unknown'):
+                instance._request_translation('1\tsource')
+        self.assertEqual('UNKNOWN', self.receipts()[-1]['state'])
+        self.assertEqual([], self.calls)
+
+    def test_confirmed_future_cancellation_records_not_dispatched(self):
+        instance = self.translator(self.response)
+        pending = Future()
+        with patch('translator.ThreadPoolExecutor') as executor, \
+                patch('translator._translation_request_hard_timeout_seconds', return_value=.01):
+            executor.return_value.submit.return_value = pending
+            with self.assertRaises(TranslationError):
+                instance._request_translation_with_model_timeout('1\tsource', 'system', 'primary')
+        self.assertTrue(pending.cancelled())
+        self.assertEqual('NOT_DISPATCHED', self.receipts()[-1]['outcome'])
         self.assertEqual([], self.calls)
 
     def test_exhausted_primary_budget_does_not_block_unused_configured_fallback(self):

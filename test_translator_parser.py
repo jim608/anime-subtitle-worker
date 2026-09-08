@@ -1877,12 +1877,12 @@ class TranslatorParserTest(unittest.TestCase):
         self.assertEqual(translator._resolve_translator_models(),
             ("configured-primary", "configured-secondary"))
 
-    def test_selects_only_available_translator_model_when_configured_alias_is_missing(self) -> None:
+    def test_missing_short_alias_does_not_authorize_an_advertised_model(self) -> None:
         available = ["hf.co/SakuraLLM/Sakura-7B-Qwen2.5-v1.0-GGUF:latest"]
 
         selected = _select_available_translator_model("SakuraLLM:latest", available)
 
-        self.assertEqual(selected, available[0])
+        self.assertEqual(selected, "SakuraLLM:latest")
 
     def test_unrelated_discovery_never_receives_translation_request(self) -> None:
         translator = object.__new__(SubtitleTranslator)
@@ -1910,7 +1910,7 @@ class TranslatorParserTest(unittest.TestCase):
             translator._request_translation("1\t原文")
         self.assertEqual(attempted, ["configured-primary", "configured-secondary"])
 
-    def test_selects_unique_alias_match_from_multiple_translator_models(self) -> None:
+    def test_unique_substring_match_is_not_model_authorization(self) -> None:
         available = [
             "other-model:latest",
             "hf.co/SakuraLLM/Sakura-7B-Qwen2.5-v1.0-GGUF:latest",
@@ -1918,7 +1918,7 @@ class TranslatorParserTest(unittest.TestCase):
 
         selected = _select_available_translator_model("SakuraLLM:latest", available)
 
-        self.assertEqual(selected, available[1])
+        self.assertEqual(selected, "SakuraLLM:latest")
 
     def test_keeps_configured_translator_model_when_multiple_models_do_not_match(self) -> None:
         selected = _select_available_translator_model("SakuraLLM:latest", ["a:latest", "b:latest"])

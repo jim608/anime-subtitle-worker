@@ -61,6 +61,31 @@ for the existing job/checkpoint/recovery stores.
 
 ## Remaining engineering and acceptance
 
+### Route authorization and cancellation evidence (candidate, not deployed)
+
+Read-only model discovery on the actual configured provider confirms that both
+configured full IDs are advertised exactly (`model-route-readonly.log`). No
+model load/inference or provider restart was requested by this check. The two
+former implicit-substring compatibility tests were changed to the explicit
+configured-only contract and reproduced unauthorized substitution before the
+fix. Discovery no longer expands model authorization through a short name,
+namespace omission or unique substring. Configure full provider IDs; missing
+IDs follow the configured fallback chain. Current production names need no edit.
+
+`executor.submit` failure no longer claims cancellation without a Future: its
+receipt remains UNKNOWN. Conversely, a successful `Future.cancel()` on a pending
+call records NOT_DISPATCHED and releases that request through the existing
+receipt transaction. This is a specific verified cancellation condition, not
+permission to expire UNKNOWN ownership. Two new composed tests cover both paths.
+
+345 related tests PASS in server isolation, log
+`route-cancellation-boundary-server.log`. Lost connections after dispatch still
+cannot be declared cancelled from elapsed time, Worker death, model residency,
+or free VRAM. Existing provider integration has no per-request cancellation
+attestation captured in the receipt; that controlled recovery evidence and real
+restart validation remain incomplete. Do not add an operator “clear owner” path
+or claim this increment completes UNKNOWN recovery or M3 acceptance.
+
 ### Shared-resource admission increment (candidate, not deployed)
 
 Read-only server topology evidence identifies the configured translation endpoint

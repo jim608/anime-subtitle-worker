@@ -1620,10 +1620,13 @@ class SubtitleTranslator:
                 else:
                     future = executor.submit(self._request_translation_direct, source_text, system_prompt, model,
                                              request_context=context, request_receipt=receipt)
-            except BaseException:
+            except BaseException as exc:
                 executor.shutdown(wait=False, cancel_futures=True)
                 if receipt is not None:
-                    context.record(receipt['token'], 'NOT_DISPATCHED', {'cancelled_before_start': True})
+                    # submit() failure alone supplies no Future whose confirmed
+                    # cancellation proves the call could never start.
+                    context.record(receipt['token'], 'UNKNOWN', {'reason_code': 'process_interrupted'})
+                    raise TranslationRequestInFlightError('translation_request_dispatch_outcome_unknown') from exc
                 raise
             _TRANSLATION_REQUESTS[endpoint] = future
         # A completed future may invoke its callback synchronously. Register it
@@ -1633,7 +1636,10 @@ class SubtitleTranslator:
         try:
             return future.result(timeout=hard_timeout)
         except FutureTimeoutError as exc:
-            if not future.cancel() and not future.done():
+            cancelled = future.cancel()
+            if cancelled and receipt is not None:
+                context.record(receipt['token'], 'NOT_DISPATCHED', {'cancelled_before_start': True})
+            if not cancelled and not future.done():
                 raise TranslationRequestInFlightError(
                     f"translation_request_in_flight: hard timeout after {hard_timeout}s; cancellation unconfirmed"
                 ) from exc
@@ -1883,22 +1889,10 @@ def _model_ids_from_response(response: object) -> list[str]:
 
 
 def _select_available_translator_model(configured_model: str, available_models: list[str]) -> str:
-    configured = configured_model.strip()
-    available = [model.strip() for model in available_models if model and model.strip()]
-    if not configured or configured in available or not available:
-        return configured
-    # Discovery is not authorization: a server exposing only one unrelated
-    # model must not silently replace the configured primary/fallback chain.
-    # Keep the existing unique alias match below for compatible model IDs.
-
-    configured_name = configured.split(":", 1)[0].rsplit("/", 1)[-1].lower()
-    if not configured_name:
-        return configured
-
-    matches = [model for model in available if configured_name in model.lower()]
-    if len(matches) == 1:
-        return matches[0]
-    return configured
+    # Discovery is not authorization, including a unique substring/short alias.
+    # Keep this helper's interface for existing integrations. Configure the full
+    # provider ID; a rejected route follows only the configured fallback chain.
+    return configured_model.strip()
 
 
 def _build_translation_context_prompt(
