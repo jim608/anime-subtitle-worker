@@ -23,11 +23,16 @@ recovery log, not the subsequent resume log. Persisted sender proof and provider
 restart ordering are still required; unbound historical requests remain held.
 
 Server isolated related suite: 152 PASS (`provider-controlled-entry-server.log`).
-Final additional runtime/fence checks are in
+Final additional runtime/fence checks: 65 PASS in
 `provider-controlled-entry-final-server.log`. These tests exercise actual isolated
 SQLite transactions and local files with fixture host identity; they are not a
-live Production recovery. Full host-command composition, real provider termination
-fixture, ongoing provider drift enforcement and safe deployment remain open.
+live Production recovery. Host-command composition is now covered by the existing
+Docker-command runner fixture: exact recover/resolve/arm/resume order, original
+log selection on resume, invalid resolution rejection, provider drift before
+resolution and provider drift before arm. Every rejected case omits resume.
+Server suite: 30 PASS, `provider-host-composition-server.log`; overlapping suites
+are not additive. Real provider termination fixture, ongoing provider drift
+enforcement and safe deployment remain open.
 Earlier paragraphs saying no controlled entry exists describe prior increments.
 
 ## Provider identity binding (candidate, not deployed)

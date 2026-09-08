@@ -596,6 +596,8 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
     def test_host_arm_checks_live_containers_and_returns_initialized_summary(self) -> None:
         from model_provider_evidence import redacted_endpoint_descriptor
         provider_requested = False
+        recovery_case = None
+        flow = []
         probe = {
             "status": "ARMED",
             "reason_code": "runtime_guardrails_loaded",
@@ -651,6 +653,9 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
                 payload = [{'Id': 'a'*64, 'Image': 'sha256:' + 'b'*64,
                     'State': {'Running': True, 'StartedAt': '2026-01-01T00:00:00Z'},
                     'NetworkSettings': {'Ports': {'11434/tcp': [{'HostIp': '0.0.0.0', 'HostPort': '11434'}]}}}]
+                if ((recovery_case == 'drift-before-resolve' and 'recover' in flow) or
+                        (recovery_case == 'drift-before-arm' and 'resolve' in flow)):
+                    payload[0]['State']['StartedAt'] = '2026-01-02T00:00:00Z'
                 return subprocess.CompletedProcess(command, 0, json.dumps(payload), '')
             if command[0] == "git" and "status" in command:
                 return subprocess.CompletedProcess(command, 0, "", "")
@@ -682,6 +687,7 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
                     "",
                 )
             if "initialize" in command:
+                flow.append('arm')
                 self.assertIsNotNone(stdin)
                 evidence = json.loads(str(stdin))
                 if provider_requested:
@@ -699,6 +705,23 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
                     runtime.compute_worker_runtime_code_revision(self.worker_repo),
                 )
                 return subprocess.CompletedProcess(command, 0, json.dumps(initialized), "")
+            if 'recover-local' in command:
+                flow.append('recover')
+                return subprocess.CompletedProcess(command, 0, json.dumps({
+                    'status':'DISARMED', 'log_path':'/logs/resume.json',
+                    'original_recovery_log_path':'/logs/original.json'}), '')
+            if 'resolve-model-local' in command:
+                flow.append('resolve')
+                evidence = json.loads(stdin)
+                self.assertEqual('/logs/original.json', evidence['recovery_log_path'])
+                self.assertEqual('request-token', evidence['token'])
+                self.assertEqual('a'*64, evidence['model_provider']['container_id'])
+                return subprocess.CompletedProcess(command, 0, json.dumps({
+                    'status':'DISARMED', 'claims_resumed':False, 'token':'request-token',
+                    'outcome':'UNKNOWN' if recovery_case == 'invalid-resolution' else 'PROVIDER_TERMINATED'}), '')
+            if 'resume-local' in command:
+                flow.append('resume')
+                return subprocess.CompletedProcess(command, 0, json.dumps({'status':'ARMED','claims_resumed':True}), '')
             raise AssertionError(f"unexpected command: {command}")
 
         result = runtime.arm_runtime_on_host(
@@ -738,6 +761,29 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
                 fault_summary_path='/logs/fault/summary.json', worker_repo=self.worker_repo,
                 webui_repo=self.webui_repo, runner=runner)
         self.assertFalse(any('initialize' in command for command in commands))
+
+        recovery_args = dict(docker_binary='docker', worker_container='anime-subtitle-worker',
+            webui_container='anime-subtitle-worker-webui', model_provider_container='fixture-ollama',
+            expected_worker_commit_sha=WORKER_SHA, expected_webui_commit_sha=WEBUI_SHA,
+            expected_old_gate_id='fixture-old-gate', expected_breaker_reason='planned_runtime_change',
+            affected_stage='worker', failure_code='fixture', model_request_token='request-token',
+            fault_summary_path='/logs/fault/summary.json', worker_repo=self.worker_repo,
+            webui_repo=self.webui_repo, root_cause_evidence={'mode':'authorized_reconciliation'}, runner=runner)
+        for recovery_case, expected_flow, error in (
+                ('valid', ['recover','resolve','arm','resume'], None),
+                ('invalid-resolution', ['recover','resolve'], 'fence_not_preserved'),
+                ('drift-before-resolve', ['recover'], 'model_provider_changed_during_recovery'),
+                ('drift-before-arm', ['recover','resolve'], 'model_provider_changed_during_recovery')):
+            commands.clear()
+            flow.clear()
+            with self.subTest(recovery_case=recovery_case):
+                if error:
+                    with self.assertRaisesRegex(runtime.RuntimeContractError, error):
+                        runtime.recover_runtime_on_host(**recovery_args)
+                else:
+                    result = runtime.recover_runtime_on_host(**recovery_args)
+                    self.assertTrue(result['claim_resume']['claims_resumed'])
+                self.assertEqual(expected_flow, flow)
 
     def test_host_arm_fails_closed_on_source_revision_mismatch(self) -> None:
         def runner(command: list[str], stdin: str | None, timeout: float) -> subprocess.CompletedProcess[str]:
