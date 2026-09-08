@@ -3167,6 +3167,24 @@ class MainQueueResultTest(unittest.TestCase):
         )
         state.mark_ai_queue_failed.assert_not_called()
 
+    def test_provider_observation_wait_retains_queue_retry_budget_and_backoff(self) -> None:
+        video = Path('/anime/ProviderWait.mkv')
+        message = 'model_output_provider_confirmation_pending'
+        state = Mock()
+        state.ai_job_failure.return_value = ('worker', message)
+        state.mark_ai_queue_failed.return_value = False
+        config = SimpleNamespace(auto_ai_failure_cooldown_seconds=60, auto_ai_max_attempts=3)
+        with patch('control_state.open_ai_quality_review_for_target', return_value=None):
+            main_module._mark_queue_result(state, video, False, config)
+        state.mark_ai_queue_failed.assert_called_once()
+        kwargs = state.mark_ai_queue_failed.call_args.kwargs
+        self.assertEqual(3, kwargs['max_attempts'])
+        self.assertGreaterEqual(kwargs['retry_after_seconds'], 60)
+        self.assertEqual('transient_timeout', kwargs['error_code'])
+        self.assertEqual('same_pipeline', kwargs['retry_strategy'])
+        state.mark_ai_queue_review_required.assert_not_called()
+        state.mark_ai_queue_completed.assert_not_called()
+
     def test_scan_and_process_drains_current_video_on_shutdown(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

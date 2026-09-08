@@ -5,6 +5,23 @@ its frozen cohort, held sources and UNPROVEN preservation claims are unchanged.
 
 ## Scope
 
+## Publication wait recovery classification (candidate)
+
+The exact Worker failure `model_output_provider_confirmation_pending` now maps
+to existing `transient_timeout / same_pipeline` admission recovery, including
+legacy failure-code ingestion. The reproduced prior mapping was `worker_unknown /
+bounded_retry`; this was ambiguous evidence, not proof that every consumer would
+permanently fail it (some consumers also consider retry strategy).
+
+Queue-result integration verifies the existing configured attempt limit and
+cooldown remain in force, without COMPLETED or review transitions. Provider drift,
+unresolved requests, unreadable observations and similar-but-not-exact messages
+are not reclassified as ordinary waiting. No latch, ownership or Gate is cleared.
+Local related suites: 227 PASS. Server Worker/Queue/SQLite/recovery suites:
+375 PASS, `logs/m3-baseline-20260908T070237Z/provider-publication-retry-server.log`.
+This closes the waiting-classification item below; repair lineage, restyling,
+scheduler installation and real safe deployment acceptance remain outstanding.
+
 ## AI publication provider barrier (candidate)
 
 The AI ASS path now consumes `confirm_model_output_provider` after staged QC and

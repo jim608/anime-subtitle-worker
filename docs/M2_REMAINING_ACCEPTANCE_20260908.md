@@ -1,5 +1,10 @@
 # M2 remaining acceptance — 2026-09-08
 
+M3 publication-wait classification candidate: 375 server related tests PASS in
+`logs/m3-baseline-20260908T070237Z/provider-publication-retry-server.log`.
+Existing attempt limit/backoff retained; no Production deployment, Gate change or
+formal subtitle added. M2 acceptance remains incomplete.
+
 M3 AI publication barrier candidate: 208 server isolated tests PASS in
 `logs/m3-baseline-20260908T070237Z/provider-publication-barrier-final-server.log`.
 No Production deployment, Gate change, or additional formal subtitle; M2 remains

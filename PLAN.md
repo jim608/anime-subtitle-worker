@@ -9,6 +9,11 @@ relabeled PASS or mixed with future M3 runtime results.
 
 ### M3 — Configured model fallback and resource-aware recovery
 
+Publication observation-wait timeout now uses exact existing transient timeout
+recovery, with configured budget/backoff preserved and no broadened treatment of
+provider drift or unknown ownership. Server related suite 375 PASS. Remaining
+deployment blockers are repair/restyling lineage and host scheduler/runtime proof.
+
 AI ASS publication now consumes post-preparation provider confirmation before
 formal replacement, with a bounded 45-second observation-file-only wait and
 post-wait byte/runtime recheck. Server 208 PASS. Repair-derived lineage, restyling

@@ -5197,6 +5197,8 @@ def _failure_revision(path: str, error_code: str, message: str) -> str:
 
 
 def _legacy_failure_code(stage: str, message: str) -> str:
+    if stage == 'worker' and message == 'model_output_provider_confirmation_pending':
+        return 'transient_timeout'
     normalized_stage = str(stage or "").strip().casefold()
     normalized_message = str(message or "").strip().casefold()
     if normalized_stage == "transcription_review":

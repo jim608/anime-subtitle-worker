@@ -8862,6 +8862,10 @@ def _validate_m2_completion_before_commit(
 
 
 def _ai_failure_policy(stage: str, message: str) -> tuple[str, str]:
+    if stage == 'worker' and message == 'model_output_provider_confirmation_pending':
+        # The publication barrier exhausted its bounded host-observation wait.
+        # Reuse existing retry budget/backoff; drift and unknown ownership do not qualify.
+        return 'transient_timeout', 'same_pipeline'
     if _exact_translation_safe_omission_indexes(stage, message):
         return "translation_safe_omission", "bounded_retry"
     normalized_stage = str(stage or "").strip().casefold()

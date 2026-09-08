@@ -259,6 +259,22 @@ class ModelRequestRecoveryTest(unittest.TestCase):
             baseline.pop('model_provider')
             self.assertIsNone(worker._require_model_output_lineage(video, output))
 
+    def test_publication_observation_wait_uses_existing_bounded_timeout_recovery(self):
+        from main import _ai_failure_policy
+        from scan_state import _legacy_failure_code
+        from m2_production_recovery import classify_failure
+        message = 'model_output_provider_confirmation_pending'
+        code, strategy = _ai_failure_policy('worker', message)
+        self.assertEqual(('transient_timeout', 'same_pipeline'), (code, strategy))
+        self.assertEqual('transient_timeout', _legacy_failure_code('worker', message))
+        self.assertEqual('TRANSIENT', classify_failure('worker', code, message))
+        for invalid in ('model_output_runtime_changed_before_publication',
+                        'model_output_requests_unresolved',
+                        'model_output_provider_observation_unreadable',
+                        message + '_unexpected'):
+            self.assertNotEqual('transient_timeout', _ai_failure_policy('worker', invalid)[0])
+            self.assertNotEqual('transient_timeout', _legacy_failure_code('worker', invalid))
+
     def local_fixture(self):
         self.prepare()
         self.config = SimpleNamespace(m2_recovery_enabled=True, work_path=self.root,
