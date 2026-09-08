@@ -1,5 +1,16 @@
 # M3 — configured model recovery
 
+## Actual configured ASR fallback — 2026-09-08 12:51 UTC
+
+Bounded follow-up of live child1852332 (no new dispatch) shows e15760... running,
+attempts2. Heartbeat1788871817.1742413: configured large-v3 failed unchanged
+artifact/low-confidence checks; existing configured large-v2 fallback started.
+At1788871898.1522348 the same child was alive (CPU6m24s, elapsed5m01s).
+This proves ASR fallback selection/start, not translation MODEL response,
+fallback success, validated ASR output, or formal subtitle publication.
+Evidence /logs/m3-review-convergence-20260908T1210/bounded-asr-wait-3.json
+and bounded-asr-wait-3-process.txt. No code/config/deployment/Gate changes.
+
 ## Automatic second claim verified — 2026-09-08 12:48 UTC
 
 This supersedes the earlier statement that the canary second claim was unobserved.
