@@ -1,5 +1,21 @@
 # M2 remaining acceptance — 2026-09-08
 
+## Reopen safety preconditions checked — 2026-09-08 13:56 UTC
+
+Exact3 targets2565:12,3085:13,3932:3 exist and are not held. Production
+has_ai_finished_subtitle and has_finished_subtitle both return false for all3;
+verified official languages empty. Missing official subtitles alone was not used
+to assume AI subtitles absent. No valid output was removed to make these cases.
+Read only the6 known historical/last-completed extraction records: all present
+(3replaced,3success), but all6 stored qB-to-Worker content paths currently absent.
+This does not prove permanent source loss or that historical success was false.
+No full directory scan, torrent addition, state mutation, or publication occurred.
+Evidence /logs/m2-resumed-acceptance-20260908/three-full-output-preflight.json
+and three-retained-files.json. Formal additions0. Controlled revalidation/reopen
+still requires guarded implementation/integration tests and safe deployment;
+do not call the private allow_completed_reopen flag or clear completion fields
+directly against Production. Preserve original completed/extraction records.
+
 ## Exact historical-success selection blocker — 2026-09-08 13:52 UTC
 
 Bounded existing-source searches for2565:12,3085:13,3932:3 returned respectively
