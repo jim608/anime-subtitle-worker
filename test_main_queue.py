@@ -24,6 +24,50 @@ from scan_state import ScanStateStore
 
 
 class MainQueueResultTest(unittest.TestCase):
+    def test_strict_rejection_after_committed_qc_preserves_checkpoint_and_settles(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "episode.mkv"
+            video.write_bytes(b"source-read-only")
+            config = SimpleNamespace(work_path=root, log_path=root / "logs",
+                scanner_state_path=root / "scanner.sqlite3", ai_output_manifest_path="manifests",
+                control_state_path="control.sqlite3", auto_ai_failure_cooldown_seconds=0,
+                auto_ai_max_attempts=3)
+            state = ScanStateStore.from_config(config)
+            try:
+                state.upsert_ai_queue_candidate(video, video.stat().st_mtime_ns)
+                state.commit()
+                delivery_id = main_module._mark_queue_running(state, video, config)
+                pipeline = state.pipeline_jobs()
+                job = pipeline.job_for_path(video, size=video.stat().st_size,
+                    mtime_ns=video.stat().st_mtime_ns, create=False)
+                attempt = pipeline.transition_legacy_stage(job['job_id'], 'quality_check', 'running',
+                    inputs={'fixture': True}, reason_code='qc_started', evidence={'fixture': True}, confidence=1.0)
+                pipeline.finish_stage_attempt(attempt['stage_attempt_id'], 'SUCCEEDED',
+                    reason_code='qc_committed', evidence={'fixture': True}, confidence=1.0)
+                state.commit()
+                before = pipeline.list_stage_attempts(job['job_id'])
+                rejection = main_module._M2StrictCompletionRejected(
+                    ['final_state_completed', 'hallucination_validation_pass'])
+                main_module._commit_m2_completion_rejection(
+                    state, video, config, delivery_id, rejection)
+                self.assertEqual(pipeline.get_job(job['job_id'])['state'], 'NEEDS_REVIEW')
+                self.assertEqual(pipeline.list_stage_attempts(job['job_id']), before)
+                saved = state.get_ai_delivery_attempt(delivery_id)
+                self.assertIn('hallucination_validation_pass', saved['detail'])
+                state.close()
+                state = ScanStateStore.from_config(config)
+                pipeline = state.pipeline_jobs()
+                main_module._record_pipeline_queue_result(pipeline, job, 0,
+                    config=config, delivery_attempt_id=delivery_id, target_state='NEEDS_REVIEW',
+                    stage='m2_strict_completion', reason_code='incorrect_completion_intercepted',
+                    error_code='incorrect_completion', detail=saved['detail'])
+                self.assertEqual(pipeline.get_job(job['job_id'])['state'], 'NEEDS_REVIEW')
+                self.assertEqual(pipeline.list_stage_attempts(job['job_id']), before)
+                self.assertEqual(video.read_bytes(), b'source-read-only')
+            finally:
+                state.close()
+
     def test_review_after_committed_source_stage_settles_job_without_new_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -1270,6 +1314,37 @@ class MainQueueResultTest(unittest.TestCase):
                 self.assertIn(
                     "incorrect_completion",
                     [item["reason_code"] for item in breaker["reasons"]],
+                )
+                self.assertEqual(video.read_bytes(), source_before)
+                self.assertTrue(all(path.is_file() for path in outputs))
+                # A later filesystem discovery must not turn an intercepted
+                # delivery into queue success merely because output files exist.
+                self.assertFalse(
+                    state.mark_ai_queue_done(video, detected_existing=True)
+                )
+                state.commit()
+                self.assertEqual(
+                    state._conn.execute(
+                        "SELECT status FROM ai_candidate_queue WHERE path=?",
+                        (str(video.resolve()),),
+                    ).fetchone()[0],
+                    "paused",
+                )
+                state.close()
+                state = ScanStateStore.from_config(config)
+                for detected_existing in (True, True, False):
+                    self.assertFalse(
+                        state.mark_ai_queue_done(
+                            video, detected_existing=detected_existing
+                        )
+                    )
+                    state.commit()
+                self.assertEqual(
+                    state._conn.execute(
+                        "SELECT status, last_error_code FROM ai_candidate_queue WHERE path=?",
+                        (str(video.resolve()),),
+                    ).fetchone(),
+                    ("paused", "incorrect_completion"),
                 )
                 self.assertEqual(video.read_bytes(), source_before)
                 self.assertTrue(all(path.is_file() for path in outputs))

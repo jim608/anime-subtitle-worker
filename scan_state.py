@@ -1107,6 +1107,23 @@ class ScanStateStore:
                       AND a.status = 'running'
                 )
             )
+            AND NOT EXISTS (
+                SELECT 1
+                FROM ai_delivery_attempts a
+                JOIN ai_delivery_obligations o
+                  ON o.obligation_id = a.obligation_id
+                WHERE o.canonical_path = ai_candidate_queue.path
+                  AND o.media_mtime_ns = excluded.mtime_ns
+                  AND o.state = 'open'
+                  AND a.status = 'review_required'
+                  AND a.stage = 'm2_strict_completion'
+                  AND a.error_code = 'incorrect_completion'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM ai_delivery_attempts newer
+                      WHERE newer.obligation_id = a.obligation_id
+                        AND newer.attempt_number > a.attempt_number
+                  )
+            )
             """,
             (normalized_path, mtime_ns, queue_updated_at, queue_updated_at),
         )

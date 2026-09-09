@@ -8014,6 +8014,32 @@ def _reconcile_parent_pipeline_failure(
     current_state = str(current.get("state") or "").upper()
     if (
         target == "NEEDS_REVIEW"
+        and current_state in {"QC", "MUXING"}
+        and not active_id
+        and str(stage) == "m2_strict_completion"
+        and str(error_code) == "incorrect_completion"
+        and callable(transition_job)
+        and any(
+            isinstance(item, dict)
+            and str(item.get("stage")) == current_state
+            and str(item.get("status")) == "SUCCEEDED"
+            for item in attempts
+        )
+    ):
+        # The child committed its final checkpoint before the parent rejected
+        # the overall delivery. This is a terminal parent decision, not late
+        # stage telemetry; preserve the successful checkpoint without a retry.
+        transition_job(
+            job_id, "NEEDS_REVIEW", reason_code=reason_code,
+            evidence={**common_evidence, "final_stage_already_succeeded": True,
+                      "error_code": str(error_code), "detail": str(detail or "")[:1000]},
+            confidence=1.0, expected_state=current_state,
+            idempotency_key=("ai-parent-strict-review:" + str(delivery_attempt_id)
+                             if delivery_attempt_id else None), actor="queue_parent",
+        )
+        return True
+    if (
+        target == "NEEDS_REVIEW"
         and current_state == "SUBTITLE_DETECTION"
         and not active_id
         and str(stage) == "source_selection_review"
@@ -8709,7 +8735,8 @@ def _commit_m2_completion_rejection(
     pipeline_events: list[dict[str, object]] = []
     rejection_message = (
         "M2 strict completion evidence was incomplete; outputs and checkpoints "
-        "were preserved for review"
+        "were preserved for review; failed_evidence="
+        + ",".join(rejection.failed_evidence)
     )
 
     def write_rejection() -> None:

@@ -79,6 +79,75 @@ class LanguageDetectorTests(unittest.TestCase):
         self.assertEqual(tied.reason, "language_uncertain")
         self.assertFalse(tied.confident)
 
+    def test_different_blocked_languages_do_not_vote_for_one_source_language(self) -> None:
+        # Retained Production samples: grouping English and Korean as one
+        # "not allowed" bucket must not assert a confident English source.
+        samples = [
+            LanguageDetectionSample("en", 0.84375, 361.73, 15),
+            LanguageDetectionSample("ko", 0.60302734375, 730.95, 15),
+            LanguageDetectionSample("ja", 0.9853515625, 1100.18, 15),
+        ]
+        result = _aggregate_samples(
+            samples, self.config(language_detect_min_probability=0.60)
+        )
+        self.assertFalse(result.confident)
+        self.assertFalse(result.allowed)
+        self.assertEqual(result.reason, "language_uncertain")
+        self.assertEqual(result.samples, samples)
+
+    def test_blocked_language_must_win_against_all_other_confident_samples(self) -> None:
+        result = _aggregate_samples([
+            LanguageDetectionSample("en", 0.95, 0, 15),
+            LanguageDetectionSample("en", 0.90, 60, 15),
+            LanguageDetectionSample("ko", 0.80, 120, 15),
+            LanguageDetectionSample("ja", 0.90, 180, 15),
+            LanguageDetectionSample("ja", 0.92, 240, 15),
+        ], self.config())
+        self.assertFalse(result.confident)
+        self.assertEqual(result.reason, "language_uncertain")
+
+    def test_blocked_language_selection_uses_votes_not_another_languages_peak(self) -> None:
+        result = _aggregate_samples([
+            LanguageDetectionSample("en", 0.85, 0, 15),
+            LanguageDetectionSample("en", 0.80, 60, 15),
+            LanguageDetectionSample("ko", 0.99, 120, 15),
+        ], self.config())
+        self.assertTrue(result.confident)
+        self.assertFalse(result.allowed)
+        self.assertEqual(result.language, "en")
+        self.assertEqual(result.probability, 0.85)
+
+    def test_restart_reaggregates_old_mixed_cache_without_rewriting_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            video = root / "episode.mkv"
+            video.write_bytes(b"source-read-only")
+            config = self.config(work_path=root, language_detect_cache_enabled=True,
+                language_detect_cache_path="language.json", language_detect_model="large-v3",
+                whisper_model="large-v3", whisper_device="cpu",
+                language_detect_min_probability=0.60)
+            samples = [LanguageDetectionSample("en", 0.84375, 361.73, 15),
+                LanguageDetectionSample("ko", 0.60302734375, 730.95, 15),
+                LanguageDetectionSample("ja", 0.9853515625, 1100.18, 15)]
+            logger = __import__("logging").getLogger("test.language.cache")
+            detector = LanguageDetector(config, logger)
+            detector._write_cached(video, LanguageDetectionResult("en", 0.84375,
+                False, True, "faster-whisper_multi_sample",
+                reason="non_allowed_language_detected", samples=samples), "stream:1")
+            cache = root / "language.json"
+            saved = cache.read_bytes()
+            for _ in range(2):
+                resumed = LanguageDetector(config, logger)
+                # Public detection must reuse the saved samples without another
+                # model request (the fixture deliberately has no audio file).
+                result = resumed.detect(root / "absent.wav", video, cache_variant="stream:1")
+                self.assertIsNotNone(result)
+                self.assertFalse(result.confident)
+                self.assertEqual(result.reason, "language_uncertain")
+                self.assertEqual(result.samples, samples)
+                self.assertEqual(cache.read_bytes(), saved)
+                self.assertEqual(video.read_bytes(), b"source-read-only")
+
     def test_uncertain_policy_controls_skip_or_fail(self) -> None:
         result = LanguageDetectionResult("la", 0.62, False, False, "test", reason="language_uncertain")
 

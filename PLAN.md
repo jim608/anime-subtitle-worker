@@ -2,6 +2,19 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+Latest candidate2026-09-09: reproduced mixed-language vote pooling (en+ko wrongly
+became confident en under a Japanese source decision), and post-QC rejection failing
+to settle Pipeline. Minimal language/cache/review fixes verified276tests and an
+actual isolated container restart. No Production deployment or Gate reset yet.
+Next exact-incident reconciliation proof/hold, safe deployment and automatic claim;
+do not reuse prior postprocess root-cause authorization as this incident's evidence.
+Download target2565:12 still lacks a new usable source/formal output. M2 incomplete.
+
+2026-09-09: secondary queue overwrite defect reproduced and minimally patched in
+candidate source only;212 server-isolated queue tests PASS including reopen/replay.
+No deployment or Gate change. Next identify original strict rejection predicates,
+then evidence-bound safe deployment/recovery. M2 remains incomplete; formal0.
+
 Current: bd268943... deployed,78actual-image tests+7breakersPASS, controlled recovery
 initiallyARMED; later incorrect_completion TRIPPED and AI admission stopped. NewGate
 212600 has1NEEDS_REVIEW/strict0, oldGate preserved. Next isolate exact intercepted

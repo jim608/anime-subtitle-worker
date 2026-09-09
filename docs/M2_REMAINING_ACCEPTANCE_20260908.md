@@ -1,5 +1,97 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-09 — mixed-language source vote and review convergence
+
+The intercepted attempt's retained decision selects stream1, metadata Japanese,
+strategy ASR_JA_AUDIO. Runtime provenance records three content samples:
+en0.84375, ko0.60302734375, ja0.9853515625. Actual minimum probability is0.6,
+uncertain policy continue, allowed languages ja. Old aggregation combines English
+and Korean into two non-allowed votes and then calls the source confidently English.
+The child consequently produced an English ASR artifact and English-to-TC delivery;
+the English checkpoint hash still matches, while the expected Japanese transcript
+and diagnostics are absent. Strict hallucination evidence correctly rejects that
+decision/artifact mismatch. No English artifact is relabelled as Japanese.
+
+An explicitly modelled replay in a disposable consistent SQLite copy reaches
+Pipeline COMPLETED before the deliberate rollback. It is NOT a historical replay
+or successful delivery. Raw final_state_completed is true; qualify_strict_output
+also forces it false when incorrect_completion is reported. Therefore the original
+first failed predicate did not by itself prove a failed completion DB write.
+The replay's runtime predicate is false because the real runtime remains TRIPPED.
+
+Reproduced candidate fixes:
+- language_detector.py requires a majority of one specific blocked language, not
+  a pooled non-allowed category. Existing saved samples are reaggregated on cache
+  reads, including after restart; no cache clear, media scan or automatic new model
+  request. Existing uncertainty/Japanese-evidence policy remains in force.
+- main.py settles the exact parent strict rejection after a committed QC/MUXING
+  stage to NEEDS_REVIEW, preserving successful attempts/checkpoints and retry budget.
+  Generic late telemetry safeguards remain unchanged. All failed predicate names
+  are now retained in rejection detail rather than just the first/count.
+- scan_state.py retains the previously tested protection against discovery turning
+  an unresolved strict review into Queue done.
+
+Evidence in `/logs/m2-mapping-budget-20260908T2117/`:
+`completion-snapshot-387rdl83/result.json` (MODELED_REPLAY_NOT_HISTORICAL_PROOF),
+`hallucination-diagnosis-1788938831048325452.json`,
+`language-policy-proof-20260909T1222.log` (points to actual policy report),
+`language-vote-red-20260909T0854.log` (2 expected failures),
+`strict-qc-convergence-red-20260909T1215.log` (QC != NEEDS_REVIEW),
+`completion-language-regression-20260909T1218.log` (**276 PASS**),
+`language-cache-public-restart-20260909T1222.log` (**11 PASS**, public cache entry).
+Real isolated container restart: `completion-language-restart-20260909T1229/`,
+same container15b22fa47ce8..., running before restart12:19:27Z, restarted12:19:59Z,
+exited0 at12:20:00Z. result.json PASS: checkpoint/source/cache preserved, no model
+request, review settled, duplicate discovery refused. Only fixture data and three
+read-only code files mounted. Earlier1226 fixture failed on an invalid test API
+argument before preparing the checkpoint; its exited container/log is retained,
+not counted as restart PASS. Log name time labels are identifiers; Docker's recorded
+start/finish times are authoritative.
+
+Runtime recheck remains bd2689437ea36d3c04f3193538862a931331c7f0/image6fc360c4...;
+no Production deployment, source/output mutation, hold release or Gate reset.
+`download-bounded-20260909T1215.json`: TRIPPED,68holds, original Gate212600;
+target2565:12 still extract_failed/due with no torrent and no completion. Replacement
+request progressed to3other targets; this is discovery progress, not canary claim.
+Formal new AI/download/extraction deliveries this increment: **0/0/0**.
+
+Next: retain the exact source/decision mismatch as an unresolved held incident,
+complete evidence-bound controlled recovery support for THIS incident (do not label
+it as the previous postprocess or line-repair cause), then safe deploy/actual-image
+proof and automatic real claim. Formal download/extraction and frozen Gate acceptance
+remain open. M2 is not complete; no M3/M4 work or acceptance-rate claim.
+
+## 2026-09-09 — reproduced post-interception queue overwrite (candidate only)
+
+The exact completion rejection regression passes before the new characterization.
+However, calling `mark_ai_queue_done(detected_existing=True)` after a strict
+rejection returns True and overwrites the paused queue. This is a reproduced
+secondary safety defect, NOT proof of the original two failed strict predicates.
+Candidate `scan_state.py` prevents completion when the same-media open obligation's
+latest attempt remains `review_required/m2_strict_completion/incorrect_completion`.
+An actual verified delivery closes its obligation through the existing transaction;
+no new recovery bypass, schema, QC or retry-budget change is introduced.
+
+Server isolated tests: characterization RED; corrected `test_main_queue` and
+`test_scan_state` **212 PASS**, including SQLite reopen, repeated discovery/direct
+completion refusal, original source preservation and existing completion regression.
+This is read-only candidate source mounted in the deployed image, NOT deployment
+or a new production output. Current image/start time unchanged; bounded running
+queue query returned no running items. Exact Gate query still reports TRIPPED and
+one retained member. No latch, live database, source or subtitle was modified.
+
+Evidence under `/logs/m2-mapping-budget-20260908T2117/`:
+`completion-discovery-red-20260909T0819.log`,
+`completion-discovery-regression-20260909T0821.log`,
+`runtime-inspect-20260909T0816.log`, `current-idle-20260909T0816.json`,
+`gate-member-diagnosis-1788938163088163596.json`.
+Initial diagnostic used an unavailable `/app/work` helper path and failed without
+reading state; corrected stdin invocation is the cited idle evidence.
+
+Remaining: identify the original strict failure transaction before controlled
+recovery; production activation of this candidate; real download/extraction formal
+delivery; frozen Gate disposition. Formal additions this increment: **0**. M2 incomplete.
+
 ## Deployed mapping fix; new completion breaker requires recovery
 
 Safe handoff `/logs/m2-mapping-budget-20260908T2117/` exited0; original child79874

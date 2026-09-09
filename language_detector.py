@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 import hashlib
 import json
@@ -259,7 +259,18 @@ class LanguageDetector:
         if not isinstance(item, dict):
             return None
         try:
-            return _result_from_cached_item(item)
+            result = _result_from_cached_item(item)
+            if result.samples:
+                # Keep the source samples/cache intact, but never reuse an old
+                # aggregate that treated different languages as one vote.
+                current = _aggregate_samples(result.samples, self.config)
+                return replace(result, language=current.language,
+                               probability=current.probability,
+                               allowed=current.allowed, confident=current.confident,
+                               reason=current.reason)
+            if result.source == "faster-whisper_multi_sample":
+                return None
+            return result
         except (TypeError, ValueError):
             return None
 
@@ -343,7 +354,11 @@ def _aggregate_samples(samples: list[LanguageDetectionSample], config: AppConfig
     allowed_confident = [sample for sample in confident_samples if sample.language in allowed_languages]
     blocked_confident = [sample for sample in confident_samples if sample.language not in allowed_languages]
     best_allowed = max(allowed_confident, key=lambda sample: sample.probability, default=None)
-    best_blocked = max(blocked_confident, key=lambda sample: sample.probability, default=None)
+    blocked_groups: dict[str, list[LanguageDetectionSample]] = {}
+    for sample in blocked_confident:
+        blocked_groups.setdefault(sample.language, []).append(sample)
+    winning_blocked = max(blocked_groups.values(), key=len, default=[])
+    best_blocked = max(winning_blocked, key=lambda sample: sample.probability, default=None)
     allowed = bool(best_allowed and len(allowed_confident) > len(blocked_confident))
     confident = bool(confident_samples)
 
@@ -351,7 +366,7 @@ def _aggregate_samples(samples: list[LanguageDetectionSample], config: AppConfig
         language = best_allowed.language
         probability = best_allowed.probability
         reason = "allowed_language_detected"
-    elif blocked_confident and len(blocked_confident) > len(allowed_confident):
+    elif winning_blocked and len(winning_blocked) > len(confident_samples) - len(winning_blocked):
         language = best_blocked.language if best_blocked else best.language
         probability = best_blocked.probability if best_blocked else best.probability
         reason = "non_allowed_language_detected"

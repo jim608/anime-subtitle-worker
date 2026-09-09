@@ -1,5 +1,22 @@
 # M2 Production Observation
 
+Latest candidate2026-09-09: actual mixed en/ko/ja samples exposed non-allowed vote
+pooling into a false confident English source despite the retained Japanese decision.
+Candidate narrows source-language consensus, reaggregates saved samples without
+rewriting cache, settles strict rejection after committed QC, and preserves review
+against discovery.276 focused tests plus real disposable-container restart PASS.
+The actual Breaker remains TRIPPED;68holds/Gate212600 retained, no deployment or
+new Gate. The rejected attempt/output is NOT reclassified as successful. Full cause,
+failed tests, restart identity/times and remaining recovery proof are in the latest
+M2_REMAINING_ACCEPTANCE section. Formal additions0; M2 incomplete.
+
+2026-09-09 bounded recheck: deployed image/start time unchanged, breaker TRIPPED,
+Gate212600 retains one member; no runtime deployment or Gate reset this increment.
+Candidate queue protection now reproduces and prevents a discovery call from
+overwriting strict-completion review. Server isolated queue suites212 PASS, including
+reopen/replay. Original strict failure cause is still unproven; no recovery release
+or formal subtitle delivery claimed. See M2_REMAINING_ACCEPTANCE latest section.
+
 ## Latest deployed baseline and subsequent safety stop
 
 Worker bd2689437ea36d3c04f3193538862a931331c7f0 deployed safely; recovery initially
