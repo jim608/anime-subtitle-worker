@@ -2,6 +2,15 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+2026-09-10 deployed db9265201bd6620ece8a72b2f4ea9a75bcfd82ff via safe updater;
+2075Worker/231WebUI/288actual-image tests, true isolated restart and7breakers PASS.
+Controlled recovery ARMED,69holds, original evidence retained; two real automatic
+claims/stages/checkpoints followed by review verified. New runtime Gate173949
+initialized0/20; no acceptance or score transfer. Download3932:3 public historical
+revalidation recorded with source/sidecar snapshot and idempotent replay, normal
+server discovery requested; actual download/extract/formal output still required.
+Formal new AI/download/extraction0/0/0. No runtime redeploy for this documentation.
+
 2026-09-10: exact source-language-vote recovery candidate passes31 server-isolated
 contract/regression tests. Safe deployment, actual-image proof, incident hold and
 real resumed claim remain required. Preflight retains TRIPPED/68holds/originalGate;

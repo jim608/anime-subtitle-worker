@@ -1,5 +1,22 @@
 # M2 Production Observation
 
+## Deployed language-vote recovery — 2026-09-10
+
+Actual Worker db9265201bd6620ece8a72b2f4ea9a75bcfd82ff; WebUI175a02a unchanged.
+Safe deployment and controlled recovery exited0; runtime ARMED verified after
+real automatic claims. New baseline m2-guardrail-v1:6ce026c5d86c4add9dcb7e41,
+Gate m2-gate-20260909T173949128555Z-3714ef2740 starts2026-09-09T17:39:49.128555Z,
+initialized0/20. Old Gate/receipts preserved; no cohort replacement or score transfer.
+This is ACTIVE observation, not M2 acceptance. Fixed first20 eligible new claims,
+including failures/reviews, remain governed by the unchanged strict rules.
+
+69 logical holds (original68 unchanged plus exact source-vote incident); historical
+preservation UNPROVEN. Bounded evidence finds zero held post-Gate claims and69
+publication guard rejections. Two unheld jobs automatically claimed and processed
+real stages/checkpoints, then NEEDS_REVIEW; not deliveries. Formal AI/download/
+extraction additions0/0/0. Download3932:3 has a durable normal-discovery request,
+not yet formal publication proof. [Detailed evidence](M2_REMAINING_ACCEPTANCE_20260908.md).
+
 Latest candidate2026-09-09: actual mixed en/ko/ja samples exposed non-allowed vote
 pooling into a false confident English source despite the retained Japanese decision.
 Candidate narrows source-language consensus, reaggregates saved samples without

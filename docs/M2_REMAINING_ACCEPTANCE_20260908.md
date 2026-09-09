@@ -1,5 +1,65 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-10 — language-vote repair deployed and actual claims restored
+
+Safe deployment `20260909T172917Z-3315754` and its single orchestration exited0.
+Worker runtime **db9265201bd6620ece8a72b2f4ea9a75bcfd82ff**, WebUI unchanged
+**175a02a7bad46e0b6fa2372c59f39e8dd272911e**. Worker image
+`sha256:38818860f472742bb3098227de772b35b3e08e79c586b5080cacc83e6da89a40`;
+source revision `d585e42fe7c518848efd7e5e8d3dbc714940b3e4128179e2f39bfe18bc55a34e`.
+Worker2075/WebUI231 deployment tests PASS; actual-image targeted288 PASS and
+same disposable-container restart/checkpoint/cache/source/idempotency PASS.
+Fresh isolated breaker tests7/7 PASS. These overlapping suites are not summed.
+
+Evidence root `/logs/m2-language-vote-recovery-20260909T1720/`:
+`safe-deploy.log`, `orchestrator.exit`, `actual-runtime-before-recovery.json`,
+`actual-image-proof-1788975490191221381/`, `fresh-fault-suite.log`,
+`recovery-closeout.json`, `claim-evidence-1788976298785046610.json`.
+Backup: `/work/deployment_backups/20260909T172917Z-3315754/`.
+Fresh breaker evidence: `/logs/m2-guardrail-fi-20260909T173941365219Z-b9864f23/`.
+
+Reconciliation `m2-recon-language-vote-20260909T1720` links the sealed snapshot and
+prior mapping-budget receipt. Original68 holds preserved byte-for-byte; one exact
+language-vote incident added, total69. Recoverable identities7011; retained other
+identities7048. Original incident remains review-required; UNPROVEN is unchanged.
+Receipt `/logs/m2-reconciliation-m2-recon-language-vote-20260909T1720.json`,
+SHA256 `bead2b608a2df08917de581de4470676696cd6ddee8fd4da8b582e43b14e5a22`.
+No direct latch/lock/DB edit or source/output replacement occurred.
+
+Controlled recovery returned ARMED and released only its own hold. Runtime-bound
+new Gate `m2-gate-20260909T173949128555Z-3714ef2740`, start
+`2026-09-09T17:39:49.128555Z`, baseline `m2-guardrail-v1:6ce026c5d86c4add9dcb7e41`,
+initialized0/20; previous Gate evidence retained, no score/member transfer.
+The linked receipt records oldGate212600 as INVALIDATED_BY_RUNTIME_CHANGE,
+not passed or silently replaced; its original member evidence remains preserved.
+Later bounded read confirms ACTIVE/ARMED, not a passed Gate.
+
+Real automatic claims: anonymous obligations `aiobl_95393e7c4934a41b...` and
+`aiobl_88aad30f2b2bfa2b...` claimed at1788975593.930399 and1788976038.1793191.
+They entered SUBTITLE_DETECTION/ASR with heartbeat and nonempty digest-valid
+detection checkpoints, then NEEDS_REVIEW. Source stat matches job identity.
+The later claim demonstrates autonomous succession after the first settled;
+neither is a subtitle delivery. All69 publication guards reject held sources;
+held post-Gate claims0. Server scheduling does not depend on Codex staying online.
+
+Download acceptance remains open. Five known old-complete targets were rechecked:
+two ambiguous identity mappings remain review; three unique targets still lack
+valid TC; all five known torrents absent from qB. No new library scan.
+For3932:3, bounded six-source lookup succeeded and found one policy-filtered episode
+candidate. Its public completion-revalidation operation archived old evidence,
+captured current source/sidecar checksums and recorded a normal discovery request.
+Repeating the same request returned already_recorded/queued0. Evidence:
+`download-3932-revalidate-a.log`, `download-3932-3/before-publish.json`,
+`alternate-source-probe-20260909T175412410036Z.json`.
+This is not download claim, extraction or formal publication proof. Earlier probe
+failed before network work due to a diagnostic log-path typo; its failure is retained.
+Subsequent exact-target snapshot `download-3932-3/status-1788976643248779846.json`
+proves normal server pickup: queued2026-09-09T17:55:46.477150Z, project category
+llm-sub/tags mikan,mikansub, torrent b144a06891a0cb5bc00aa00540f4219634d6dcb2
+actively downloading27.9% of333517476bytes. The old extraction-row count is not
+new extraction proof. Formal parse/QC/publication/manifest/idempotency still pending.
+Formal new AI/download/extraction deliveries remain **0/0/0**. M2 incomplete.
+
 ## 2026-09-10 — exact language-vote recovery candidate
 
 The evidence-bound recovery mode now has 31 passing server-isolated tests, including

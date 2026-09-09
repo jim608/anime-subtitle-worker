@@ -1,5 +1,14 @@
 # M2 Circuit Breaker Policy
 
+## Current deployment — 2026-09-10
+
+The language-vote repair below is now deployed as Worker
+db9265201bd6620ece8a72b2f4ea9a75bcfd82ff. Actual-image288 tests, isolated restart
+and fresh7/7 breaker tests passed. Formal reconciliation retained the original68
+holds and added the exact unresolved incident, total69. Runtime ARMED and real
+unheld claims verified; no old receipt amended, historical UNPROVEN retained.
+[Deployment and evidence](M2_REMAINING_ACCEPTANCE_20260908.md).
+
 ## Source-language vote incident recovery (candidate, 2026-09-10)
 
 `source_language_vote_mismatch` is an exact-incident authorized reconciliation

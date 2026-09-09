@@ -1,5 +1,16 @@
 # M2 Circuit Breaker Test Results
 
+## Language-vote repair actual runtime — 2026-09-10
+
+Worker db9265201bd6620ece8a72b2f4ea9a75bcfd82ff deployed via safe updater.
+Actual-image targeted288 PASS plus real isolated container restart/checkpoint/
+idempotency/source preservation PASS. Fresh isolated breakers **7/7 PASS**, with
+Production resources unaffected by fault injection:
+`/logs/m2-guardrail-fi-20260909T173941365219Z-b9864f23/result.json` and `events.jsonl`.
+Full image proof `/logs/m2-language-vote-recovery-20260909T1720/actual-image-proof-1788975490191221381/`.
+Controlled recovery returned ARMED; exact incident remains held and unresolved.
+This does not validate real subtitle delivery or pass the strict20-job Gate.
+
 ## M3 deployed runtime validation (2026-09-08 11:04 UTC)
 
 Worker `5f379e877ce59cb3207927e38aad2f6735b76287`, image
