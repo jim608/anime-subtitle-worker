@@ -1,5 +1,32 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-10 — completed download, reproduced extraction-resume blocker
+
+3932:3 now downloaded100%; actual mapped file size333517476 matches qB and
+ffprobe PASS, with simplified/Japanese and traditional/Japanese ASS streams2/3.
+Current download checksum/stat are retained in
+`/logs/m2-language-vote-recovery-20260909T1720/download-3932-3/file-proof-1788977039097615701.json`.
+This proves current file availability and readable tracks, not subtitle QC/delivery.
+
+The exact existing extraction row is still `replaced`, updated1782961168.3862367,
+failure_reason source_video_missing, bucket mapped_path_missing. It is NOT a prior
+quality/no-subtitle rejection. `_upsert_mikan_extract_jobs` unconditionally skips
+replaced rows, including when their previously missing download is now available.
+Server-isolated regression `test_mikan_mapped_source_recovery.py` reproduces0 queued
+instead of1 after the fixture file appears. Log `mapped-source-recovery-red.log`
+and `.exit`1 in the same evidence root; this is an expected RED, not passing coverage.
+The untracked regression is retained for the next minimal fix; Production code
+has not been changed for this newly diagnosed defect.
+
+The single300-second observer ended normally in
+`download-3932-3/bounded-observation-1788976743694105929/`; do not restart it.
+Next: evidence-preserving, bounded recovery of this specific missing-path failure
+through the existing extraction mechanism; preserve terminal QC/no-subtitle guards,
+leases, prior result and attempt budget, and use the existing completed download.
+No direct DB reset, new torrent, source edit or QC relaxation. Test restart/replay/
+idempotency/refusals before a required safe runtime handoff. Formal0/0/0 remains;
+new Gate173949 is not accepted and is not rebuilt for documentation.
+
 ## 2026-09-10 — language-vote repair deployed and actual claims restored
 
 Safe deployment `20260909T172917Z-3315754` and its single orchestration exited0.
