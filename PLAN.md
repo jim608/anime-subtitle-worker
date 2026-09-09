@@ -2,6 +2,13 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+Current: bd268943... deployed,78actual-image tests+7breakersPASS, controlled recovery
+initiallyARMED; later incorrect_completion TRIPPED and AI admission stopped. NewGate
+212600 has1NEEDS_REVIEW/strict0, oldGate preserved. Next isolate exact intercepted
+completion transaction (attempt7ba2996...) and explain queue done/pipelineQC/open
+obligation mismatch before smallest fix/formal recovery. No direct latch/DB changes.
+Download formal0 remains pending; do not substitute AI output or reset cohort.
+
 New candidate: real Worker thread162 stalls before discovery in Queue x mapping
 realpath checks. Fix per-operation resolved-path reuse and existing deadline
 propagation;40isolated tests PASS including real SQLite/symlink/reopen invariants.

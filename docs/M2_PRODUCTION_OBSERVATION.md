@@ -1,5 +1,19 @@
 # M2 Production Observation
 
+## Latest deployed baseline and subsequent safety stop
+
+Worker bd2689437ea36d3c04f3193538862a931331c7f0 deployed safely; recovery initially
+ARMED with78actual-image tests and7/7isolated breakers PASS. New Gate
+m2-gate-20260908T212600258113Z-81b6d3117d, baseline
+m2-guardrail-v1:e5bb306a6538c2c49e4bc6ee, started2026-09-08T21:26:00.258113Z.
+Old SETTLED failed Gate remains unchanged,68holds/UNPROVEN retained.
+Subsequent incorrect_completion trip at1788903489.718634 stopped AI admission.
+Current snapshot TRIPPED;1Gate member NEEDS_REVIEW/strict0, not GatePASS or SETTLED20.
+The reported strict_failure_count2 counts failed evidence predicates, not tasks.
+Keep breaker and existing Gate; diagnose exact completion transaction before recovery.
+Evidence root /logs/m2-mapping-budget-20260908T2117/; latest M2_REMAINING_ACCEPTANCE
+records precise runtime, receipt and diagnostic filenames. No accepted production claim.
+
 ## Checkpoint aggregate clarification — 2026-09-08 16:17 UTC
 
 Exact20member snapshot gate-member-diagnosis-1788884136367898483.json (under the

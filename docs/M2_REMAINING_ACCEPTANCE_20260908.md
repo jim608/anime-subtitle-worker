@@ -1,5 +1,43 @@
 # M2 remaining acceptance — 2026-09-08
 
+## Deployed mapping fix; new completion breaker requires recovery
+
+Safe handoff `/logs/m2-mapping-budget-20260908T2117/` exited0; original child79874
+ended naturally, safe idle/seal succeeded, deploy.exit0. Actual Worker
+bd2689437ea36d3c04f3193538862a931331c7f0, image
+sha256:6fc360c4d55e5b03a549885206aeb553dc34297c19e3cf4e144539bb4c1027bd,
+container6b0d178da597ac365d9ca63c76d4a93f8dfc59e453c9ccf30a279c3f642dae15,
+started2026-09-08T21:23:39.736693332Z. WebUI175a02a7bad46e0b6fa2372c59f39e8dd272911e.
+Actual-image78tests PASS, fresh7/7breakers PASS, production_resources_affected=false.
+Reconciliation m2-recon-mapping-budget-20260908T2117 retained68holds,0newdifferences,
+6979recoverable and7050retained identities. Receipt sha256
+611063777e5c058e54003766a3a4538f09f79303cb64bf1383504f3d70abbd2e.
+Controlled recovery initially ARMED; new Gate m2-gate-20260908T212600258113Z-81b6d3117d,
+baseline m2-guardrail-v1:e5bb306a6538c2c49e4bc6ee started21:26:00.258113Z at0/20.
+Old failed Gate/receipt preserved; no prior score copied.
+
+Current verification at1788919803 contradicts continued ARMED: breaker TRIPPED
+incorrect_completion, observed1788903489.718634, stage m2_strict_completion.
+strict_failure_count2 means TWO FAILED PREDICATES, not two tasks. AI automatically
+claimed at1788903093.4545546 and stopped further claims after interception.
+New Gate currently has1terminal NEEDS_REVIEW member/strict0; do not complete/reset it.
+Exact attempt aiatt_7ba2996f530badc5ae48a968ed009c86cbfd832189180a3b30f1795798e8209d
+ended review_required; obligation open, pipeline job21ab68ce485f426d8194f6f51ac05ea4
+remains QC with succeeded stage records. Later queue snapshot says done, so legacy
+queue convergence also needs explanation; no verified formal delivery credit.
+
+Evidence: recovery-closeout.json (historical recovery success), ai-successor.json
+(current paused scheduler), download-successor.json (current TRIPPED/68holds),
+gate-member-diagnosis-1788919876587068172.json, completion-trip-1788919954418273076.json,
+completion-context-1788920145877869164.json. Read-only current completion context
+finds the correct job and matching current filesystem fingerprint without error;
+this does not prove the earlier in-transaction completion was correct.
+Next reproduce that completion transaction from isolated evidence, including both
+strict predicates and later queue-done convergence, before any fix/controlled reset.
+Do not bypass breaker or relabel the review. Download request shrank584to400 and
+first-series advanced, evidence of resumed discovery, NOT proof of this target's
+next download claim or formal output. Formal download/extraction0; M2 incomplete.
+
 ## Reproduced enqueue preparation stall; candidate repair
 
 Actual PID50 nonblocking stack `worker-single-stack.log` locates thread162
