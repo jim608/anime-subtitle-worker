@@ -2,6 +2,12 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+2026-09-10: exact source-language-vote recovery candidate passes31 server-isolated
+contract/regression tests. Safe deployment, actual-image proof, incident hold and
+real resumed claim remain required. Preflight retains TRIPPED/68holds/originalGate;
+zero running Queue rows does not override four running attempt records or the
+official idle check. See the latest M2 acceptance section. Formal additions0/0/0.
+
 Latest candidate2026-09-09: reproduced mixed-language vote pooling (en+ko wrongly
 became confident en under a Japanese source decision), and post-QC rejection failing
 to settle Pipeline. Minimal language/cache/review fixes verified276tests and an

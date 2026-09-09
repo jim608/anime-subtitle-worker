@@ -1372,12 +1372,18 @@ def prepare_runtime_change(
             "receipt_sha256": "sha256:" + sha256_file(path), "claims_paused": True}
 
 
+_RECONCILIATION_INCIDENT_KINDS = frozenset({
+    'asr_postprocess_diagnostics_loss', 'line_repair_evidence_incomplete',
+    'source_language_vote_mismatch',
+})
+
+
 def _reconciliation_signature(root_cause: Mapping[str, Any]) -> tuple[str, str, str]:
     kind = root_cause.get('incident_kind')
     if kind is None:
         return ('runtime_change', 'runtime_validation', 'live_worker_container_identity_mismatch')
     if (root_cause.get('mode') == 'authorized_reconciliation'
-        and kind in {'asr_postprocess_diagnostics_loss', 'line_repair_evidence_incomplete'}):
+        and kind in _RECONCILIATION_INCIDENT_KINDS):
         return ('incorrect_completion', 'm2_strict_completion', 'incorrect_completion')
     raise RuntimeContractError('unsupported_reconciliation_incident')
 
@@ -1396,7 +1402,9 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
         raise RuntimeContractError('postprocess_recovery_proof_invalid')
     report = _read_json(path)
     line_repair = root_cause.get('incident_kind') == 'line_repair_evidence_incomplete'
-    contract = 'm2-line-repair-regression-v1' if line_repair else 'm2-asr-postprocess-regression-v1'
+    language_vote = root_cause.get('incident_kind') == 'source_language_vote_mismatch'
+    contract = ('m2-language-vote-regression-v1' if language_vote else
+                'm2-line-repair-regression-v1' if line_repair else 'm2-asr-postprocess-regression-v1')
     if (not isinstance(report, Mapping)
         or report.get('contract') != contract
         or report.get('status') != 'PASS'
@@ -1413,6 +1421,12 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
         'unchanged_strict_validator', 'original_incident_preserved',
     )):
         raise RuntimeContractError('line_repair_recovery_regression_unproven')
+    if language_vote and any(report.get(key) is not True for key in (
+        'source_vote_reproduced', 'old_cache_reaggregated',
+        'decision_artifact_mismatch_preserved', 'review_settlement_order_verified',
+        'unchanged_strict_validator', 'original_incident_preserved',
+    )):
+        raise RuntimeContractError('language_vote_recovery_regression_unproven')
     logs = report.get('logs')
     if not isinstance(logs, list) or len(logs) != 2:
         raise RuntimeContractError('postprocess_recovery_logs_missing')
@@ -1422,7 +1436,9 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
             or 'sha256:' + sha256_file(log) != item.get('sha256')):
             raise RuntimeContractError('postprocess_recovery_logs_invalid')
     code = report.get('code_sha256')
-    names = (('main.py', 'retranslate_ai_lines.py', 'm2_strict_runtime_evidence.py', 'm2_guardrail_runtime.py')
+    names = (('main.py', 'language_detector.py', 'scan_state.py',
+              'm2_strict_runtime_evidence.py', 'm2_guardrail_runtime.py') if language_vote else
+             ('main.py', 'retranslate_ai_lines.py', 'm2_strict_runtime_evidence.py', 'm2_guardrail_runtime.py')
              if line_repair else ('worker.py', 'asr_postprocess.py', 'm2_guardrail_runtime.py'))
     if not isinstance(code, Mapping) or any(
         code.get(name) != sha256_file(Path(__file__).parent / name)
@@ -1542,9 +1558,10 @@ def _planned_change_incident(
             raise RuntimeContractError('reconciliation_frozen_policy_changed')
         if breaker != request.get('breaker'):
             raise RuntimeContractError('reconciliation_breaker_evidence_changed')
-        if root_cause.get('incident_kind') in {'asr_postprocess_diagnostics_loss', 'line_repair_evidence_incomplete'}:
+        if root_cause.get('incident_kind') in _RECONCILIATION_INCIDENT_KINDS:
             _validate_postprocess_recovery_proof(config, evidence, root_cause)
-            incident_key = ('line_repair_incident' if root_cause.get('incident_kind') == 'line_repair_evidence_incomplete'
+            incident_key = ('language_vote_incident' if root_cause.get('incident_kind') == 'source_language_vote_mismatch' else
+                            'line_repair_incident' if root_cause.get('incident_kind') == 'line_repair_evidence_incomplete'
                             else 'asr_postprocess_incident')
             incident = request.get(incident_key)
             if not isinstance(incident, Mapping) or incident != root_cause.get('incident'):
@@ -2203,7 +2220,7 @@ def _prepare_pending_recovery_resume(
     if planned_mode:
         if (expected_reason, affected_stage, failure_code) != _reconciliation_signature(root_cause):
             raise RuntimeContractError('planned_change_signature_invalid')
-        if root_cause.get('incident_kind') in {'asr_postprocess_diagnostics_loss', 'line_repair_evidence_incomplete'}:
+        if root_cause.get('incident_kind') in _RECONCILIATION_INCIDENT_KINDS:
             _validate_postprocess_recovery_proof(config, evidence, root_cause)
         receipt = _planned_change_receipt(config, root_cause)
         followup = root_cause.get("expected_deployment_handoff")
@@ -2509,9 +2526,10 @@ def recover_runtime_local(
     if planned_mode:
         if (expected_reason, affected_stage, failure_code) != _reconciliation_signature(root_cause):
             raise RuntimeContractError("planned_change_signature_invalid")
-        if root_cause.get('incident_kind') in {'asr_postprocess_diagnostics_loss', 'line_repair_evidence_incomplete'}:
+        if root_cause.get('incident_kind') in _RECONCILIATION_INCIDENT_KINDS:
             _validate_postprocess_recovery_proof(config, evidence, root_cause)
-        category = ("LINE_REPAIR_EVIDENCE_REPAIR" if root_cause.get('incident_kind') == 'line_repair_evidence_incomplete'
+        category = ("SOURCE_LANGUAGE_VOTE_REPAIR" if root_cause.get('incident_kind') == 'source_language_vote_mismatch' else
+                    "LINE_REPAIR_EVIDENCE_REPAIR" if root_cause.get('incident_kind') == 'line_repair_evidence_incomplete'
                     else "ASR_POSTPROCESS_EVIDENCE_REPAIR" if root_cause.get('incident_kind') else "PLANNED_RUNTIME_CHANGE")
     elif collision_mode:
         if affected_stage != "worker" or failure_code != "worker_unknown":

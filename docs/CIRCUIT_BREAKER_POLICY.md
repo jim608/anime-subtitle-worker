@@ -1,5 +1,25 @@
 # M2 Circuit Breaker Policy
 
+## Source-language vote incident recovery (candidate, 2026-09-10)
+
+`source_language_vote_mismatch` is an exact-incident authorized reconciliation
+mode, not a generic breaker reset. It requires a matching retained strict-completion
+attempt, original Gate/claim binding and trip, a durable source hold, classified
+Queue differences, and the existing controlled recovery checks. The incident stays
+review-required and cannot be relabelled, republished or counted as a delivery.
+
+The `m2-language-vote-regression-v1` proof binds the deployed image/source revision,
+five relevant code hashes and two hashed server logs. It must prove cache sample
+reaggregation, review convergence, unchanged strict validation, incident preservation,
+and actual isolated-container restart/checkpoint/idempotency behavior. Missing proof,
+unrelated trips, changed evidence or unheld incident refuse recovery. Original
+receipts/Gates and historical preservation UNPROVEN remain unchanged.
+
+Candidate boundary tests: 31 PASS in
+`/logs/m2-language-vote-recovery-20260909T1720/candidate-recovery-20260910-a.log`.
+These are isolated contract tests, not deployed-image or Production recovery proof.
+Deployment and fresh actual-image evidence remain required.
+
 ## Current deployment boundary (2026-09-08 06:33 UTC)
 
 The previously tested final-ASR evidence repair is deployed in Worker

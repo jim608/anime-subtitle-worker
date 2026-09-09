@@ -1,5 +1,26 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-10 — exact language-vote recovery candidate
+
+The evidence-bound recovery mode now has 31 passing server-isolated tests, including
+safe-source resumption while the incident remains held. Previous postprocess and
+line-repair modes and authorized reconciliation regressions are included; counts
+overlap prior suites and are not summed. Evidence:
+`/logs/m2-language-vote-recovery-20260909T1720/candidate-recovery-20260910-a.log`
+and `.exit` (0).
+
+Read-only preflight `preflight-1788974796368163081.json` in that directory confirms
+TRIPPED, 68 holds, the original Gate claim binding and no running Queue rows.
+The runtime probe also reports four running attempt records; this is not an idle
+attestation. The official idle/heartbeat/child checks must pass before deployment.
+Runtime remains bd2689437ea36d3c04f3193538862a931331c7f0; candidate parent
+ebb79964aa2c9272ea95d2cc4a773ebdd63a0036 is pushed but not deployed.
+
+Next: seal an owned current-state reconciliation snapshot, use safe-update-stack,
+verify actual-image tests/restart and fresh 7/7 breakers, retain the exact incident
+as a hold, then controlled recovery and real automatic claim. No direct DB/latch
+change. Formal AI/download/extraction additions remain 0/0/0; M2 incomplete.
+
 ## 2026-09-09 — mixed-language source vote and review convergence
 
 The intercepted attempt's retained decision selects stream1, metadata Japanese,
