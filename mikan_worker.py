@@ -6862,7 +6862,8 @@ def _sync_mikan_state_db(pending_path: Path, pending: dict[str, Any]) -> None:
         conn.execute(
             """
             DELETE FROM mikan_download_events
-            WHERE id NOT IN (
+            WHERE event != 'mapped_source_available_recovery'
+            AND id NOT IN (
                 SELECT id FROM mikan_download_events
                 ORDER BY id DESC
                 LIMIT 5000
@@ -7011,6 +7012,105 @@ def _mikan_non_requeueable_extract_job_keys(config: AppConfig) -> set[str]:
             conn.close()
 
 
+def _recover_reviewed_mapped_source(
+    config: AppConfig, conn: sqlite3.Connection, torrent: QBitTorrent,
+    entries: list[dict[str, Any]], now: float,
+) -> bool:
+    """One evidence-preserving retry of a reviewed, formerly missing download.
+
+    Availability is not quality approval. The ordinary extraction/matching/QC/
+    publication path still decides whether anything may be published.
+    """
+    from m2_production_recovery import RecoveryError, require_source_not_held
+    from subtitle_paths import has_ai_finished_subtitle, has_finished_subtitle
+
+    job_key = _mikan_extract_job_key(torrent)
+    event_key = 'mapped-source-available:' + job_key
+    cursor = conn.execute('SELECT * FROM mikan_extract_jobs WHERE job_key=?', (job_key,))
+    raw = cursor.fetchone()
+    if raw is None:
+        return False
+    original = dict(zip((c[0] for c in cursor.description), raw))
+    failure = _json_object(original.get('result_json'))
+    try:
+        lease_until = float(original.get('lease_until') or 0)
+        finished_at = float(original.get('finished_at') or 0)
+        extracted_count = int(failure.get('extracted_count') or 0)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if (original['status'] != 'replaced' or original.get('worker_id')
+        or lease_until > now
+        or failure.get('failure_reason') not in {'source_video_missing', 'content_path_unmapped'}
+        or failure.get('failure_bucket') not in {None, 'mapped_path_missing'}
+        or extracted_count != 0
+        or failure.get('subtitle_diagnostics')
+        or now - finished_at < _mikan_extract_failed_retry_seconds(config)
+        or not _is_completed(torrent) or not re.fullmatch(r'[0-9a-f]{40}', torrent.hash)
+        or original.get('torrent_hash') != torrent.hash
+        or torrent.category != config.qbit_category
+        or _missing_torrent_tags(torrent, config.qbit_tags)
+        or not entries
+        or conn.execute('SELECT 1 FROM mikan_download_events WHERE event_key=? LIMIT 1', (event_key,)).fetchone()):
+        return False
+    try:
+        mapped = map_remote_path(torrent.content_path, config.qbit_path_mappings)
+        if mapped is None or not mapped.is_file() or mapped.suffix.casefold() not in config.video_extensions:
+            return False
+        download = mapped.resolve()
+        # Do not interpret an unmapped absolute path or a symlink escape as recovery.
+        if not any(download.is_relative_to(Path(m['local']).resolve())
+                   for m in config.qbit_path_mappings):
+            return False
+        identities = []
+        for entry in entries:
+            review = entry.get('completion_revalidation')
+            if (not isinstance(review, dict) or not review.get('authorization_ref')
+                or not review.get('recorded_at') or review.get('blocked_reason')
+                or not re.fullmatch(r'[0-9a-f]{64}', str(review.get('request_id') or ''))):
+                return False
+            identity = review['source_identity']
+            source = Path(identity['canonical_path'])
+            require_source_not_held(config, source)
+            before = source.stat()
+            if (not source.is_file() or str(source.resolve()) != identity['canonical_path']
+                or before.st_size != identity['size'] or before.st_mtime_ns != identity['mtime_ns']):
+                return False
+            source_digest = sha256_file(source)
+            after_source = source.stat()
+            if (source_digest != identity['sha256']
+                or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                   != (after_source.st_dev, after_source.st_ino, after_source.st_size, after_source.st_mtime_ns)
+                or has_ai_finished_subtitle(source, config) or has_finished_subtitle(source, config)):
+                return False
+            identities.append({'request_id': review['request_id'], 'source_identity': identity})
+        before = download.stat()
+        digest = sha256_file(download)
+        after = download.stat()
+        if before.st_size <= 0 or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+            return False
+    except (OSError, ValueError, KeyError, TypeError, RecoveryError):
+        return False
+    if not conn.in_transaction:
+        conn.execute('BEGIN IMMEDIATE')
+    cursor = conn.execute('SELECT * FROM mikan_extract_jobs WHERE job_key=?', (job_key,))
+    current = cursor.fetchone()
+    if (current is None or dict(zip((c[0] for c in cursor.description), current)) != original
+        or conn.execute('SELECT 1 FROM mikan_download_events WHERE event_key=? LIMIT 1', (event_key,)).fetchone()):
+        return False
+    payload = {'reason_code': 'reviewed_mapped_source_now_available', 'previous_extract_job': original,
+        'verified_targets': identities, 'download_identity': {'path': str(download), 'size': after.st_size,
+            'mtime_ns': after.st_mtime_ns, 'sha256': digest},
+        'historical_continuity': 'UNKNOWN', 'automatic_recovery_budget': 1}
+    conn.execute("INSERT INTO mikan_download_events(key,bangumi_id,episode,event,detail,detail_json,event_key,last_seen_at,created_at) "
+        "VALUES (?,?,?,'mapped_source_available_recovery',?,?,?,?,?)",
+        (job_key, entries[0].get('bangumi_id'), entries[0].get('episode'),
+         'Retained old missing-path failure; one reviewed extraction retry, no quality approval',
+         json.dumps(payload, ensure_ascii=False, sort_keys=True), event_key, now, now))
+    conn.execute("UPDATE mikan_extract_jobs SET status='queued',updated_at=? WHERE job_key=?", (now, job_key))
+    return True
+
+
 def _upsert_mikan_extract_jobs(
     config: AppConfig,
     rows: list[tuple[QBitTorrent, list[dict[str, Any]], int, bool]],
@@ -7036,7 +7136,14 @@ def _upsert_mikan_extract_jobs(
             # causing deterministic no-subtitle releases to be read from disk
             # again every few seconds.
             if existing_status in {"replaced", "terminal_failed"}:
-                continue
+                if not _recover_reviewed_mapped_source(config, conn, torrent, pending_entries, now):
+                    continue
+                queued += 1
+                existing = conn.execute(
+                    "SELECT status, lease_until, finished_at, result_json, attempts FROM mikan_extract_jobs WHERE job_key=?",
+                    (job_key,),
+                ).fetchone()
+                existing_status = str(existing[0])
             if existing_status == "failed" and not _failed_mikan_extract_job_should_requeue(
                 existing,
                 now,
@@ -9196,6 +9303,10 @@ def _compact_legacy_mikan_events(conn: sqlite3.Connection) -> None:
     ).fetchall()
     recent_by_key: dict[str, tuple[int, float, int]] = {}
     for event_id, item_key, event, detail, detail_json, occurrence_count, last_seen_at, created_at in rows:
+        # This is an immutable recovery receipt and a lifetime retry-budget token,
+        # not a transient UI event. Preserve its original bytes and stable key.
+        if event == 'mapped_source_available_recovery':
+            continue
         compact_detail = _compact_mikan_event_detail(str(detail or ""))
         payload = _json_object(detail_json)
         if not payload:
