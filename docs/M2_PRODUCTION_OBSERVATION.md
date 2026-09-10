@@ -1,5 +1,27 @@
 # M2 Production Observation
 
+## 2026-09-10 06:18 UTC — existing Gate settled, not accepted
+
+Gate `m2-gate-20260909T173949128555Z-3714ef2740` automatically SETTLED20/20 at
+2026-09-10T01:48:11.533021Z: needs_review20, strict_verified0, safety_gate FAIL.
+Its summary reports checkpoint_loss20, requiring underlying evidence review before
+claiming physical loss; duplicate job/publish, false completion and breaker trips0.
+No cohort replacement, re-creation or evidence transfer. Runtime remains ARMED on
+db926520,69holds; repairadb615962beb25b1d3be12896d3ab5ea128fda9e pushed only.
+Verified journal/emitted summary SHA256
+`543006adfa109687bd94ee06719bda4ac55cfc94eed38085cc40c840f1b77d00`;
+evidence `/logs/m2-language-vote-recovery-20260909T1720/mapped-gate-closeout.json`.
+M2 incomplete; formal download/extraction acceptance still outstanding.
+
+## 2026-09-10 — candidate validation only
+
+Read-only evidence `preflight-1789020684069238046.json` under
+`/logs/m2-language-vote-recovery-20260909T1720/` confirms ARMED/runtime_baseline_match,
+same db926520 runtime and69 holds. One Queue job is running; no forced idle,
+deployment, Gate recreation or cohort substitution. Arming snapshot0/20 is not
+current cohort progress. The mapped-source recovery candidate remains undeployed;
+formal download/extraction acceptance and frozen Gate disposition are still open.
+
 ## Deployed language-vote recovery — 2026-09-10
 
 Actual Worker db9265201bd6620ece8a72b2f4ea9a75bcfd82ff; WebUI175a02a unchanged.

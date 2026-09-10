@@ -1,5 +1,55 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-10 06:18 UTC — candidate pushed, restart proven, Gate settled FAIL
+
+Pushed repair `adb615962beb25b1d3be12896d3ab5ea128fda9e`; not deployed.
+Server243 targeted tests PASS plus real isolated container restart PASS under
+`/logs/m2-language-vote-recovery-20260909T1720/mapped-restart-YjKVcY/`.
+Container729e9a2a... mounted only a read-only Python copy and writable fixture,
+network none; exit0. Durable job/receipt/source/download hashes survived restart;
+exactly1 subsequent claim,0 duplicate claims, second recovery refused, no formal
+output. This is recovery-lifecycle evidence, not actual subtitle extraction/QC.
+
+Readiness report `mapped-readiness-1789021030383677691.json` confirms ARMED/69holds
+and official `planned_change_work_not_idle`; no pause/deploy/forced termination.
+Current Gate173949 has already SETTLED20/20, all20 NEEDS_REVIEW, strict0,
+safety_gate FAIL. Summary also records checkpoint_loss_count20; this is the
+summary's classification, not independently established physical checkpoint loss.
+Do not replace cohort members or call this acceptance. Gate remains preserved.
+`mapped-gate-closeout.json` verifies the existing emitted file against its journal:
+SHA256 `543006adfa109687bd94ee06719bda4ac55cfc94eed38085cc40c840f1b77d00`.
+The first diagnostic used its basename without the configured output directory
+and failed read-only; corrected closeout-b exit0, both logs retained.
+
+Next: use the existing SETTLED-Gate-preserving planned handoff, safe owned drain,
+deploy pushed repair, verify actual image and controlled recovery; reuse3932:3
+completed download for formal extraction/publish/manifest/checksum/dedup proof.
+No existing failed receipt or UNPROVEN claim may be upgraded. Formal additions0/0/0.
+
+## 2026-09-10 — mapped-source recovery candidate, not deployed
+
+The missing-path recovery candidate retains the old extraction row in the existing
+transactional event store, preserves attempts/leases, verifies reviewed target and
+download identities, and permits only one recovery through ordinary extraction/QC.
+Server isolated candidate regression `mapped-source-server-regression-a.log` ran
+241 tests, exit0. This is not deployment or formal subtitle publication proof.
+
+Additional regression reproduced two durability defects in that candidate: normal
+5000-event retention removed its receipt/budget token, and legacy compaction changed
+the stable key. Recovery receipts are now excluded from those maintenance actions;
+17 local tests PASS including retention, migration, transaction interruption and
+duplicate ingress. Updated server regression-b completed243 tests in30.470s, exit0.
+Full logs remain in `/logs/m2-language-vote-recovery-20260909T1720/`.
+
+Fresh read-only `preflight-1789020684069238046.json` confirms ARMED with runtime
+baseline match, existing db926520 Worker/175a02a WebUI, same container and69 holds.
+One Queue job remains running; five running attempt records require the official
+idle checks, not forced cleanup. No deployment or Gate recreation occurred.
+The runtime arming snapshot's0/20 is not a fresh cohort-progress measurement.
+Next: finish server/restart proof, review and push candidate, then safe idle handoff
+and reuse the existing3932:3 download for genuine formal QC/publication acceptance.
+Formal AI/download/extraction additions remain0/0/0; M2 incomplete.
+
 ## 2026-09-10 — completed download, reproduced extraction-resume blocker
 
 3932:3 now downloaded100%; actual mapped file size333517476 matches qB and

@@ -2,6 +2,20 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+2026-09-10 06:18UTC: repairadb615962beb25b1d3be12896d3ab5ea128fda9e pushed,
+243server tests and genuine isolated-container restart PASS; not deployed.
+Official idle check still refuses planned_change_work_not_idle. Gate173949 is now
+SETTLED20/20,20review/0strict/safetyFAIL; original journal+emitted hash verified.
+Next owned safe drain/SETTLED-preserving handoff and real3932:3 formal publication.
+No forced task termination, no hold removal or Gate replacement; M2 incomplete.
+
+Latest2026-09-10: mapped-source recovery candidate is uncommitted/undeployed.
+Server isolated241 PASS; additional receipt retention/compaction regressions
+reproduced defects, now fixed with17 local PASS and server regression-b243 PASS,
+exit0. Fresh preflight1789020684069238046: ARMED,69holds, same runtime,
+one running Queue job. Preserve execution; safe idle deployment and genuine formal
+download/extraction output proof remain required. M2 incomplete, additions0/0/0.
+
 2026-09-10 deployed db9265201bd6620ece8a72b2f4ea9a75bcfd82ff via safe updater;
 2075Worker/231WebUI/288actual-image tests, true isolated restart and7breakers PASS.
 Controlled recovery ARMED,69holds, original evidence retained; two real automatic
