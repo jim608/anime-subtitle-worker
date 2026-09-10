@@ -1,5 +1,14 @@
 # M2 Production Observation
 
+## 2026-09-10 11:15 UTC — retained-file deletion attribution
+
+Exact qB logs prove3932:3 completed download was automatically deleted at the
+120-minute seeding limit, before the new runtime. This is a download-retention
+failure, not a Production source mutation or formal subtitle delivery.
+Evidence `download-removal-1789038824096557421.json` under the mapped-source
+deployment log root. Runtime dbb6b8b/ARMED/69holds and Gate110900 ACTIVE0/20
+remain unchanged; no configuration changes or new Gate in this read-only diagnosis.
+
 ## 2026-09-10 11:11 UTC — safe runtime handoff complete
 
 Actual Worker dbb6b8b3cc188c6521ae0e31d22adf7c37349106 / image931e0b6433dd...,

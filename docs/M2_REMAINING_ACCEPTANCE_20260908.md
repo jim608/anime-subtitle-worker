@@ -1,5 +1,36 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-10 11:15 UTC — exact download deletion root cause proven
+
+`download-removal-1789038824096557421.json` in the mapped-source deployment evidence
+root contains six exact qB log entries. qB completed3932:3 at1788976773, then at
+1788983976 explicitly logged reaching the seeding-time limit, removing the torrent
+AND deleting its content. Effective global preferences: seeding-time enabled120min,
+max_ratio_act3. qB v5.2.3 / WebAPI2.15.1 (`qb-version-a.log`). This explains the
+lost333MB download; later Worker did-not-start is secondary, not evidence of bad
+Production media or extraction deleting files. No Codex delete/re-add occurred.
+
+The project does not yet protect unconsumed downloads from qB's expiry action.
+Before starting another canary, add/test the smallest project-scoped retention
+boundary, preserving unrelated torrents/global preferences and existing resource
+limits. Prefer an action that stops seeding without deleting unconsumed content;
+release only after a durable verified extraction/publication checkpoint. Do not
+assume generic HTTP success proves retention or restore destructive global policy
+before durable consumption. Existing API/source references:
+https://github.com/qbittorrent/qBittorrent/wiki/WebUI-API-(qBittorrent-5.0)#set-torrent-share-limit
+https://raw.githubusercontent.com/qbittorrent/qBittorrent/release-5.2.3/src/webui/api/torrentscontroller.cpp
+The latter accepts per-torrent shareLimitAction on add and requires it on
+setShareLimits; exact enum/capability and live isolated verification remain needed.
+No retention configuration/code has been changed in this diagnostic step.
+
+Known alternative3085:13 bounded lookup: six sources successful,41 releases,
+8 episode candidates, selected0 while old completion remains protected. Log
+`source-3085-a.log`, detailed result `/logs/m2-resumed-acceptance-20260908/20260910T111344629354Z-3085-13.json`.
+Prepared ignored helper `work/m2_download_3085_revalidate.py` has NOT executed:
+use only after retention is safe, through the existing identity/QC-protected API.
+Current runtime dbb6b8b/ARMED/69holds, current Gate110900 ACTIVE0/20, unchanged.
+Formal0/0/0; M2 incomplete, no new deployment or full media scan this step.
+
 ## 2026-09-10 11:11 UTC — repair deployed, controlled recovery complete
 
 Single coordinator61966 and safe deployment20260910T110246Z-62313 completed exit0.

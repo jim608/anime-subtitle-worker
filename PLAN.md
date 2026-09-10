@@ -2,6 +2,13 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+Latest11:15UTC: root cause of vanished3932:3 now PROVEN by qB logs: global
+120min seeding limit automatically removed torrent AND content. Before a new
+canary, minimally protect project unconsumed downloads without altering other
+torrents/global policy; verify durable consumption before releasing protection.
+3085:13 known alternative has8 episode candidates; public revalidation helper
+prepared but NOT executed. Runtime/Gate unchanged, formal0, M2 incomplete.
+
 Latest2026-09-10 11:11UTC: safe deployment20260910T110246Z-62313 and controlled
 recovery EXIT0. ActualWorkerdbb6b8b3cc188c6521ae0e31d22adf7c37349106, ARMED69holds;
 actual-image243/restart/fresh7FI PASS. Old SETTLED GateFAIL retained; new Gate110900
