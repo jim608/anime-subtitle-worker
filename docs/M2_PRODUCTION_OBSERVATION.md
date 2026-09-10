@@ -1,5 +1,13 @@
 # M2 Production Observation
 
+## 2026-09-11 — undeployed retention candidate only
+
+Readiness1789056428019354701 confirms ARMED/69holds and current Gate110900 ACTIVE;
+the then-idle observation is not authorization to skip later safe-deploy checks.
+Content-retention code remains undeployed. Server targeted29 PASS after two prior
+mock-contract expectations were updated; real isolated qB expiry/restart and formal
+publication still unverified. No new Gate, source changes or delivered subtitles.
+
 ## 2026-09-10 11:15 UTC — retained-file deletion attribution
 
 Exact qB logs prove3932:3 completed download was automatically deleted at the
@@ -1395,3 +1403,19 @@ matches journalSHA2687618aba2cd19f102582ec507cf7f7b8c3ac859619cec3892cdab26d56c8
 Evidence /logs/m2-resumed-acceptance-20260908/gate-summary-resolved.json.
 Runtime738e96e/ARMED; no deployment or admission override. Prior M3 AI delivery
 does not replace any failed frozen member. No waiting for20 was performed.
+# 2026-09-11 retention verification update
+
+Same runtime dbb6b8b3cc188c6521ae0e31d22adf7c37349106 and Gate
+m2-gate-20260910T110900397224Z-879e931859: bounded report
+mapped-readiness-1789080213033486243.json shows ARMED,69holds,20 frozen members,
+19 terminal,2 strict-verified, no emitted summary. No Gate recreation or acceptance.
+Official idle check refuses active work; a future deployment must use owned drain.
+
+Scoped qB retention candidate:29 final targeted tests plus actual isolated qB
+threshold expiry and same-container restart PASS. Full evidence under
+logs/m2-mapped-source-deploy-20260910T0625/real-qb-retention-libcy3/.
+Natural elapsed-time fixture failed, and initial premature restart check failed;
+both remain preserved. Final threshold-restart-b.exit0 verifies Stop persistence,
+protected hash/mtime and idempotent readback. Only disposable control.bin deleted
+by the fixture qB expiry engine; Production resources unaffected. Repair not yet
+deployed. No new formal AI/download/extraction output; M2 remains incomplete.

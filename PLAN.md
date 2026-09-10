@@ -2,6 +2,20 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+2026-09-11 follow-up: real isolated qB threshold expiry and actual same-container
+restart now PASS (threshold-restart-b.exit0); natural elapsed-time expiry fixture
+failed and is retained, not relabelled. Candidate scoped Stop protection ready for
+commit/safe deployment. Currentdbb6b8b ARMED69holds, Gate110900 frozen20/terminal19/
+strict2, not accepted; active work prevents immediate deployment. Use owned drain,
+preserve original evidence, then formal3085:13 download/extraction verification.
+No Production file/preferences change, no new formal subtitles, M2 incomplete.
+
+2026-09-11: scoped content-retention candidate implemented (qB Stop at existing
+limits, exact ownership/readback before extraction); uncommitted and undeployed.
+Server final targeted29 PASS; prior266 had2 old mock-signature expectations, now
+updated. Need genuine isolated qB expiry/restart proof, safe deployment and formal
+3085:13 output. Runtime/Gate unchanged, no new formal delivery; M2 incomplete.
+
 Latest11:15UTC: root cause of vanished3932:3 now PROVEN by qB logs: global
 120min seeding limit automatically removed torrent AND content. Before a new
 canary, minimally protect project unconsumed downloads without altering other

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import math
+import re
 from pathlib import Path
 import time
 from typing import Any
@@ -47,6 +49,7 @@ class QBitClient:
         self.password = password
         self.timeout_seconds = timeout_seconds
         self.session = requests.Session()
+        self._content_retention_supported = False
 
     def login(self) -> None:
         response = self._post_with_retry(
@@ -65,6 +68,7 @@ class QBitClient:
         category: str | None,
         tags: list[str],
         paused: bool,
+        preserve_content: bool = False,
     ) -> None:
         data: dict[str, Any] = {
             "urls": url,
@@ -77,9 +81,76 @@ class QBitClient:
         if tags:
             data["tags"] = ",".join(tags)
 
+        if preserve_content:
+            if not category or not tags:
+                raise QBitError('content_retention_project_scope_missing')
+            self._require_content_retention_support()
+            # Keep the user's time/ratio limits, but retain the file at expiry.
+            # This survives qB restart and does not enable unlimited seeding.
+            data['shareLimitAction'] = 'Stop'
+
         response = self._post_with_retry(f"{self.base_url}/api/v2/torrents/add", data=data)
         if not _add_torrent_response_accepted(response):
             raise QBitError(f"qBittorrent add torrent failed: status={response.status_code} body={response.text[:200]!r}")
+
+    def _require_content_retention_support(self) -> None:
+        if self._content_retention_supported:
+            return
+        response = self._get_with_retry(f'{self.base_url}/api/v2/app/webapiVersion')
+        version = response.text.strip()
+        if response.status_code != 200 or not re.fullmatch(r'\d+\.\d+\.\d+', version):
+            raise QBitError('content_retention_api_version_unverified')
+        if tuple(map(int, version.split('.'))) < (2, 12, 0):
+            raise QBitError('content_retention_api_unsupported')
+        self._content_retention_supported = True
+
+    def ensure_content_retained(self, torrent_hash: str, *, category: str, tags: list[str]) -> dict[str, Any]:
+        """Verify one owned torrent's non-destructive expiry, preserving thresholds.
+
+        Never changes global preferences, starts a torrent or deletes content.
+        HTTP acceptance alone is not verification: read back the effective action.
+        """
+        if not re.fullmatch(r'[0-9a-fA-F]{40}', torrent_hash) or not category or not tags:
+            raise QBitError('content_retention_project_scope_invalid')
+        torrent_hash = torrent_hash.lower()
+        self._require_content_retention_support()
+
+        def snapshot() -> dict[str, Any]:
+            response = self._get_with_retry(f'{self.base_url}/api/v2/torrents/info', params={'hashes':torrent_hash})
+            if response.status_code != 200:
+                raise QBitError('content_retention_lookup_failed')
+            try:
+                rows = response.json()
+            except ValueError as exc:
+                raise QBitError('content_retention_response_invalid') from exc
+            if not isinstance(rows, list) or len(rows) != 1:
+                raise QBitError('content_retention_torrent_missing_or_ambiguous')
+            row = rows[0]
+            if (not isinstance(row, dict) or row.get('hash') != torrent_hash or row.get('category') != category
+                or not set(tags).issubset({s.strip() for s in str(row.get('tags') or '').split(',')})):
+                raise QBitError('content_retention_project_scope_mismatch')
+            return row
+
+        before = snapshot()
+        keys = ('ratio_limit', 'seeding_time_limit', 'inactive_seeding_time_limit')
+        if before.get('share_limit_action') == 'Stop':
+            return {'status':'VERIFIED', 'changed':False, 'hash':torrent_hash, 'action':'Stop'}
+        if before.get('share_limit_action') not in {'Default','Remove','RemoveWithContent','EnableSuperSeeding'}:
+            raise QBitError('content_retention_action_unverified')
+        if any(type(before.get(k)) not in (int, float) or not math.isfinite(before[k]) or before[k] < -2 for k in keys):
+            raise QBitError('content_retention_thresholds_unverified')
+        if any(type(before[k]) is not int for k in keys[1:]):
+            raise QBitError('content_retention_thresholds_unverified')
+        data = {'hashes':torrent_hash, 'ratioLimit':before[keys[0]],
+            'seedingTimeLimit':before[keys[1]], 'inactiveSeedingTimeLimit':before[keys[2]], 'shareLimitAction':'Stop'}
+        response = self._post_with_retry(f'{self.base_url}/api/v2/torrents/setShareLimits', data=data)
+        if response.status_code != 200:
+            raise QBitError('content_retention_write_failed')
+        after = snapshot()
+        if after.get('share_limit_action') != 'Stop' or any(after.get(k) != before[k] for k in keys):
+            raise QBitError('content_retention_readback_mismatch')
+        return {'status':'VERIFIED', 'changed':True, 'hash':torrent_hash, 'action':'Stop',
+                'previous_action':before['share_limit_action'], 'thresholds':{k:after[k] for k in keys}}
 
     def _post_with_retry(self, url: str, *, data: dict[str, Any], attempts: int = 3) -> requests.Response:
         last_error: requests.RequestException | None = None

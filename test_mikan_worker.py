@@ -3270,6 +3270,7 @@ class MikanWorkerPendingTest(unittest.TestCase):
                 category="llm-sub",
                 tags=["mikansub", "mikan"],
                 paused=False,
+                preserve_content=True,
             )
             pending = json.loads((root / "mikan_pending.json").read_text(encoding="utf-8"))
             entry = pending["items"]["123:1"]
@@ -4273,6 +4274,7 @@ class MikanWorkerPendingTest(unittest.TestCase):
                     category="llm-sub",
                     tags=["mikansub", "mikan"],
                     paused=False,
+                    preserve_content=True,
                 )
                 return []
 

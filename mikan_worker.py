@@ -2620,6 +2620,19 @@ class MikanWorker:
                 skipped_missing_local += 1
                 continue
 
+            if qbit is not None:
+                try:
+                    retention = qbit.ensure_content_retained(
+                        torrent.hash, category=self.config.qbit_category, tags=self.config.qbit_tags)
+                    if retention.get('changed'):
+                        self.logger.info('Mikan download retention verified before extraction. evidence=%s', retention)
+                except QBitError as exc:
+                    # A disappearing download must not become a false extraction
+                    # failure. Preserve pending state and retry through normal sync.
+                    self.logger.warning('Mikan extraction admission deferred: content_retention_unverified hash=%s error=%s',
+                                        torrent.hash, exc)
+                    continue
+
             priority = _pending_extract_priority(active_entries)
             job_rows.append((torrent, active_entries, priority, force_requeue))
 
@@ -4190,6 +4203,7 @@ class MikanWorker:
                     category=self.config.qbit_category,
                     tags=tags,
                     paused=self.config.qbit_paused,
+                    preserve_content=True,
                 )
             except QBitError as exc:
                 log_template = (
@@ -4499,6 +4513,7 @@ class MikanWorker:
                         category=self.config.qbit_category,
                         tags=tags,
                         paused=self.config.qbit_paused,
+                        preserve_content=True,
                     )
                 except QBitError as exc:
                     self.logger.warning("Deferred Mikan release still cannot be queued: key=%s title=%s error=%s", key, title, exc)

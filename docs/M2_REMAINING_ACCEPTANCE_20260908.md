@@ -1,5 +1,61 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-11 — real qB expiry/restart boundary verified; deployment pending
+
+Evidence `logs/m2-mapped-source-deploy-20260910T0625/real-qb-retention-libcy3/`:
+the first210-second elapsed-time fixture failed (exit1); reported seeding time
+stayed at2/3 seconds. Its observations and original failures are retained.
+On the same network-none qB container with fixture-only mounts, a one-shot
+zero-minute seeding-limit fault injection exercised the real expiry engine:
+qB logged deletion of control.bin and Stop of retained.bin. Protected content
+hash/mtime remained unchanged. No Production qB preferences or files changed.
+
+The same qB container was actually restarted once. The initial read was premature
+before torrent resume state was ready; that failed check remains recorded.
+Read-only continuation after resume, without another restart, passed content
+hash/mtime, persisted Stop and two idempotent retention calls. Authoritative
+`threshold-restart-b.log`/exit0 and `fixture/result.json` distinguish real threshold
+expiry from natural elapsed-time expiry, which is NOT verified by this fixture.
+This is not a formal subtitle delivery. The isolated control deletion is the only
+intentional data removal; all fixture evidence remains retained.
+
+Latest bounded runtime report `mapped-readiness-1789080213033486243.json` confirms
+Worker dbb6b8b3cc188c6521ae0e31d22adf7c37349106, ARMED,69 holds, unchanged Gate110900.
+Gate has20 frozen members,19 terminal,2 strict-verified; no summary yet and no pass.
+Official deployment readiness still refuses planned_change_work_not_idle.
+Next: commit the verified scoped retention repair, owned drain/safe deployment,
+actual-image checks/controlled recovery, then real3085:13 formal acceptance.
+Do not re-add failed3932 torrent or replace Gate members. M2 incomplete; this
+recovery adds AI0/download0/extraction0 (prior accepted M3 AI1 is separate).
+
+## 2026-09-11 — content-retention candidate implemented, not deployed
+
+Candidate changes qbit_client.py and the two Mikan enqueue paths: project-owned
+new torrents request shareLimitAction=Stop while leaving ratio/time limits intact.
+Before admitting completed torrents to extraction, exact-hash/category/tag checks
+and API readback verify non-destructive expiry; old destructive action is changed
+only for that scoped unconsumed download, preserving its numeric thresholds.
+HTTP success without matching readback, malformed responses, unknown actions,
+unsupported API and wrong scope fail closed for that job. No global preferences,
+QC, Production media or other qB jobs are changed. No automatic destructive policy
+restoration is performed by this candidate.
+
+Server `content-retention-server-a.log`:266 tests,2 failures in old expected add_url
+arguments (missing preserve_content=True); original failures retained. Updated
+contracts plus final client/extraction-boundary tests: `content-retention-server-b.log`
+29 PASS,exit0. These are isolated HTTP fixtures, not real qB expiry/restart proof.
+Local final predecessor28 PASS; final server29 includes added malformed-JSON test.
+Tests and candidate remain uncommitted/undeployed pending real isolated qB proof.
+
+Fresh `mapped-readiness-1789056428019354701.json` confirms ARMED/69holds/same Gate,
+official idle true at that instant; do not assume this remains a safe future window.
+qB image sha256:28d43a9087ff267c974797dbf83aa37ff99e175447d64b1cb340eb55a775f588,
+executable /app/qbittorrent-nox-lib1 (not PATH qbittorrent-nox), v5.2.3/API2.15.1.
+Use a disposable network-isolated instance with fixture-only mounts for expiry and
+restart proof; never test deletion policies against Production downloads/media.
+Then safe deployment/actual-image verification and real3085:13 acceptance remain.
+Runtime dbb6b8b and Gate110900 unchanged, formal0/0/0, M2 incomplete.
+
 ## 2026-09-10 11:15 UTC — exact download deletion root cause proven
 
 `download-removal-1789038824096557421.json` in the mapped-source deployment evidence
