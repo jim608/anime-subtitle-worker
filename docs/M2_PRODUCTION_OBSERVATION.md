@@ -1,5 +1,17 @@
 # M2 Production Observation
 
+## 2026-09-10 11:11 UTC — safe runtime handoff complete
+
+Actual Worker dbb6b8b3cc188c6521ae0e31d22adf7c37349106 / image931e0b6433dd...,
+WebUI175a02a unchanged. Recovery ARMED,69holds preserved, only owned pause released.
+Old Gate173949 SETTLED20review/0strict/safetyFAIL is preserved verbatim.
+New Gate m2-gate-20260910T110900397224Z-879e931859 starts2026-09-10T11:09:00.397224Z,
+baseline m2-guardrail-v1:a21f824a673d18b10f27e13d, initial0/20; fixed first20 policy,
+no cross-version evidence or cohort transfer. Not passed; no wait for20.
+Evidence `/logs/m2-mapped-source-deploy-20260910T0625/recovery-closeout.json`.
+Actual-image243 tests/restart and fresh7breakers PASS, not formal output delivery.
+Download3932:3 cached torrent/file now absent; attribution unproven, formal0.
+
 ## 2026-09-10 06:18 UTC — existing Gate settled, not accepted
 
 Gate `m2-gate-20260909T173949128555Z-3714ef2740` automatically SETTLED20/20 at

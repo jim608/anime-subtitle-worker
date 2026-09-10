@@ -1,5 +1,37 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-10 11:11 UTC — repair deployed, controlled recovery complete
+
+Single coordinator61966 and safe deployment20260910T110246Z-62313 completed exit0.
+Actual Worker `dbb6b8b3cc188c6521ae0e31d22adf7c37349106`, image
+`sha256:931e0b6433ddd62d7587d8bfa18d73399ed29b6dce822c0c6ecc01dbb4cc4be3`,
+source revision `18a78b8475aa7ff30c4557e6a0afa449ff695be3ab1ceb743ed47969401361bc`.
+WebUI175a02a unchanged. Actual-image243 tests PASS, real fixture restart PASS,
+fresh breaker7/7 PASS. Actual-image mikan_worker bytes matched deployed source.
+No forced Production task termination; former child780122 exited naturally.
+
+Evidence `/logs/m2-mapped-source-deploy-20260910T0625/`: safe-deploy.log/exit0,
+actual-runtime-before-recovery.json, actual-image-tests.log, actual-image-proof.json,
+fresh-fault-suite.log, reconciliation-prepare.log, recovery-closeout.json,
+coordinator.exit0. Backup `/work/deployment_backups/20260910T110246Z-62313/`.
+Reconciliation `m2-recon-mapped-source-20260910T0625` preserves69 holds,
+new differences0, recoverable6944 and retained7104 identities (distinct state groups,
+not new deliveries); receipt SHA ca0ac19be1b1da69a852685b0fbc8374c4a42cbd5cc96a6173954babfd3dc6b9.
+ARMED and only this owned pause released. Old SETTLED20review/0strict/FAIL Gate
+preserved verbatim. New runtime Gate `m2-gate-20260910T110900397224Z-879e931859`,
+start2026-09-10T11:09:00.397224Z, baseline m2-guardrail-v1:a21f824a673d18b10f27e13d,
+initialized0/20; no old evidence/member transfer, no acceptance claim.
+
+Formal acceptance remains blocked for3932:3: its previously completed torrent AND
+the exact mapped333MB file are now absent. Pending history recorded did not start
+at2026-09-09T19:59:45.926284Z, before this deployment. Exact post-deploy check
+`retained-download-1789038623407402022.json` finds torrent0/file absent, old extract
+row replaced, recovery-event0. No claim or successful extraction is inferred.
+This does not prove who removed the download or that the Production source is bad.
+Do not re-add failedb144 or reset records. Investigate existing exact evidence and
+known alternative targets/sources; not a whole-library scan. New formal AI/download/
+extraction remains0/0/0; M2 incomplete. Formal verifier currently reports waiting.
+
 ## 2026-09-10 06:18 UTC — candidate pushed, restart proven, Gate settled FAIL
 
 Pushed repair `adb615962beb25b1d3be12896d3ab5ea128fda9e`; not deployed.

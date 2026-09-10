@@ -2,6 +2,13 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+Latest2026-09-10 11:11UTC: safe deployment20260910T110246Z-62313 and controlled
+recovery EXIT0. ActualWorkerdbb6b8b3cc188c6521ae0e31d22adf7c37349106, ARMED69holds;
+actual-image243/restart/fresh7FI PASS. Old SETTLED GateFAIL retained; new Gate110900
+initialized0/20. Download3932:3 old completed torrent/file vanished before acceptance;
+exact check finds0torrent/no mappedfile/recoveryevent0. Do not re-addfailedb144;
+trace retained evidence and known alternatives. Formal0/0/0; M2 incomplete.
+
 2026-09-10 06:18UTC: repairadb615962beb25b1d3be12896d3ab5ea128fda9e pushed,
 243server tests and genuine isolated-container restart PASS; not deployed.
 Official idle check still refuses planned_change_work_not_idle. Gate173949 is now
