@@ -2,6 +2,33 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+Latest Sep11: SRT/ASS dispatch and prepublication staging repair implemented in
+worker.py;16 targeted tests and187 server regressions PASS. Actual isolated Docker
+restart after durable manifest PASS, source/output/manifest unchanged, duplicate
+publications0. Evidence `/logs/m2-opencc-format-restart-20260911-NdGDQI/`.
+This candidate is NOT deployed. Retention5f116c3 remains the live runtime;
+TRIPPED/Gate225436 ACTIVE9 enrolled/5terminal/3strict and69holds remain unchanged.
+Next: implement the smallest exact-incident authorized-reconciliation validator
+for repeated_identical_stage_failure/opencc:opencc_unknown (current entry point
+rejects it); targeted negative/restart tests, actual-image proof, then owned-drain
+safe deployment/controlled recovery. Do not use an old receipt or generic reset.
+3085 ZIP26 members/CRC/path checks PASS, but both383-cue episode13 subtitles FAIL
+existing QC (cps/timing overlap). No formal publication; new download/extraction0.
+Retain bounded alternative-source policy; never re-add failed torrents or lower QC.
+M2 incomplete; M3 engineering/AI1 evidence remains separate and accepted.
+
+Latest2026-09-11 03:52UTC: retention repair5f116c357ae5e909108b862b155830fa2afe27e8
+deployed safely/actual-image270/restart/fresh7FI PASS; controlled recovery initially
+ARMED,69holds/UNPROVEN retained. New Gate225436 initialized0/20; old Gate110900
+invalidated with20 member evidence unchanged. Later new TRIPPED opencc_unknown:
+three distinct attempts have ASS source contains no Dialogue events; current Gate
+9enrolled/5terminal/3strict, no pass. Preserve trip; diagnose actual inputs before fix.
+AI automatic claim/ASR/checkpoint proven. Download3085:13 automatically started,
+Stop/120min verified; now partial batch28.539%, source/identity review state retained.
+Its subtitle ZIP is100% downloaded but not integrity/QC/import verified; preserve
+it and target13 partial98.23%, no failedhash re-add. Formalnew0/0/0, M2 incomplete.
+Details and evidence in top M2_REMAINING_ACCEPTANCE section; no M3/M4 re-opening.
+
 2026-09-11 follow-up: real isolated qB threshold expiry and actual same-container
 restart now PASS (threshold-restart-b.exit0); natural elapsed-time expiry fixture
 failed and is retained, not relabelled. Candidate scoped Stop protection ready for

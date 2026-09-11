@@ -1,5 +1,54 @@
 # M2 Production Observation
 
+## 2026-09-11 — bounded format-repair validation; no new Gate or deployment
+
+Live identity remains Worker5f116c357ae5e909108b862b155830fa2afe27e8 /
+WebUI175a02a7bad46e0b6fa2372c59f39e8dd272911e. Fresh read-only readiness
+1789116218978683122 reports TRIPPED, official idle=true,69holds. Gate
+m2-gate-20260910T225436013360Z-a3dfaa42a4 stays ACTIVE, enrolled9/20, terminal5,
+strict3, no summary emitted. No frozen members replaced; preservation UNPROVEN.
+
+Candidate format-dispatch/prepublication repair:16 focused and187 related server
+tests PASS; actual isolated container restart after manifest PASS with unchanged
+source/output/manifest, duplicate publication0. Evidence
+`/logs/m2-opencc-format-restart-20260911-NdGDQI/`. Not deployed and not a Production
+delivery. Existing recovery signature authorization does not cover this incident;
+it must be extended narrowly and verified before guarded deployment/recovery.
+
+Retained3085 archive passes integrity/safe-path checks but both episode13 subtitles
+fail existing hard QC. Formal download/extraction verified additions remain0.
+Bounded observer ended normally without stopping downloader; no relaunch/re-add.
+All earlier Gate/receipt/failed test evidence retained. M2 remains incomplete.
+
+## 2026-09-11 — retention deployed; later new breaker trip preserved
+
+Actual Worker5f116c357ae5e909108b862b155830fa2afe27e8/WebUI175a02a7bad46e0b6fa2372c59f39e8dd272911e.
+Safe deployment20260910T224849Z-3534536 and controlled recovery completed exit0;
+Worker2104/WebUI231 deployment tests,270 actual-image tests, isolated restart and
+7/7 breakers PASS (overlapping suites). New reconciliation
+m2-recon-content-retention-20260910T2247 retained69holds/UNPROVEN, new differences0.
+Receipt SHA01b966a49c1dc9dbb3fef5a3f883550b2dc62cc8afaff7e873e21eb7ce0dd181.
+Old Gate110900 INVALIDATED_BY_RUNTIME_CHANGE; all20 members and receipt unchanged.
+New Gate m2-gate-20260910T225436013360Z-a3dfaa42a4, start22:54:36.013360Z,
+baseline m2-guardrail-v1:e69ee6cebee2eb676b56adcd, initialized0/20 without transfer.
+
+Later runtime TRIPPED at1789083781.9440258: repeated_identical_stage_failure,
+opencc:opencc_unknown. Exact three attempts and app.log bind the error to SRT
+sidecars incorrectly sent to the ASS-only converter. Server-isolated regression
+reproduces it, exit1/expected RED; fix is not implemented yet. Protection retained.
+Latest bounded Gate closeout:9 enrolled/5terminal/3strict, ACTIVE, not accepted.
+
+AI recovery auto-claim/ASR/heartbeat/valid source checkpoint proved before that
+later trip. Download3085:13 auto-start and effective Stop/original120min proven.
+Batch still retained/stalled28.539%, target13 incomplete98.23%; complete346548-byte
+subtitle ZIP is a reuse candidate, not yet integrity/parse/QC/import verified.
+Existing TC/SC fail original hard QC; original source and5 sidecar hashes retained.
+No formal download/extraction delivery verified; prior M3AI1 remains separate.
+No source/valid output modification, Gate member replacement, M3/M4 or guard reset.
+
+Full evidence `/logs/m2-content-retention-deploy-20260910T2247/`; see top sections of
+M2_REMAINING_ACCEPTANCE_20260908.md for exact records and remaining steps.
+
 ## 2026-09-11 — undeployed retention candidate only
 
 Readiness1789056428019354701 confirms ARMED/69holds and current Gate110900 ACTIVE;

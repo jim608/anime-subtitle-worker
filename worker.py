@@ -1639,23 +1639,9 @@ class VideoWorker:
             "running",
             "Normalizing existing zh-Hant subtitle to Taiwan Traditional Chinese",
         )
-        begin_output_publication(video, self.config)
-        convert_ass_to_zh_tw(
-            decision.source_path,
-            destination,
-            self.config.opencc_config,
+        classification, report, recorded = self._prepare_chinese_source_output(
+            video, decision, destination, ADOPTED_ZH_TW_PUBLICATION_KIND,
         )
-        classification = classify_subtitle_content_file(destination)
-        if classification.language != "zh-tw":
-            raise SubtitleQualityError(
-                "Normalized zh-Hant output did not classify as Traditional Chinese"
-            )
-        report = analyze_subtitle_file(destination, self.config, role="unknown")
-        if report.has_failures or report.dialogues <= 0:
-            raise SubtitleQualityError(
-                "Normalized zh-Hant output failed prepublication QC: "
-                f"{summarize_quality_report(report)}"
-            )
         stat = destination.stat()
         normalized_decision = SubtitleSourceDecision(
             strategy=USE_ZH_TW,
@@ -1670,17 +1656,19 @@ class VideoWorker:
             source_mtime_ns=int(stat.st_mtime_ns),
         )
         self._record_subtitle_source_decision(normalized_decision)
-        manifest = write_output_manifest(
-            video,
-            self.config,
-            [destination],
-            provenance=self._source_publication_provenance(
-                normalized_decision,
-                output_quality=report.to_dict(),
-            ),
-            publication_kind=ADOPTED_ZH_TW_PUBLICATION_KIND,
-            output_languages=("zh-TW",),
-        )
+        manifest = output_manifest_path(video, self.config)
+        if not recorded:
+            manifest = write_output_manifest(
+                video,
+                self.config,
+                [destination],
+                provenance=self._source_publication_provenance(
+                    normalized_decision,
+                    output_quality=report.to_dict(),
+                ),
+                publication_kind=ADOPTED_ZH_TW_PUBLICATION_KIND,
+                output_languages=("zh-TW",),
+            )
         self._commit_output_publication(video)
         self._set_stage(
             video,
@@ -1764,35 +1752,22 @@ class VideoWorker:
             "running",
             "Converting existing zh-CN subtitle to zh-TW without ASR",
         )
-        begin_output_publication(video, self.config)
-        convert_ass_to_zh_tw(
-            decision.source_path,
-            destination,
-            self.config.opencc_config,
+        _classification, report, recorded = self._prepare_chinese_source_output(
+            video, decision, destination, CONVERTED_ZH_CN_PUBLICATION_KIND,
         )
-        classification = classify_subtitle_content_file(destination)
-        if classification.language != "zh-tw":
-            raise SubtitleQualityError(
-                "OpenCC output did not classify as Traditional Chinese: "
-                f"path={destination} language={classification.language or 'unknown'}"
+        manifest = output_manifest_path(video, self.config)
+        if not recorded:
+            manifest = write_output_manifest(
+                video,
+                self.config,
+                [destination],
+                provenance=self._source_publication_provenance(
+                    decision,
+                    output_quality=report.to_dict(),
+                ),
+                publication_kind=CONVERTED_ZH_CN_PUBLICATION_KIND,
+                output_languages=("zh-TW",),
             )
-        report = analyze_subtitle_file(destination, self.config, role="unknown")
-        if report.has_failures or report.dialogues <= 0:
-            raise SubtitleQualityError(
-                "OpenCC Traditional-Chinese output failed prepublication QC: "
-                f"{summarize_quality_report(report)}"
-            )
-        manifest = write_output_manifest(
-            video,
-            self.config,
-            [destination],
-            provenance=self._source_publication_provenance(
-                decision,
-                output_quality=report.to_dict(),
-            ),
-            publication_kind=CONVERTED_ZH_CN_PUBLICATION_KIND,
-            output_languages=("zh-TW",),
-        )
         self._commit_output_publication(video)
         self._set_stage(
             video,
@@ -1813,6 +1788,86 @@ class VideoWorker:
             "ok",
             "Existing zh-CN subtitle converted to Traditional Chinese without audio or AI",
         )
+
+    def _prepare_chinese_source_output(
+        self,
+        video: Path,
+        decision: SubtitleSourceDecision,
+        destination: Path,
+        publication_kind: str,
+    ):
+        """Stage the selected text format, validate, then publish or resume exactly.
+
+        Source selection accepts SRT as well as ASS. Never send SRT text to the
+        ASS-only OpenCC parser, and never expose unvalidated conversion output at
+        the formal destination. Reuse the existing publication rollback journal.
+        """
+        from m2_production_recovery import require_source_not_held
+
+        require_source_not_held(self.config, video)
+        self._verify_source_before_publication(video)
+        source = Path(decision.source_path)
+        snapshot = capture_source_snapshot(source, hash_content=True)
+        if (snapshot.sha256, snapshot.size, snapshot.mtime_ns) != (
+            decision.source_sha256, decision.source_size, decision.source_mtime_ns,
+        ):
+            raise SubtitleQualityError("Selected subtitle source identity changed before conversion")
+        if source.suffix.lower() not in {".ass", ".srt"}:
+            raise SubtitleQualityError(f"Unsupported selected subtitle format: {source.suffix}")
+        digest = hashlib.sha1(str(video.resolve()).encode("utf-8")).hexdigest()[:16]
+        staging_root = Path(self.config.work_path) / "ai_publish_staging" / digest / str(time.time_ns())
+        staging_root.mkdir(parents=True, exist_ok=False)
+        staged = staging_root / "converted.ass"
+        try:
+            input_ass = source
+            if source.suffix.lower() == ".srt":
+                input_ass = staging_root / "source.ass"
+                convert_srt_file_to_ass(source, input_ass, self._ass_style)
+            convert_ass_to_zh_tw(input_ass, staged, self.config.opencc_config)
+            classification = classify_subtitle_content_file(staged)
+            report = analyze_subtitle_file(staged, self.config, role="unknown")
+            if classification.language != "zh-tw" or report.has_failures or report.dialogues <= 0:
+                raise SubtitleQualityError(
+                    "OpenCC Traditional-Chinese output failed prepublication language/QC: "
+                    f"language={classification.language or 'unknown'} {summarize_quality_report(report)}"
+                )
+            verify_source_snapshot(snapshot)
+            require_source_not_held(self.config, video)
+            self._verify_source_before_publication(video)
+            staged_hash = sha256_file(staged)
+            identical = destination.is_file() and sha256_file(destination) == staged_hash
+            if destination.exists() and not identical:
+                if source.resolve() == destination.resolve():
+                    raise SubtitleQualityError("Refusing to replace the selected subtitle source in place")
+                current_report = analyze_subtitle_file(destination, self.config, role="unknown")
+                current_language = classify_subtitle_content_file(destination).language
+                if (current_language in {"zh-tw", "zh-hant"} and current_report.dialogues > 0
+                        and not current_report.has_failures):
+                    raise SubtitleQualityError("Refusing to overwrite an existing valid Traditional-Chinese subtitle")
+            identity = delivery_identity(video, self.config)
+            recorded = identical and validate_output_manifest(
+                video, self.config, verify_hashes=True, required_outputs=[destination],
+                expected_obligation_id=str(identity["obligation_id"]),
+                expected_policy_revision=str(identity["policy_revision"]),
+                expected_publication_kind=publication_kind,
+                expected_output_languages=("zh-TW",), require_publication_semantics=True,
+            )
+            if not recorded:
+                begin_output_publication(video, self.config)
+            if not identical:
+                self._replace_ai_outputs_with_rollback(video, [staged], [destination])
+            # Re-read the final location; the caller may commit its manifest only
+            # when the verified staged bytes and original media still match.
+            self._verify_source_before_publication(video)
+            verify_source_snapshot(snapshot)
+            if sha256_file(destination) != staged_hash:
+                raise SubtitleQualityError("Published Chinese subtitle differs from its verified staging output")
+            report = analyze_subtitle_file(destination, self.config, role="unknown")
+            if report.has_failures or report.dialogues <= 0:
+                raise SubtitleQualityError("Published Chinese subtitle failed final-location QC")
+            return classification, report, bool(recorded)
+        finally:
+            shutil.rmtree(staging_root)
 
     def _seed_japanese_subtitle_source(
         self,

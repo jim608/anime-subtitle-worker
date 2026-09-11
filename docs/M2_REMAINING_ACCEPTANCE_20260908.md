@@ -1,5 +1,140 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-11 — format-dispatch candidate verified; formal download still blocked
+
+Worker candidate now handles selected SRT through existing SRT-to-ASS staging,
+then the unchanged ASS OpenCC converter. CN/Hant routes share staged language/QC,
+selected-source checksum/identity checks, source-hold checks, existing publication
+backup/rollback, final-location hash/QC, and exact manifest replay. Valid existing
+TC subtitles and selected input files cannot be overwritten. No QC/model/schema
+policy changed. Candidate is not deployed; live Worker remains5f116c3.
+
+Verification:16 focused tests PASS; server187 related tests PASS (overlapping).
+Full command: `python -B -m unittest -q test_worker_source_format_dispatch
+test_source_priority test_worker test_source_integrity test_ass_utils
+test_m2_reconciliation_source_holds`. Real OpenCC/parser/QC/manifest/rollback run;
+stage telemetry is isolated. Failure injection covers malformed input, QC failure,
+source/video mutation, late hold, conversion crash, valid-output refusal and
+manifest-write/commit interruption. Source and formal fixture artifacts are checked.
+
+Authoritative server evidence `/logs/m2-opencc-format-restart-20260911-NdGDQI/`:
+targeted.log/exit0; candidate.sha256; phase-one.exit73 (intentional process crash
+after durable manifest); phase-two.log; before/after-restart.json; restart-result.json.
+Same isolated Docker container restarted, prior source snapshot restored, identical
+source/output/manifest hashes+mtimes, one publication version, duplicate0. Network
+none, fixture-only mounts, no Production data. Earlier AnUC4m restart FAIL is
+retained: its unit-test /dev/shm was nonpersistent; corrected fixture uses bind
+storage. Do not describe that earlier run as passed. Earlier WfrFLj184 PASS is
+an older candidate, not additive coverage.
+
+Fresh runtime read mapped-readiness-1789116218978683122.json: TRIPPED, official
+idle=true,69holds, Gate225436 ACTIVE9/20 enrolled,5 terminal,3 strict. No admission,
+Gate or runtime mutation this round. Existing recovery supports other exact
+incidents but rejects this repeated OpenCC signature. Next required change is a
+narrow evidence-bound authorized-reconciliation incident validator, with negative
+and restart tests; only then safe deployment and actual-image controlled recovery.
+Do not reuse the original retention planned-change receipt or clear a latch.
+
+3085:13 retained ZIP inspected read-only:346548 bytes,26 members, bounded path/
+symlink/encryption/size/ratio checks and all CRCs PASS, archive source snapshot
+unchanged. Isolated episode13 CHS/CHT each383 cues parse, classify correctly, but
+original QC FAIL cps_too_high/timing_overlap (also long_duration warning).
+Evidence `/logs/m2-content-retention-deploy-20260910T2247/download-3085-13/
+zip-inspection-1789116659583024226/result.json`. No formal importer/publication
+invoked, no source or pre-existing subtitle changed. This source cannot satisfy
+acceptance without a different policy-eligible, QC-valid source; do not relax QC.
+The exact-torrent observer ended exit0 at its bound with stalledDL28.539%, retained
+Stop action, no extraction row. It was not restarted; no torrent was re-added.
+
+New deliveries this round:AI0/download0/extraction0; prior accepted M3 AI1 remains
+separate. M2 NOT complete. Pending: controlled repair deployment/recovery, actual
+formal download/extraction delivery from an eligible source, frozen Gate disposition.
+
+## 2026-09-11 — new trip root reproduced: SRT sent to ASS converter
+
+Exact app.log lines119066/119116/119148 bind the three new trip members to selected
+Simplified-Chinese `.srt` sidecars. `_convert_simplified_chinese_source` unconditionally
+calls `convert_ass_to_zh_tw` (worker.py1768), producing the misleading no-Dialogue
+error. This is a format-dispatch defect, not proof of empty subtitles, damaged
+videos, OpenCC installation failure or a generic failure-signature collision.
+
+New uncommitted regression `test_worker_source_format_dispatch.py` uses real
+OpenCC/parser/QC with isolated publication journal integration. On the actual
+5f116c3 image with network none and only that test mounted, it reproduces the same
+OpenCCError: `opencc-srt-dispatch-red.log`, exit1 (expected RED, not passed coverage).
+No production fix or second deployment has been made for this new defect.
+
+Next: minimally handle the selected SRT/ASS formats using existing conversion,
+staging and safe-publication helpers; test parse failure, QC failure, preservation,
+resume/idempotency and both supported formats before guarded deployment/recovery.
+Do not merely suppress the breaker or reinterpret its preserved receipt as PASS.
+Then use the retained completed3085 subtitle ZIP if safety/matching/QC and the
+existing import workflow can verify it. No new formal download/extraction output.
+
+## 2026-09-11 03:52 UTC — retention deployed; new OpenCC trip, M2 incomplete
+
+Safe deployment20260910T224849Z-3534536/coordinator3533959 finished exit0.
+Actual Worker5f116c357ae5e909108b862b155830fa2afe27e8, WebUI175a02a7bad46e0b6fa2372c59f39e8dd272911e,
+image sha256:6050294940d9d646a75f030767e36b4117f304be20a0e91e02a0b0a15c52e19e,
+source c3c5dafdcf6575a4783b763a59664659a9cb9e0f1dd0404558c5bfaf0e4e9e2c.
+Backup `/work/deployment_backups/20260910T224849Z-3534536/` retained.
+Deployment tests Worker2104/WebUI231 PASS; actual-image270 PASS; isolated
+restart/source/checkpoint/replay PASS; fresh breaker7/7 PASS. Suites overlap.
+Actual qbit_client SHA2344eaffa43801d8cb70d26e0770ad96e45775ef3fecd21b253a538827b82eb2
+matches the real isolated qB threshold-expiry/restart fixture.
+
+Reconciliation m2-recon-content-retention-20260910T2247 retained69 holds, new
+differences0, recoverable6891/retained7160 (not delivery counts), preservation
+UNPROVEN. Receipt SHA01b966a49c1dc9dbb3fef5a3f883550b2dc62cc8afaff7e873e21eb7ce0dd181.
+Controlled recovery returned ARMED and released only its own hold. Old Gate110900
+was INVALIDATED_BY_RUNTIME_CHANGE, its20 frozen members and original receipt
+unchanged (`gate-closeout-1789098370918603577.json`). No score transfer.
+New Gate m2-gate-20260910T225436013360Z-a3dfaa42a4, start22:54:36.013360Z,
+baseline m2-guardrail-v1:e69ee6cebee2eb676b56adcd, initialized0/20.
+
+Later actual state is TRIPPED, not still ARMED. At1789083781.9440258 the breaker
+recorded repeated_identical_stage_failure/opencc:opencc_unknown across distinct
+job keys c4f19003f2175162,8fa30484ffea25cd,6664f8821f42a0a6. Exact durable attempts
+all say `ASS source contains no Dialogue events`, status retryable_failure.
+The empty/input-parse path and error classification still need targeted diagnosis;
+do not assume signature collision, broken media or broken OpenCC installation.
+No latch/counter/lock was cleared. Current Gate remains ACTIVE9 enrolled/5terminal/
+3strict, not accepted. This later incident does not erase the successful handoff.
+
+Real automatic AI claim aiobl_5ba45b72fbeb08c1f62924cbe1da57b7ab72e1af4b5a9c3e660a9563452de04a
+started ASR after recovery with heartbeat and a valid SUBTITLE_DETECTION checkpoint
+0f3a6f31831a5fe32facd0b2706106c04b4d4e3139a741134bf2a3e6839d2297.
+Evidence claim-evidence-1789080950597826713.json;69 held-source guards rejected,
+held post-gate claims0. This proves resumed execution then, not current admission.
+
+3085:13 genuine missing-TC canary was revalidated through the existing public
+completion-revalidation path; repeat returned already_recorded/queued0. Source
+SHA740ab0f74c60ed6f50bc81ece169c111819dd3a58c7f5c3e97a1df02c4404f1b and all5
+prior sidecars were captured. Existing TC/SC fail original hard QC (cps_too_high,
+timing_overlap), not merely missing completion metadata. Existing English files
+must remain untouched. before-sidecar-validation.json preserves original results.
+
+Server discovery automatically added project torrent0a3cc8ba05d7c71f9dd473cc05ed9d44e5a8e352,
+actual Stop/120min readback verified. It is still present, stalledDL28.539%, about
+1.359GB retained; not a repeated retention-deletion incident. Existing pending
+state later says did not start/ambiguous_release_identity and records bounded
+alternative attempts. Do NOT re-add any failed hash. Exact qB files show episode13
+98.2289% (availability98.2456%) and Subtitles.zip346548bytes at100%. ZIP integrity,
+safe extraction, episode/language/QC and formal publication are NOT yet verified;
+preserve and investigate reuse of that completed archive before any more download.
+No extraction job for the batch and no formal manifest yet; formal additions remain
+AI0/download0/extraction0 in this recovery (prior M3 AI1 stays separately accepted).
+
+All new evidence: `/logs/m2-content-retention-deploy-20260910T2247/`, including
+new-incident-1789098370393678692.json, followup-diagnosis-1789098635624254070.json,
+opencc-trip-details-1789098710652118708.json and download-3085-13/.
+One read-only observer PID18036/run bounded-observation-1789098196559475554 started
+for this exact torrent (60-second interval,1200-second bound); no Queue/Gate polling,
+enqueue or retry. Inspect its exact handle/result; never restart because a wait ends.
+Next: diagnose actual three OpenCC inputs/classification, preserve new trip evidence,
+use controlled recovery only after necessary targeted fixes/proofs; validate/reuse
+the complete ZIP via the existing safe import workflow. No M3/M4 work or QC relaxation.
+
 ## 2026-09-11 — real qB expiry/restart boundary verified; deployment pending
 
 Evidence `logs/m2-mapped-source-deploy-20260910T0625/real-qb-retention-libcy3/`:
