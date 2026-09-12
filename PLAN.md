@@ -2,6 +2,15 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+Sep12 20:57UTC: BOUNDED GOAL ACCEPTANCE COMPLETE, overallM2 ProductionNOTACCEPTED.
+RealformalTC1/fullserverfinalQC+target/downloadchecksums+manifestlineagePASS;
+subLangIDSCrenamepositivelytraced,originalreceiptuntouched. Realreplayalready_recorded
+queued0/nochangedattempts/files/mtime/manifest/no redownload. Download1/extraction1
+sameobligation/newAI0. IndependentnewAIclaim/transcriptionheartbeat+validcheckpoint
+on885988verified; runtimeARMED/71holds/UNPROVEN preserved. Old20GateFAIL5/15retained;
+newGate202742ACTIVE6/6 unchanged, no20wait. Noadditionalruntimechange/deploy.
+Fullrequirementaudit docs/M2_DOWNLOAD_EXTRACTION_FINAL_ACCEPTANCE_20260912.md.
+
 Sep12 20:39UTC: actual88598848... deployed; safe-update/controlledrecoveryEXIT0,
 actualimage637/fresh7PASS, ARMED/71holds/UNPROVEN. Real existingmailbox->Workerclaim
 ->extract->formalTC1->final351cueparse/QC/targetchecksum+backups verified. AI0;

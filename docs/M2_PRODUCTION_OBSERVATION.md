@@ -1,5 +1,21 @@
 # M2 Production Observation
 
+## 2026-09-12 20:57 UTC — final bounded acceptance, no Gate mutation
+
+Final runtime-closeout-1789246394901631647.json confirms88598848.../ARMED/71holds,
+sameGate202742 ACTIVE6enrolled/6settled; original20Gate183251 SETTLED5strict15review
+FAIL/all20members/reportefea89fa...unchanged. Earlier125703FAIL unchanged.
+Historical formal canary is absent from new frozen membership; no backfill,
+mixed versions, waiting for20, or Production acceptance claim.
+
+Formal TC1/companionSC now verified from final server paths; exact sublangid rename
+has durable hash-pinned evidence without editing the publication-time manifest.
+Actual command replay queued0, files/mtimes/manifest history/attempts unchanged;
+target/downloadchecksumsPASS. Separate automatic AI claim/transcription/heartbeat/
+checkpoint verified on885988, newAI deliveries0. Bounded Goal scope complete,
+overallM2 stillnotaccepted. Audit:
+`docs/M2_DOWNLOAD_EXTRACTION_FINAL_ACCEPTANCE_20260912.md`.
+
 ## 2026-09-12 20:39 UTC — actual deployment and immutable terminal Gate result
 
 Old Gate183251 automatically settled20/20 at20:16:01.257804Z:5 strict/15 needs

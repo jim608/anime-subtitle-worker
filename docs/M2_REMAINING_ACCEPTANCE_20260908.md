@@ -1,5 +1,22 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-12 20:57 UTC — bounded download/extraction acceptance complete
+
+Real formal TC1 is now fully verified, including server-side target/download
+checksums and actual idempotent replay: already_recorded/queued0, no changed
+attempts/files/manifest history. Download1/extraction1 are the same target; newAI0.
+SC relocation was positively traced to sublangid20:29:40, with exact old/new path,
+sameSHA and supplemental hash-pinned evidence; original manifest/failure logs
+remain unchanged. No runtime fix/redeploy or other-service setting change needed.
+
+Fresh885988 runtimeARMED/71holds/UNPROVEN, newGate202742 ACTIVE6/6 unchanged.
+Separate AI recovery actually claimed and reachedtranscription with heartbeat and
+validcheckpoint; no waiting for completion. Old20Gate5strict15reviewFAIL retained.
+The requested bounded acceptance/Gate-disposition Goal is complete; **overall
+M2 Production remains NOT ACCEPTED**, not a GatePASS or all-backlog completion.
+Requirement-by-requirement evidence and retained boundaries:
+`docs/M2_DOWNLOAD_EXTRACTION_FINAL_ACCEPTANCE_20260912.md`.
+
 ## 2026-09-12 20:39 UTC — deployed; real TC delivered; final lineage/replay open
 
 **M2 NOT COMPLETE.** Worker88598848ebf2efaf945a9128c320ba188074f3b6 deployed via

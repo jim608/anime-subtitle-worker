@@ -1,5 +1,16 @@
 # M2 reviewed extraction deployment and partial formal acceptance — 2026-09-12
 
+## Final follow-up at20:57UTC
+
+The partial acceptance below is resolved by actual server evidence and replay;
+see `M2_DOWNLOAD_EXTRACTION_FINAL_ACCEPTANCE_20260912.md`. sublangid's exact rename
+was captured with timestamps/container identity; unchanged original manifest is
+linked to the current same-SHA SC path. Both formal files, source checksums and
+real already_recorded/queued0 replay passed. No runtime/redeploy/other-service
+setting change. Fresh automatic AI transcription/heartbeat/checkpoint confirmed.
+Bounded Goal complete; overall M2 Production is still not accepted because its
+completed frozen Gate remains FAIL. Earlier failure/partial evidence stays intact.
+
 ## Current result, 20:39 UTC
 
 **M2 NOT COMPLETE.** One genuinely missing-valid-TC target now has a new valid
