@@ -11528,16 +11528,21 @@ def _torrents_for_pending(entry: dict[str, Any], torrents: list[QBitTorrent]) ->
         info_hash
         for info_hash in (
             extract_torrent_info_hash(str(entry.get("info_hash") or "")),
-            extract_torrent_info_hash(str(entry.get("last_qbit_hash") or "")),
             extract_torrent_info_hash(str(entry.get("torrent_url") or "")),
         )
         if info_hash
     }
+    # Active request identity outranks cached progress and fuzzy title evidence.
+    # A prior completed torrent must not make its replacement look 100% done.
+    if len(expected_hashes) > 1:
+        return []
+    if expected_hashes:
+        return [torrent for torrent in torrents if torrent.hash and torrent.hash.casefold() in expected_hashes]
+    cached_hash = extract_torrent_info_hash(str(entry.get("last_qbit_hash") or ""))
+    if cached_hash:
+        return [torrent for torrent in torrents if torrent.hash and torrent.hash.casefold() == cached_hash]
     result: list[QBitTorrent] = []
     for torrent in torrents:
-        if torrent.hash and torrent.hash.casefold() in expected_hashes:
-            result.append(torrent)
-            continue
         normalized_torrent_name = _normalized_title(torrent.name)
         if normalized_title and (
             normalized_title == normalized_torrent_name

@@ -2,6 +2,35 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+Sep12 18:03UTC: M2 NOT COMPLETE. Actual72f6e5e/ARMED/70holds, sameGate173915
+ACTIVE2/1 at bounded snapshot. Real historical3583:2 retained-download claimattempt2
+and automatic nextsource35a7 download393129896bytes/100%+extract both failed original
+hardQC;0formalmanifest/0newTC, source+18sidecars unchanged. Thirdsourcec1102 genuinely
+41%downloading, not its oldJune success row. Two separate AI automaticclaims reached
+transcription; first precedes optionalwake and hasvalidsavedcheckpoint. EP6 refused
+revision/exclusion-history difference retained;10othermissingTC obligations remain.
+New reproduced progressidentitybug mixedold100% withnew41%; minimalcandidate
+_torrents_for_pending fix/test_mikan_progress_identity.py, local257PASS, actualoldimage
+4/5regressionsfailedasexpected, servercandidate257PASS/exit0 at18:02:59. No newdeployment
+for thisfixyet; don'tkillAI/resetGate/restarttests. Finishserverproof thenexisting
+safeidlehandoff; continueactualthirdsourcebounded, formalartifactQC/lineage/dedup
+stillrequired. Logs/docs latestsection holds exactIDs; noM3/M4/Gate20wait.
+
+Sep12 17:40UTC: Worker72f6e5e4c6a06aa418045ebef645480741da7112 pushed and
+safe-deployed20260912T173219Z-4047011; actualimage416 tests +fresh7/7 breakers PASS.
+Existing authorized reconciliation recovered ARMED, retaining truthfulTRIPPED
+origin/incorrectcompletion/oldreceipts/backups/UNPROVEN. One new unverifiedQueue
+identity retainedPENDING_REVIEW;69prior+1new=70holds.6841recoverable/7234retained
+are not deliveries. OldGate152911 INVALIDATED with8members; newGate173915 starts
+2026-09-12T17:39:15.744898Z at0/20, baselineb783ee77eb48c7ecf6e51e46; no backfill.
+Retained-download revalidation uses existing public API/Queue, exact current
+checksum/member/completeqB/matching checks, archives oldreceipt, retainsretrybudget,
+neverre-adds torrent. Exact12preflight:1validTCkeep/11missingTC reusable sources.
+M2 NOT COMPLETE: formalAI0/download0/extraction0. Next exactcanary automaticclaim,
+formalTCmanifest/finalQC/source+sidecarhash/lineage/dedup;10othermissing obligations
+remainexplicitlyoutstanding. NoM3/M4/Gate20wait. Fullserverlogs andreceipt IDs in
+latest docs/M2_REMAINING_ACCEPTANCE_20260908.md section.
+
 Sep12 16:52UTC: M2 NOT COMPLETE. Real collection finished/extracted but aggregate
 count1 falsely completed12 members; target3583:6 has no verified TC/new manifest,
 source checksum+17 sidecars unchanged. Incident persisted via existing breaker API:

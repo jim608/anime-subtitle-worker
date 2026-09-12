@@ -1,5 +1,61 @@
 # M2 Production Observation
 
+## 2026-09-12 18:03 UTC — bounded live follow-up, no Gate replacement
+
+Same Worker72f6e5e/ARMED,70holds/UNPROVEN and Gate173915. Latest bounded Gate
+ACTIVE2 enrolled/1 settled, not20 or acceptance. Two independent AI claims were
+observed with real transcription stages; first claim1789235097 precedes optional
+scheduler wake1789235170 and has a digest-valid saved source-detection checkpoint.
+This is server automatic admission, not merely queued work.
+
+Historical download canary3583:2/m2dl_f0133acfdbb11284e318 really reused completed
+e22d51... and auto-claimed extraction attempt2, then failed originalhardQC despite
+parsePASS. Its automatic alternative35a7... also actually downloaded100%/393129896bytes
+and extracted, then failedhardQC. No formal manifest/validTC, no falseCOMPLETED;
+targetsource+18sidecars and retained download source checksums unchanged.
+Next sourcec1102... was41.146% at1789236117; its oldJune success row is not new proof.
+EP6 request refusal/changed exclusion history remains a retained obligation.
+New formal metrics remain **AI0/download0/extraction0**, not Gate backfill.
+
+The live pending projection falsely copied olde22d51...100% into newc1102...progress.
+Actual72f6 image reproduces4 identity regressions; the small undeployed fix plus5
+new tests passed257 related server tests/exit0 at18:02:59. Do not deploy while current work is active,
+reset this Gate for a query/doc change, or call a candidate test production proof.
+Evidence /logs/m2-batch-tripped-handoff-20260912T1730/ and
+/logs/m2-progress-identity-20260912T1758/. See latest remaining-acceptance section.
+
+## 2026-09-12 17:40 UTC — authorized incident recovery and new runtime Gate
+
+Actual Worker72f6e5e4c6a06aa418045ebef645480741da7112/image
+sha256:a10b5b104e9f30a6786e1b2e0a6957f234f91ca7693fdc69bb2f300c8c727b14;
+WebUI175a02a7bad46e0b6fa2372c59f39e8dd272911e unchanged. Safe deployment
+20260912T173219Z-4047011 and controlled recovery both exit0, runtime ARMED.
+416 actual-image tests and fresh7/7 breaker fixtures PASS. Full server evidence:
+/logs/m2-batch-tripped-handoff-20260912T1730/ and
+/logs/m2-guardrail-fi-20260912T173903564437Z-03e24338/.
+
+Old Gate152911 retains8/8 members, INVALIDATED_BY_RUNTIME_CHANGE. New Gate
+**m2-gate-20260912T173915744898Z-46ced075ff** starts
+**2026-09-12T17:39:15.744898Z**, baseline **m2-guardrail-v1:b783ee77eb48c7ecf6e51e46**,
+initial **0/20**, not a current progress estimate or acceptance. The first20 eligible
+post-start claims stay frozen, including failures; no historical recovery backfill.
+Original settled20 Gate125703 report remains byte-identical FAIL6strict/14review.
+No waiting for20, no M3/M4 work, no M2_PRODUCTION_ACCEPTED or reliability claim.
+
+The new authorized reconciliation receipt is
+/logs/m2-reconciliation-m2-recon-batch-completion-20260912T1645.json,
+SHA256612943a51a601e16c1aa9009364263ee2beaea5857b10b6aa8cd9984f697efdd.
+Original incident/Gate/receipts/backups and preservationUNPROVEN remain intact.
+One new unverified Queue identity was explicitly retained PENDING_REVIEW:
+**69 prior +1 new =70 source holds**.6841 recoverable/7234 retained identities
+are not delivery metrics. Current source hashes never prove historical continuity.
+
+Real12-member preflight:1 currently validTC kept,11 currently missingTC with unique
+complete/parseable retained download matches. No request or claim is counted as
+formal delivery; actual download/extraction formal acceptance remains unproven.
+New verified formal counts **AI0/download0/extraction0**; earlier M3 AI1 is separate.
+See latest remaining-acceptance section for bounded single-target follow-up.
+
 ## 2026-09-12 16:52 UTC — incorrect-completion incident; cohort retained
 
 M2 NOT COMPLETE; new formal AI0/download0/extraction0. Real download completed,

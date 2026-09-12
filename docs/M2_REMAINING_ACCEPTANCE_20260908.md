@@ -1,5 +1,145 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-12 18:03 UTC — real automatic claims; QC refusal and progress-identity repair
+
+**M2 NOT COMPLETE; new verified formal AI0/download0/extraction0.** Runtime remains
+72f6e5e4c6a06aa418045ebef645480741da7112/ARMED; WebUI unchanged,70holds/UNPROVEN.
+New Gate173915 latest bounded snapshot: ACTIVE2 enrolled/1 settled, not accepted.
+Its first20 rule is unchanged; these historical download cases do not replace members.
+
+EP6 request was refused before mutation: completion_revalidation_entry_changed.
+Exact comparison in retained-canary-3583-6/revision-review-1789234973215909394.json
+shows startup _repair_terminal_completed_pending_entries added its repair markers
+and removed prior failed_info_hashes/failed_urls. The old source217e651... and full
+preflight/old extraction evidence remain retained. Do not blindly accept a new hash
+or reopen this obligation without reconciling the exclusion history. This is not
+new source mutation, nor authorization to modify the old receipt or Production DB.
+
+An independently checked missingTC member **3583:2**, anonymous
+**m2dl_f0133acfdbb11284e318**, had an exactly unchanged entry and no lost failed-source
+exclusions. Its source hash and18 original sidecars/fullQC were captured. The existing
+public retained-download API recorded request82ace3de6a910f0388ff6b18a4659d9f8da4d4541896e5dded715ed9fbffc3b6;
+immediate replay returned already_recorded/queued0 without new download/publication.
+Original completion/extraction receipt was archived; other legacy obligations remain
+explicitly outstanding (EP1 currently validTC,10 other missingTC after this canary).
+
+The normal server poller really claimed reused e22d51... at1789235353.7623954,
+attempts1->2, finished1789235355.7612658: extracted_count0, per-member
+subtitle_validation_failed/no_usable_chinese, terminal extraction rowreplaced.
+Both subtitle tracks parsedPASS but hardQC failed:781 cues,449 timing overlaps,
+111 repeated consecutive cues (SC diagnostic). No falseCOMPLETED, no new manifest.
+Final-location verification confirms original target source checksum and all18
+sidecar hashes/mtimes unchanged; downloaded source full checksum also unchanged.
+This proves real reuse/claim/extraction and fail-closed behavior, NOT formal delivery.
+
+Automatic successor source35a7df2b4a6b131b6f6813c42ef21bbde61076e8 was added once by
+the existing server policy (added_on1789235371), actually downloaded393129896bytes/
+100%/amount_left0, and extracted1789235606.318745..1789235613.2348807. It also failed
+hardQC and was replaced; both failed hashes remain excluded. Server next chose
+c1102b70ebe9c0676e82498f39ffaa8735b933e1. At1789236117 it was genuinely downloading
+135040095bytes/41.146%,193134592bytes remaining. Its older success extraction row
+dated1782790208 is historical, NOT a fresh claim/completion. No partial-file extraction,
+forced retry, repeat of the same failed torrent, or mass AI fallback was requested.
+
+AI separately auto-claimed job955140a401ec4f78881a3fdaf1e68144 at1789235097.3688536
+and reached ASR/transcription heartbeat1789235354.663922. Its saved SUBTITLE_DETECTION
+checkpoint digest7aa8a7ff06e7a2d91376ef96303a8d32d968bfea29f8880093b21fe00a6d69c6
+matches the persisted JSON and outputs_verified1. This claim PRECEDES the optional
+existing scheduler wake command at1789235170, so is not attributed to manual retry.
+A further independent AI job auto-claimed1789235739.294781 and reached transcription
+heartbeat1789236074.0463483. No running AI job was stopped or waited to completion.
+
+One additional reproducible defect: current c1102... at41% inherited cached e22d51...
+progress100%/4664918120bytes, making pending status completed_waiting_extract wrong.
+_torrents_for_pending merged current hash, old last_qbit_hash and fuzzy titles.
+Minimal candidate now prioritizes the explicit current hash/URL, refuses conflicting
+identities and permits legacy title fallback only without an identity. No QC/source
+selection/model policy changed. test_mikan_progress_identity.py reproduces4 failures
+out of5 tests on the actual72f6 image; local257 related tests PASS after repair.
+Server candidate suite **257 PASS/exit0**, finished18:02:59, under
+/logs/m2-progress-identity-20260912T1758/; source/test hashes pinned in
+candidate-files.sha256. Coordinator98886 ended normally; do not rerun this suite.
+Candidate NOT yet deployed; preserve current running AI
+and Gate, then use the existing safe idle handoff when appropriate.
+
+Full evidence root /logs/m2-batch-tripped-handoff-20260912T1730/:
+retained-canary-3583-{6,2}/, post-recovery-1789235396617027978.json,
+canary-closeout-1789235574092913233.json, post-recovery-1789235741456731525.json,
+post-recovery-1789236117474819640.json, scheduler-wake.json. Formal checker report
+retained-canary-3583-2/formal-verification-1789235397878737441.json preserves0manifest/
+no verifiedTC rather than accepting a queued or successful HTTP/torrent operation.
+Next: finish targeted candidate tests and safe deployment; bounded continuation of
+the already-running third source (not re-add/reset); genuine formal artifact/lineage/
+finalQC/checksum/dedup still required. Ten remaining legacy missingTC obligations,
+including refusedEP6, are retained, not silently counted as recovered. No M3/M4.
+
+## 2026-09-12 17:40 UTC — tripped handoff safely deployed and recovered
+
+**M2 NOT COMPLETE. New verified formal deliveries remain AI0/download0/extraction0.**
+Worker **72f6e5e4c6a06aa418045ebef645480741da7112** was pushed and actually
+deployed through safe-update-stack: deployment20260912T173219Z-4047011, exit0.
+Image sha256:a10b5b104e9f30a6786e1b2e0a6957f234f91ca7693fdc69bb2f300c8c727b14;
+source revision fab170680d96b4ff3a995c57321a249e6273ebf28f707c52acf9876b770975fc.
+WebUI175a02a7bad46e0b6fa2372c59f39e8dd272911e is unchanged. The safe updater
+observed AI/extraction/Mikan idle, needed no process freeze/forced termination,
+verified online backups and migration rehearsal, then health/mailbox/parity.
+Backup: /work/deployment_backups/20260912T173219Z-4047011/; all prior backups retained.
+
+Existing controlled reconciliation recovered runtime **ARMED**. No latch deletion,
+historical DB restore, old receipt rewrite or preservation upgrade occurred.
+The truthful TRIPPED boundary (not a clean ARMED planned receipt) is
+/logs/m2-tripped-reconciliation-boundary-m2-recon-batch-completion-20260912T1645.json,
+SHA256 f15247c5f6146066b22e7d63da7fc73ff13ce169b6beb3cd6f4035f109f72987.
+It retains the incorrect_completion incident and ancestry, including prior receipt
+83507f680a88da9cb9042d063ab5c837a46847d40a1fe37142781947cf9f2610.
+New reconciliation **m2-recon-batch-completion-20260912T1645** receipt:
+/logs/m2-reconciliation-m2-recon-batch-completion-20260912T1645.json,
+SHA256 612943a51a601e16c1aa9009364263ee2beaea5857b10b6aa8cd9984f697efdd.
+Both the previous baseline and this handoff were compared. One newly observed
+Queue identity, absent from both older membership lists, was retained PENDING_REVIEW
+with UNKNOWN continuity and incompatible/unproven old checkpoints. It is not
+declared corrupt, permanently absent, or safely new. Original69 holds retained;
+**70 current holds**,6841 recoverable Queue identities and7234 retained-state
+identities. These are reconciliation counts, not subtitle deliveries or Gate scores.
+
+Old Gate m2-gate-20260912T152911952471Z-5cab10fdae is
+INVALIDATED_BY_RUNTIME_CHANGE with all8 enrolled/settled members retained.
+New Gate **m2-gate-20260912T173915744898Z-46ced075ff**, start
+**2026-09-12T17:39:15.744898Z**, baseline **m2-guardrail-v1:b783ee77eb48c7ecf6e51e46**,
+initialized0/20. Strict first20 selection/no backfill/no mixed versions is unchanged.
+Original settled20 Gate125703 remains FAIL (6strict/14review); its report checksum
+f13782698addc2936de1c992801f8290e56a2ca21eeff8333b5ea3929b05b4a3 was reverified.
+No Gate20 wait, M3/M4 work, or M2_PRODUCTION_ACCEPTED claim.
+
+The existing revalidate_recorded_completion API now accepts a guarded retained
+download request: unique current target/source, unchanged full checksums, exact
+prior extraction receipt/member, project-owned complete qB files, existing matching,
+no active owner/valid TC/held source. Original completion/download evidence is
+archived atomically; normal polling reuses the completed torrent and retains retry
+attempts. No parallel Queue, source reset, qB re-add or QC relaxation was introduced.
+An exact12 read-only preflight found EP1 currently validTC (keep), EP2..12 lacking
+verifiedTC with unique complete/parseable downloaded sources (eligible for further
+guarded revalidation, NOT successful imports). Report:
+/logs/m2-batch-retained-recovery-20260912T1715/real-12-preflight-1789234085887140687.json.
+Its predecessor1789233732087257240 only hit the global admission hold; it is not
+evidence of12 bad sources. The read-only checker was corrected without changing
+any actual claim/publication protection.
+
+Tests:376 candidate server tests +6 tripped-boundary integration tests PASS;
+**416 actual-image tests PASS**, fresh isolated breaker **7/7 PASS** with no
+Production resources mounted/affected by fault injection. Counts overlap, do not
+sum. Full logs under /logs/m2-batch-retained-recovery-20260912T1715/ and
+**/logs/m2-batch-tripped-handoff-20260912T1730/** (actual-image-validation.log,
+prepared-reconciliation.json, attestation.json, recovery-closeout.json, exits0).
+Fresh fault evidence /logs/m2-guardrail-fi-20260912T173903564437Z-03e24338/.
+
+Remaining: guarded single3583:6 reuse request/real automatic claim, actual extraction
+and valid formalTC publication with manifest, lineage, final parse/originalQC,
+source/sidecar checksums and real dedup. Request/claim alone is not delivery.
+Ten other newly revalidated-missingTC obligations remain explicitly outstanding;
+do not leave their legacy aggregate completion as verified success. Unchanged M3
+engineering/one prior AI delivery evidence is reused separately, never counted here.
+
 ## 2026-09-12 16:52 UTC — real incorrect completion contained; tested repair checkpoint
 
 **M2 NOT COMPLETE. New verified formal deliveries: AI0/download0/extraction0.**
