@@ -1,5 +1,69 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-12 13:03 UTC — recovery deployed and automatic continuation proven
+
+Worker runtime **1d5d7372f1227e875117d23f8918e778557c1b45**, image
+`sha256:27a04d993a7f653c7392adc057e84a36fb108868c99d02b30f86818d0a9e7b02`,
+source `753e7455712e3fd86e0f461b84334f2c61b74be2a93b81f01c094ac582b9a935`.
+WebUI runtime175a02a7bad46e0b6fa2372c59f39e8dd272911e unchanged.
+Safe deployment20260912T125149Z-1726062 and its coordinator1726057 both exit0;
+backup `/work/deployment_backups/20260912T125149Z-1726062/` retained. No forced
+termination or other owner's pause release. Deployment tests2146/231 PASS;
+actual-image329 PASS, two real isolated restart boundaries, authenticated actual
+history prefix28 and fresh7/7 breaker tests PASS (overlapping test coverage).
+
+Full evidence `/logs/m2-opencc-history-recovery-20260912/`:
+actual-image-proof-1789217740872998762/, attestation.json, recovery-closeout.json,
+safe-deploy.log/exit0, orchestrator.exit0. New reconciliation
+`m2-recon-opencc-history-20260912`, receipt SHA
+`0e664995edd54492f9e7ba3bf93524e1ff51263c0234e38442552aeac3b9a9ae`:
+69 holds retained,0 new differences,6905 recoverable and7170 retained-state
+identities (not subtitle deliveries). Failed first handoff/receipt and successful
+ancestor remain separately linked and unchanged. Historical preservation UNPROVEN.
+Recovery record `m2breakerrec_f129d39c507242038937d3035dcb02a0`; recovery log
+`/logs/m2-production-recovery-20260912T125657281436Z-5dcb02a0.json` SHA
+`b050eb6027ae9a29188bb310e7a83e9ba4baf7a81fbe849615fc58cab7cbf2fd`.
+
+Actual runtime ARMED; only owned pause released. New Gate
+`m2-gate-20260912T125703199544Z-56ccb74937`, start2026-09-12T12:57:03.199544Z,
+baseline `m2-guardrail-v1:3a892c9880d22f735900edf9`, initialized0/20.
+Config fingerprint11198e9e15070bc5667dcc53e93adc99dbb73366eaa603e27b227bab57453bb3,
+decision schema1, frozen first20 policy unchanged. Gate closeout1789218102644498708
+verifies old Gate225436 INVALIDATED, all9 members and both prior receipts unchanged,
+three original incident media/SRT strong checksums unchanged,69 holds, no pause.
+New Gate remains ACTIVE0 enrolled/0 settled at that bounded read, not passed.
+
+Two real automatic claims now proved:
+aiobl_392f73778b3fc99bc269a587fce3fb5e9d26e9a74e8a991c44201947a2684ee4
+at1789217870.3525543, then
+aiobl_e32c3116a63b6608bf6351f5ceef47eee8a686d8ed67f4efd32e16e76852cef0
+at1789217927.0842328. Both executed SUBTITLE_DETECTION/POST_PROCESSING/QC and
+COMPLETED/Queue done with current successful checkpoint digests and heartbeats.
+No manual enqueue/wake between them. Evidence claim-evidence-1789217966223275208.json.
+All69 held publish guards reject; held post-Gate claims0. These are historical
+resumptions, not new subtitle-delivery acceptance: each has supplemental reason
+`job_started_before_gate` and a durable result event. Exact binding evidence
+two-claim-gate-binding-1789218239571513495.json confirms they did not fill the Gate.
+
+Download acceptance remains incomplete. Bounded12 recent extraction rows yielded
+no present complete owned torrent; no new torrent or publication was requested.
+This is a bounded candidate check, not a new full inventory. Pending3085:13 has no
+active hash and retains ambiguous_release_identity/did not start; this does NOT
+mean its retained torrent disappeared. Exact original hash0a3cc8... is still
+present, project-owned, Stop retention, stalledDL28.539%,1,358,925,362 bytes.
+Episode13 file remains98.2289% (incomplete); ZIP100% but previously verified CHS/CHT
+hard QC FAIL remains authoritative. Evidence3085-retained-exact-1789218101517504020.json.
+No failed hash was re-added, incomplete media extracted, or QC-failed ZIP published.
+Current download/extraction automatic claim and formal delivery remain unverified;
+AI/normal Queue claim continuation is separately proven, not substituted for them.
+
+Verified formal additions this turn: AI0/download0/extraction0; the two successful
+automatic jobs have not been counted as new formal delivery. Prior accepted M3 AI1
+remains separate. M2 NOT complete: a genuinely missing-TC target still needs a
+complete matching QC-valid downloaded/extracted source and formal manifest/output
+verification; current frozen Gate has no qualified cohort yet. No Gate/backlog wait,
+new M3/M4 work, valid-output overwrite or destructive source operation.
+
 ## 2026-09-12 12:37 UTC — deployed; recovered-history boundary correction
 
 Worker0a2b1ab0955922ba1a573b6774122408318e3c7e deployed safely, image

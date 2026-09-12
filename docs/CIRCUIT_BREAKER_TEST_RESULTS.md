@@ -1,5 +1,19 @@
 # M2 Circuit Breaker Test Results
 
+## Actual deployed closeout — 2026-09-12 13:03 UTC
+
+Worker1d5d737 actual image27a04d993a7f653c7392adc057e84a36fb108868c99d02b30f86818d0a9e7b02:
+deployment2146 Worker/231 WebUI tests PASS; actual-image329 targeted PASS,
+publication crash73/restart0, recovery DB/file crash74/restart0 PASS, real recovered
+history prefix28 proof PASS. Fresh breaker7/7 PASS, production_resources_affected=false:
+`/logs/m2-guardrail-fi-20260912T125648236691Z-9820cd01/result.json`.
+Suites overlap; counts are not summed as unique coverage.
+Actual-image evidence `/logs/m2-opencc-history-recovery-20260912/actual-image-proof-1789217740872998762/`.
+Controlled recovery completed ARMED, receipt/source/oldGate preservation verified,
+69 held guards reject and0 held claims. Two normal automatic historical claims
+completed with valid checkpoints; correctly excluded from Gate0/20. Formal download
+acceptance remains0 and M2 incomplete. No deliberate Production fault injection.
+
 ## Sep12 recovered-history regression
 
 Deployed0a2b1ab actual-image323 tests, both isolated Docker restarts and7/7 FI PASS,

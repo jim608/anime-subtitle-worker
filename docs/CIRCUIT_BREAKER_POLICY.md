@@ -1,5 +1,16 @@
 # M2 Circuit Breaker Policy
 
+## Current deployment — 2026-09-12 13:03 UTC
+
+Exact format-dispatch and authenticated recovered-history policies are deployed as
+Worker1d5d7372f1227e875117d23f8918e778557c1b45. Formal authorized reconciliation
+m2-recon-opencc-history-20260912 returned ARMED and released only its owned pause.
+The first failed receipt remains unchanged.69 source holds/UNPROVEN persist.
+Old Gate9-member evidence preserved; new first20 Gate125703 initialized0/20.
+Two automatic historical jobs were recorded as supplemental, never cohort fillers.
+Proof root `/logs/m2-opencc-history-recovery-20260912/`. Older candidate/unresolved
+status entries below are historical, not the current runtime result.
+
 ## Recovered history is retained, not silently treated as unresolved or ignored
 
 The Sep12 actual handoff exposed28 retained reasons from a previously completed

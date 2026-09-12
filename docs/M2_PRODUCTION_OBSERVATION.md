@@ -1,5 +1,27 @@
 # M2 Production Observation
 
+## 2026-09-12 13:03 UTC — controlled recovery ARMED; no Gate backfill
+
+Actual Worker1d5d7372f1227e875117d23f8918e778557c1b45, WebUI175a02a unchanged.
+Recovery record m2breakerrec_f129d39c507242038937d3035dcb02a0 completed/ARMED.
+New Gate m2-gate-20260912T125703199544Z-56ccb74937,
+start2026-09-12T12:57:03.199544Z, baseline m2-guardrail-v1:3a892c9880d22f735900edf9,
+initialized0/20. Old Gate225436 INVALIDATED;9 members/receipts unchanged.
+69 holds preserved and every publish guard rejects, held new claims0.
+At bounded closeout1789218102644498708 new Gate ACTIVE0 enrolled/0settled.
+
+Normal Queue autonomously claimed two historical attempts at1789217870.3525543
+and1789217927.0842328, performed source detection/postprocessing/QC, COMPLETED,
+with heartbeats and valid successful checkpoints. Both supplemental rows retain
+job_started_before_gate and terminal result events; neither fills the new cohort.
+This is not Gate success or two verified new subtitle deliveries. No20-job wait.
+Evidence `/logs/m2-opencc-history-recovery-20260912/`: recovery-closeout.json,
+claim-evidence-1789217966223275208.json, gate-closeout-1789218102644498708.json,
+two-claim-gate-binding-1789218239571513495.json. Source/SRT checksum unchanged;
+failed prior recovery and UNPROVEN continuity remain preserved.
+Download/extraction formal0: retained3085 torrent28.539%,E13incomplete98.2289%,
+completeZIP fails originalQC. M2 not accepted; prior M3AI1 separate.
+
 ## 2026-09-12 postdeployment — failed recovery preserved
 
 Runtime0a2b1ab deployed, actual-image323/restart/7FI PASS, but controlled recovery

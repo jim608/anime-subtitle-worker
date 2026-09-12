@@ -2,6 +2,19 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+Sep12 13:03UTC:1d5d737 deployed safely; actual-image329/two restarts/history28/7FI
+PASS. Controlled recovery ARMED, own pause released,69holds/UNPROVEN preserved.
+New reconciliation m2-recon-opencc-history-20260912; failed predecessor retained.
+Original Gate225436 INVALIDATED with9members unchanged. New Gate125703 baseline
+3a892c9880d22f735900edf9 ACTIVE0/20; two automatic historical claims executed and
+completed, correctly supplemental job_started_before_gate, not cohort backfill.
+Sources strong checksum/old receipts verified unchanged. Bounded recent12 downloads
+found no reusable complete torrent; known3085 still28.539%,E13file98.2289%,ZIPQCfail.
+Formal download/extraction0; M2 incomplete. Next pursue a policy-eligible complete
+QC-valid source and formal publication; preserve current runtime/Gate and do not
+repeat finished deploy/recovery/tests or wait for20. Current details/evidence in
+docs/M2_REMAINING_ACCEPTANCE_20260908.md latest closeout.
+
 Sep12 postdeployment:0a2b1ab deployed; actual323/restart/7FI PASS. Formal recovery
 refused because28 already-recovered historical reasons were treated as unresolved.
 Exact history-chain correction reproduced, local85/server110 and real receipt/DB/
