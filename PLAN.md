@@ -2,6 +2,13 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+Sep12 14:47UTC: exact-alias refusal reason finalized; local16/server289 and
+real metadata isolated Docker restart PASS at candidate-c1G520. Runtime remains
+1d5d737/ARMED/69holds; earlier alias handoff stopped before any pause/deployment
+because work was active. Actual successor ASR process verified; preserve it.
+Need a fresh pinned safe handoff and formal downloaded/extracted subtitle proof.
+Existing SETTLED Gate125703 strict6/review14/FAIL retained; M2 NOT COMPLETE.
+
 Sep12 14:19UTC candidate: exact verified slash aliases no longer falsely classify
 as sequel; canonical hash required so unresolved mirrors cannot bypass failed-hash
 dedup. All season/unknown identity/QC guards retained. Server final289 tests and

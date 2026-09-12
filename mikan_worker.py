@@ -10043,11 +10043,8 @@ def _verified_release_alias_identity(
 
     Keep the recorded release identity unchanged. Unknown aliases, contradictory
     metadata and mixed seasons are not discarded to manufacture an exact match.
-    An unresolved mirror cannot enter a newly accepted path past failed-hash
-    deduplication. Season authorization remains with the existing caller.
+    Content-hash and season authorization remain with the existing caller.
     """
-    if re.fullmatch(r"[0-9a-f]{40}", str(release.info_hash or "")) is None:
-        return False
     parts = re.split(r"(?<=\s)/(?=\s)", unicodedata.normalize("NFKC", release.title))
     if not 2 <= len(parts) <= 4:
         return False
@@ -10109,7 +10106,10 @@ def _assess_release_identity(
             "",
             "missing_verified_series_identity",
         )
-    if identity not in identities and not _verified_release_alias_identity(release, identities):
+    verified_aliases = identity not in identities and _verified_release_alias_identity(release, identities)
+    if verified_aliases and re.fullmatch(r"[0-9a-f]{40}", str(release.info_hash or "")) is None:
+        return _ReleaseIdentityAssessment(release, False, "", "release_content_identity_unverified")
+    if identity not in identities and not verified_aliases:
         related = any(
             candidate in identity or identity in candidate
             for candidate in identities

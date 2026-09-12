@@ -1,5 +1,37 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-12 14:47 UTC — final alias reason verified; runtime still unchanged
+
+M2 NOT COMPLETE. New formal deliveries AI0/download0/extraction0. Worker remains
+1d5d7372f1227e875117d23f8918e778557c1b45, WebUI175a02a7bad46e0b6fa2372c59f39e8dd272911e.
+The earlier alias deployment attempt stopped at preflight before any admission
+pause, receipt, deployment or restart (`/logs/m2-alias-identity-20260912T1420/`).
+Its exit1 is planned_change_work_not_idle, not a failed Production upgrade.
+Do not reuse that recorded attempt. Original Gate125703 remains SETTLED/FAIL;
+the strict6/review14 cohort must never be backfilled.69 holds/UNPROVEN retained.
+
+Fresh read-only evidence `/logs/m2-alias-continue-20260912T1445/runtime.log` and
+`containers.txt` confirms the unchanged running images, ARMED/unpaused, and a real
+successor process (container PID14169/start_ticks171002839, ASR job
+ae9bbe8bd71b4e7c98049ce4252bd4d0). This proves automatic AI continuation, not a
+download claim, valid ASR checkpoint, new subtitle or an idle deployment window.
+
+The new alias path now reports release_content_identity_unverified for unresolved
+hashes, instead of falsely calling them sequel mismatches. Admission decisions
+remain conservative. The precise-reason regression failed before this edit;
+local16 tests and server289 targeted/shared-boundary tests now PASS. Final frozen
+candidate proof `/logs/m2-alias-identity-candidate-20260912-c1G520/` includes actual
+deployed-image failure, preserved unsafe-intermediate failure, seven real metadata
+assessments and real isolated Docker restart/replay. Input SHA51d10e84780b051137763a5194a2aff07480395545e21a58e49f391986c4b14a,
+output SHAfd7c9b0f054570b47004df3cc3f89312445a1ce206488325a6247d614e9d772a;
+whole ambiguous pool still refused,0 dispatch/publication. No Production mounts.
+
+Next deployment must use a fresh, pinned controlled handoff at an idle boundary;
+an owned bounded admission drain may preserve the current job, but cannot kill it
+or release another actor's pause. Until deployment and actual-image checks pass,
+this remains candidate evidence only. Do not immediately repeat blocked source
+queries or rebuild Gate for these documentation changes.
+
 ## 2026-09-12 14:19 UTC — exact-alias defect reproduced; guarded candidate verified
 
 Production still Worker1d5d7372f1227e875117d23f8918e778557c1b45, ARMED,69 holds.

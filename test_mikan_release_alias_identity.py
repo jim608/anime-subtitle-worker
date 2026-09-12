@@ -81,6 +81,7 @@ class MikanReleaseAliasIdentityTest(unittest.TestCase):
     def test_unhashed_alias_mirror_is_not_newly_admitted(self):
         mirror = replace(self.release, info_hash=None, torrent_url='https://example.invalid/mirror/42.torrent')
         self.assertFalse(self.assessment(mirror).safe)
+        self.assertEqual(self.assessment(mirror).reason, 'release_content_identity_unverified')
         selected = _choose_release_for_episode(4005, 1, [mirror], {}, {'items': {}}, mappings=[self.mapping])
         self.assertIsNone(selected)
 

@@ -1,5 +1,19 @@
 # M2 Production Observation
 
+## 2026-09-12 14:47 UTC — alias candidate correction, no deployed baseline change
+
+Worker remains1d5d7372f1227e875117d23f8918e778557c1b45, WebUI175a02a,
+ARMED/unpaused;69 source holds and preservation UNPROVEN remain. Failed alias
+handoff at `/logs/m2-alias-identity-20260912T1420/` ended before any pause/receipt/
+deployment. A fresh live successor ASR process is recorded in
+`/logs/m2-alias-continue-20260912T1445/runtime.log`; no forced interruption.
+Candidate `/logs/m2-alias-identity-candidate-20260912-c1G520/` passes289 tests and
+isolated real-metadata Docker restart. Hash-unverified known aliases now retain
+the accurate content-identity refusal reason. It is not deployed acceptance.
+SETTLED Gate125703 retains20 terminal members,6 strict/14 review and FAIL; no
+backfill or query-triggered Gate rebuild. New formal AI/download/extraction0.
+M2 remains incomplete. See latest remaining-acceptance document for evidence.
+
 ## 2026-09-12 14:19 UTC — candidate only; settled Gate unchanged
 
 A reproducible exact-alias matcher correction is isolated-tested, not deployed.
