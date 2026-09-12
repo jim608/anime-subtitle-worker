@@ -1,5 +1,50 @@
 # M2 Production Observation
 
+## 2026-09-12 18:42 UTC — actual deployment and controlled Gate handoff
+
+M2 NOT COMPLETE; formal additions AI0/download0/extraction0. Actual Worker
+5e73636c317cc32919ce1a8104dafc0d05ce0b5c, image
+sha256:534f90a2d84ce4f332d7bdb272fb74ad3069f4f4a82151c28025dc3da840f419;
+WebUI175a02a7bad46e0b6fa2372c59f39e8dd272911e unchanged. Existing safe deployment
+20260912T182521Z-306768 and controlled recovery exit0; actual-image421 tests,
+fresh isolated breakers7/7 PASS. Actual progress-fix source/test hashes match.
+Runtime ARMED/admission open,70 holds retained/UNPROVEN,0 new unexplained deltas.
+Reconciliation m2-recon-progress-identity-20260912T1815, receipt
+/logs/m2-reconciliation-m2-recon-progress-identity-20260912T1815.json,
+SHA ede59904e99537dea5a6eb679b444598cd0dcda8f21b915843511e55526407d6;
+ancestor612943... and original failed preservation evidence are not overwritten.
+
+Actual code deployment invalidated Gate173915 with all4 members preserved.
+New **m2-gate-20260912T183251418961Z-5f0cbe7f8a**, start
+2026-09-12T18:32:51.418961Z, baseline m2-guardrail-v1:a4504d3092426d19e4ab433d,
+initialized0/20; bounded18:39 snapshot remains ACTIVE0/20, NOT accepted.
+Fingerprint sha256:11198e9e15070bc5667dcc53e93adc99dbb73366eaa603e27b227bab57453bb3,
+decision schema1, eligibility m2-frozen-first-20-v1 unchanged. Original settled20
+Gate125703 FAIL6strict/14review and its reporthash f137826... reverified unchanged.
+No transferred scores, swapped members, Gate wait or reset for document edits.
+
+Normal300-second scheduling autonomously claimed historical job
+m2ai_053ea94710d3b7134369 at1789238322.5520434 after review remediation was queued;
+actual ASR/transcription heartbeat and digest-valid SUBTITLE_DETECTION checkpoint
+d7510126c1a5dfa2d8c17a7533dd9d4293221ef5c8f25d7e7a12361c692e7ce1/outputs_verified1.
+No manual retry/wake after recovery. Retained historical job, not a delivery or
+replacement Gate member. Stale deployment_hold display between cycles was checked
+against false actual holds; no lock/DB cleanup or further deployment was needed.
+
+Sourcec1102 really downloaded328160191bytes and extracted under72f6; both tracks
+parsePASS/hardQCFAIL (372 overlaps each). All3 failed sources remain excluded.
+3583:2 still extract_failed,0 post-request manifests/verifiedTC; target checksum
+and all18 sidecar hashes/mtimes unchanged after deployment. Current-runtime
+download/extraction claim and formal publication remain unverified, not inferred
+from AI activity. EP6 and remaining legacy obligations stay outstanding.
+
+Full receipts /logs/m2-progress-identity-deploy-20260912T1815/, including
+recovery-closeout.json, post-recovery-1789238364063994415.json,
+actual-checkpoint-1789238467780496463.json. Fresh7 fixtures under
+/logs/m2-guardrail-fi-20260912T183245117350Z-5f4debce/. See remaining-acceptance
+document for exact boundaries. Source media/valid formal outputs not modified;
+fault tests isolated. No M3/M4 or M2 acceptance claim.
+
 ## 2026-09-12 18:03 UTC — bounded live follow-up, no Gate replacement
 
 Closeout18:08: progress-identity fixd09754248581a226e3a17444a9a9656622b5a864 is pushed

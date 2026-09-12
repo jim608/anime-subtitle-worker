@@ -1,5 +1,77 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-12 18:42 UTC — progress fix deployed; automatic ASR claim verified
+
+**M2 NOT COMPLETE. New verified formal deliveries: AI0/download0/extraction0.**
+The pushed progress fixd097542 was safely deployed at full Worker SHA
+**5e73636c317cc32919ce1a8104dafc0d05ce0b5c**. Deployment
+**20260912T182521Z-306768** and controlled recovery both exited0. Image
+**sha256:534f90a2d84ce4f332d7bdb272fb74ad3069f4f4a82151c28025dc3da840f419**,
+source revision ee99f0ef8b488d2ff2d2f4fd04b7126041b283faf3e42619c45650ebaa66b43d.
+WebUI175a02a7bad46e0b6fa2372c59f39e8dd272911e is unchanged. Candidate257 tests
+were reused; actual-image421 related tests and fresh isolated breaker7/7 PASS.
+Actual deployed mikan_worker.py and its regression-test hashes match the tested
+candidate. Source selection, models, QC and configuration were not changed.
+
+The owned admission drain reached idle naturally; no active work was killed or
+another owner's protection removed. Existing safe-update-stack verified online
+backups, migration rehearsal, health/mailbox/parity and retained all backups.
+Backup /work/deployment_backups/20260912T182521Z-306768/. Original14119 Queue
+identities were reconstructed from immutable ancestor612943... plus its explicit
+dispositions, hash-verified, and compared to both pause/current boundaries.
+No new unexplained differences; all70 source holds retained. New reconciliation
+**m2-recon-progress-identity-20260912T1815**:
+/logs/m2-reconciliation-m2-recon-progress-identity-20260912T1815.json,
+SHA256 ede59904e99537dea5a6eb679b444598cd0dcda8f21b915843511e55526407d6.
+6837 recoverable/7238 retained-state identities are not subtitle deliveries.
+Preservation remains UNPROVEN; original failed receipts/incident evidence remain.
+
+Runtime **ARMED**, both deployment/reconciliation holds false. Old Gate
+m2-gate-20260912T173915744898Z-46ced075ff is INVALIDATED_BY_RUNTIME_CHANGE,
+with its4 enrolled/settled members preserved (3 was the earlier18:13 snapshot). New Gate
+**m2-gate-20260912T183251418961Z-5f0cbe7f8a** starts
+**2026-09-12T18:32:51.418961Z**, baseline **m2-guardrail-v1:a4504d3092426d19e4ab433d**,
+initialized0/20 and still0/20 at the bounded claim snapshot. Configuration fingerprint
+sha256:11198e9e15070bc5667dcc53e93adc99dbb73366eaa603e27b227bab57453bb3;
+decision schema1, eligibility m2-frozen-first-20-v1. No backfill/version mixing.
+Original settled20 Gate125703 remains FAIL6strict/14review; its automatic report
+SHA f13782698addc2936de1c992801f8290e56a2ca21eeff8333b5ea3929b05b4a3 reverified.
+
+AI automatic continuation is actually proven, not just resumed/queued:
+review autopilot commandcmd_e3c5e1598c7c39d90681cf2c was automatically claimed and
+queued its guarded remediation at1789238014..1789238016. The normal300-second
+cycle subsequently claimed anonymous **m2ai_053ea94710d3b7134369** at
+**1789238322.5520434**, entering transcription/ASR with heartbeat1789238331.81798.
+SUBTITLE_DETECTION checkpoint d7510126c1a5dfa2d8c17a7533dd9d4293221ef5c8f25d7e7a12361c692e7ce1
+matches persisted JSON and outputs_verified1. No manual retry/wake was sent after
+recovery. Earlier deployment_hold scheduler text was stale between cycles: exact
+runtime guard checks were false, not a reason to clear locks or redeploy. This is
+a retained historical Pipeline job, not a new subtitle or substitute Gate member.
+
+Third real sourcec1102b70ebe9c0676e82498f39ffaa8735b933e1 was downloaded fully
+(328160191 bytes), correctly mapped and extracted under the prior72f6 runtime
+at1789236661.302987..1789236666.7147555, attempt1, terminal rowreplaced. Both tracks
+parsedPASS but original hardQC failed:722 cues,372 timing_overlap failures and19
+long_duration warnings each. This is not a network/path failure or its oldJune
+success. All3 failed hashes remain excluded; target3583:2 remains extract_failed,
+no new manifest/verifiedTC. After the new deployment, full target checksum and
+all18 original sidecar hashes/mtimes were again unchanged. No false delivery,
+QC relaxation, failed-source re-add or forced fallback. New-runtime download/
+extraction claim and a genuinely new valid formal subtitle remain unverified.
+EP6 exclusion-history refusal and10 other legacy missingTC obligations remain.
+
+Evidence /logs/m2-progress-identity-deploy-20260912T1815/:
+safe-deployment.log, actual-image-validation.log, recovery-closeout.json,
+prepared-reconciliation.json, exact-autopilot-trace.log,
+post-recovery-1789238364063994415.json, actual-checkpoint-1789238467780496463.json.
+Fault fixtures /logs/m2-guardrail-fi-20260912T183245117350Z-5f4debce/;
+no Production resources affected by fault injection. Third-source details remain
+in prior1730root/post-recovery-1789236813207982133.json. Complete logs retained.
+Next: a different policy-eligible QC-valid source for an existing missingTC
+obligation, real formal publish/manifest/finalQC/source-lineage/idempotency proof.
+Do not rerun either completed handoff, retry the3 failed sources, wait Gate20,
+restart for document edits, or reopen M3/M4. No M2_PRODUCTION_ACCEPTED claim.
+
 ## 2026-09-12 18:03 UTC — real automatic claims; QC refusal and progress-identity repair
 
 Closeout18:08: progress-identity repair committed/pushed

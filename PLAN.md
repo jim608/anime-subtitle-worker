@@ -2,6 +2,20 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+Sep12 18:42UTC: progress fix deployed at Worker5e73636c317cc32919ce1a8104dafc0d05ce0b5c.
+Safe deployment20260912T182521Z-306768/controlled recovery exit0, actual-image421
+tests +fresh7/7 breakers PASS; runtimeARMED,70holds/UNPROVEN retained,0new deltas.
+OldGate173915 INVALIDATED with4members retained; newGate183251 starts18:32:51.418961Z,
+baselinea4504d3092426d19e4ab433d,0/20. Original settled20 FAIL unchanged.
+Actual historical AI automatic claim1789238322.5520434 reachedASR/heartbeat and
+validd7510126...checkpoint, no manualretry/wake or forced jobtermination.
+Third sourcec1102 download+extract proved butparsePASS/hardQCFAIL372overlaps;
+all3failedsources excluded, target+18sidecars unchanged,0newmanifest/verifiedTC.
+M2 NOT COMPLETE: formalAI0/download0/extraction0. New-runtime download/extraction
+claim, suitable QC-valid source and trueformalmanifest/lineage/finalQC/dedup remain.
+No repeat handoff, QCchange, Gate20wait or M3/M4; docs-only sync doesnotredeploy.
+Evidence /logs/m2-progress-identity-deploy-20260912T1815/ and latestacceptancedocs.
+
 Closeout18:08: progress fixd09754248581a226e3a17444a9a9656622b5a864 pushed/257serverPASS,
 notdeployed: freshplanned_change_work_not_idle, existingtranscription preserved,
 no newpause. Actual72f6e5e/ARMED/currentGateunchanged. Finalformalcheck0newmanifest;
