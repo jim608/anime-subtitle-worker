@@ -1,5 +1,19 @@
 # M2 Production Observation
 
+## 2026-09-12 — candidate recovery verification; existing Gate retained
+
+Read-only readiness evidence `mapped-readiness-1789215926286505684.json` under
+`/logs/m2-language-vote-recovery-20260909T1720/`: TRIPPED, official idle=true,
+69 persistent source holds, old Gate m2-gate-20260910T225436013360Z-a3dfaa42a4
+still ACTIVE. No score transfer, cohort replacement or Gate initialization.
+The exact OpenCC dispatch recovery candidate and recovery DB/file replay repair
+passed323 server tests and two isolated Docker restarts. Actual-input copies3/3
+PASS are component evidence only; formal download/extraction additions remain0.
+Evidence `/logs/m2-opencc-recovery-20260911-wVrqzj/` including corrected-input
+run `actual-sources-corrected-RJTiCN/`. Deployment and actual-image recovery remain
+pending; prior5f116c3 runtime must not be described as containing the candidate.
+Historical preservation UNPROVEN; M2 not accepted.
+
 ## 2026-09-11 — bounded format-repair validation; no new Gate or deployment
 
 Live identity remains Worker5f116c357ae5e909108b862b155830fa2afe27e8 /

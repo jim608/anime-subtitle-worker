@@ -1,5 +1,24 @@
 # M2 Circuit Breaker Policy
 
+## 2026-09-12 — exact subtitle-format reconciliation candidate (not deployed)
+
+`authorized_reconciliation` / `subtitle_format_dispatch` accepts only the retained
+repeated_identical_stage_failure/opencc/opencc_unknown incident with exact durable
+no-Dialogue attempt details and hash-bound original Gate claims. Every member has
+either verified CURRENT video/SRT snapshots or an existing persistent hold with
+UNKNOWN continuity. Current hashes never prove historical preservation. Unrelated
+breaker reasons, unclassified Queue differences, active work, changed runtime,
+missing actual-image regression evidence or altered receipt remain fail-closed.
+
+Proof contract `m2-subtitle-format-regression-v1` binds two hashed server logs,
+actual image/source revision, code fingerprints, original strict validator,
+SRT/ASS conversion, source/valid-output protection, late holds and real restart.
+After recovery DB COMMIT interruption, replay reuses the unique durable record
+and original timestamps/exports. Ambiguous records, snapshot drift and conflicting
+exports refuse; no direct latch/lock/DB clear is permitted. Original Gate, trip,
+attempts and receipts remain immutable evidence. Candidate323 tests and both
+isolated Docker restart boundaries PASS; actual deployed-image proof is pending.
+
 ## Current deployment — 2026-09-10
 
 The language-vote repair below is now deployed as Worker

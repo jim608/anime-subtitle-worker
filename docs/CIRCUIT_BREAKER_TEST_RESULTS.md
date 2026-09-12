@@ -1,5 +1,23 @@
 # M2 Circuit Breaker Test Results
 
+## 2026-09-12 — subtitle-format candidate and durable handoff restart
+
+Server `/logs/m2-opencc-recovery-20260911-wVrqzj/`: targeted323 PASS, exit0;
+format crash73/restart0, recovery DB-COMMIT crash74/restart0 PASS. The latter
+asserts one recovery record, unchanged attempts/sources/receipt/Gate, held-source
+refusal and safe non-held admission. Earlier6KdaMv failed with two recovery records;
+failure remains preserved. Local104 shared-boundary tests PASS (overlapping).
+New exact-incident suite20 tests includes missing proof, wrong code/claim/detail,
+source drift, unknown continuity holds, unrelated trip, unclassified difference,
+DB/file interruption, changed replay snapshot and conflicting immutable export.
+
+`actual-sources-corrected-RJTiCN/` exit0: three real incident SRT copies pass
+original conversion/QC/manifest/replay;216/230/338 cues. Earlier uninitialized
+isolated store refused source_hold_store_unavailable and is not a passed run.
+Candidate overlays on old image only; no Production media mounts, formal outputs0.
+Runtime remains5f116c3/TRIPPED. Fresh deployed-image tests and seven-breaker proof
+must precede controlled recovery; this report does not claim current ARMED.
+
 ## Language-vote repair actual runtime — 2026-09-10
 
 Worker db9265201bd6620ece8a72b2f4ea9a75bcfd82ff deployed via safe updater.

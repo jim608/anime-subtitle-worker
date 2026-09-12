@@ -2,6 +2,16 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+Sep12 current: exact subtitle-format authorized reconciliation implemented and
+candidate-tested, including a reproduced DB-COMMIT/file-handoff restart defect.
+323 server targeted tests and both real isolated Docker restart boundaries PASS;
+3 actual SRT copies pass original conversion/QC/manifest/replay (not formal media).
+Evidence `/logs/m2-opencc-recovery-20260911-wVrqzj/`, corrected-input runRJTiCN.
+Worker5f116c3 remains deployed/TRIPPED; fresh official idle=true,69 holds retained.
+Next execute owned safe handoff and actual-image controlled recovery; no generic
+reset, no historical continuity upgrade. Formal download/extraction0, M2 incomplete.
+Older entries below are historical; the validator is no longer unimplemented.
+
 Latest Sep11: SRT/ASS dispatch and prepublication staging repair implemented in
 worker.py;16 targeted tests and187 server regressions PASS. Actual isolated Docker
 restart after durable manifest PASS, source/output/manifest unchanged, duplicate

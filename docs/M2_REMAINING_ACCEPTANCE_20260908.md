@@ -1,5 +1,35 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-12 — exact OpenCC recovery candidate ready for guarded deployment
+
+The existing authorized reconciliation now binds `subtitle_format_dispatch` to
+the original three durable opencc_unknown attempts and frozen claims, current
+source snapshots (not historical continuity), actual-image/code proof and all
+existing hold/idle/difference checks. Unrelated breaker reasons remain blocking.
+An actual isolated restart reproduced a second defect: interruption after recovery
+DB COMMIT created a duplicate recovery record. The repair reuses the exact durable
+record and immutable exports; changed snapshots or conflicting exports refuse.
+
+Candidate server evidence `/logs/m2-opencc-recovery-20260911-wVrqzj/`:
+323 related tests PASS; format publication crash73/restart0 and recovery DB/file
+handoff crash74/restart0 PASS. One recovery record, no duplicate dispatch/publish,
+old attempts/Gate/receipt and held sources preserved. These are candidate overlays
+on the prior image, NOT deployed-image proof. Earlier `6KdaMv` recovery restart
+FAIL remains preserved. Local shared-boundary regression104 PASS (overlapping).
+
+Corrected real-input component run `actual-sources-corrected-RJTiCN/` exit0:
+three copied incident SRTs convert under original QC, manifest and replay checks,
+with216/230/338 cues. Production media were not mounted. Its initialized isolated
+store replaces an earlier invalid fixture that refused source_hold_store_unavailable;
+both reports remain. Component PASS3/3 is NOT a formal Production delivery.
+
+Fresh read `mapped-readiness-1789215926286505684.json` in the language-vote log
+root: Worker5f116c357ae5e909108b862b155830fa2afe27e8, unchanged605029 image,
+TRIPPED, official idle=true,69 holds, same Gate225436. No deployment or recovery
+has yet occurred for these repairs. Next: owned hold/sealed snapshot, safe updater,
+actual-image proof, classified reconciliation and formal controlled recovery.
+Preservation stays UNPROVEN. M2 incomplete; new formal download/extraction0.
+
 ## 2026-09-11 — format-dispatch candidate verified; formal download still blocked
 
 Worker candidate now handles selected SRT through existing SRT-to-ASS staging,

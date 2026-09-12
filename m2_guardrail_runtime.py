@@ -1374,7 +1374,7 @@ def prepare_runtime_change(
 
 _RECONCILIATION_INCIDENT_KINDS = frozenset({
     'asr_postprocess_diagnostics_loss', 'line_repair_evidence_incomplete',
-    'source_language_vote_mismatch',
+    'source_language_vote_mismatch', 'subtitle_format_dispatch',
 })
 
 
@@ -1384,6 +1384,8 @@ def _reconciliation_signature(root_cause: Mapping[str, Any]) -> tuple[str, str, 
         return ('runtime_change', 'runtime_validation', 'live_worker_container_identity_mismatch')
     if (root_cause.get('mode') == 'authorized_reconciliation'
         and kind in _RECONCILIATION_INCIDENT_KINDS):
+        if kind == 'subtitle_format_dispatch':
+            return ('repeated_identical_stage_failure', 'opencc', 'opencc_unknown')
         return ('incorrect_completion', 'm2_strict_completion', 'incorrect_completion')
     raise RuntimeContractError('unsupported_reconciliation_incident')
 
@@ -1403,7 +1405,9 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
     report = _read_json(path)
     line_repair = root_cause.get('incident_kind') == 'line_repair_evidence_incomplete'
     language_vote = root_cause.get('incident_kind') == 'source_language_vote_mismatch'
-    contract = ('m2-language-vote-regression-v1' if language_vote else
+    format_dispatch = root_cause.get('incident_kind') == 'subtitle_format_dispatch'
+    contract = ('m2-subtitle-format-regression-v1' if format_dispatch else
+                'm2-language-vote-regression-v1' if language_vote else
                 'm2-line-repair-regression-v1' if line_repair else 'm2-asr-postprocess-regression-v1')
     if (not isinstance(report, Mapping)
         or report.get('contract') != contract
@@ -1427,6 +1431,12 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
         'unchanged_strict_validator', 'original_incident_preserved',
     )):
         raise RuntimeContractError('language_vote_recovery_regression_unproven')
+    if format_dispatch and any(report.get(key) is not True for key in (
+        'srt_misdispatch_reproduced', 'srt_and_ass_verified',
+        'valid_output_preserved', 'original_incident_preserved',
+        'late_hold_refused', 'unchanged_strict_validator',
+    )):
+        raise RuntimeContractError('subtitle_format_recovery_regression_unproven')
     logs = report.get('logs')
     if not isinstance(logs, list) or len(logs) != 2:
         raise RuntimeContractError('postprocess_recovery_logs_missing')
@@ -1436,7 +1446,9 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
             or 'sha256:' + sha256_file(log) != item.get('sha256')):
             raise RuntimeContractError('postprocess_recovery_logs_invalid')
     code = report.get('code_sha256')
-    names = (('main.py', 'language_detector.py', 'scan_state.py',
+    names = (('worker.py', 'opencc_convert.py', 'ass_utils.py', 'output_manifest.py',
+              'source_decision.py', 'm2_strict_runtime_evidence.py', 'm2_guardrail_runtime.py') if format_dispatch else
+             ('main.py', 'language_detector.py', 'scan_state.py',
               'm2_strict_runtime_evidence.py', 'm2_guardrail_runtime.py') if language_vote else
              ('main.py', 'retranslate_ai_lines.py', 'm2_strict_runtime_evidence.py', 'm2_guardrail_runtime.py')
              if line_repair else ('worker.py', 'asr_postprocess.py', 'm2_guardrail_runtime.py'))
@@ -1445,6 +1457,100 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
         for name in names
     ):
         raise RuntimeContractError('postprocess_recovery_code_not_tested')
+
+
+def _validate_subtitle_format_incident(
+    connection: sqlite3.Connection, *, config: Any, request: Mapping[str, Any],
+    root_cause: Mapping[str, Any], breaker: Mapping[str, Any],
+) -> None:
+    """Bind only the proven SRT/ASS dispatch incident, not a general OpenCC reset."""
+    from source_integrity import SourceSnapshot, verify_source_snapshot
+    from m2_production_recovery import source_hold
+
+    incident = request.get('subtitle_format_incident')
+    if not isinstance(incident, Mapping) or incident != root_cause.get('incident'):
+        raise RuntimeContractError('subtitle_format_incident_changed')
+    trip = incident.get('trip')
+    if not isinstance(trip, Mapping) or trip not in breaker.get('reasons', []):
+        raise RuntimeContractError('subtitle_format_trip_unproven')
+    detail = trip.get('evidence')
+    threshold = int(getattr(config, 'm2_server_canary_identical_failure_threshold', 3) or 3)
+    members = incident.get('members')
+    keys = detail.get('identical_failure_job_ids') if isinstance(detail, Mapping) else None
+    if (trip.get('reason_code') != 'repeated_identical_stage_failure'
+        or not isinstance(trip.get('observed_at'), (int, float))
+        or not math.isfinite(trip['observed_at']) or trip['observed_at'] <= 0
+        or not isinstance(detail, Mapping)
+        or detail.get('normalized_failure_signature') != 'opencc:opencc_unknown'
+        or detail.get('stage') != 'opencc'
+        or detail.get('error_code') != 'opencc_unknown'
+        or detail.get('gate_id') != request.get('old_gate_id')
+        or not isinstance(keys, list) or len(keys) < threshold or len(keys) > 20
+        or any(not isinstance(key, str) for key in keys) or len(set(keys)) != len(keys)
+        or not isinstance(members, list) or len(members) != len(keys)
+        or detail.get('identical_failure_streak') != len(keys)):
+        raise RuntimeContractError('subtitle_format_trip_signature_invalid')
+    latest = breaker.get('latest_trip', {})
+    if latest != trip and (latest.get('reason_code') != 'runtime_change'
+        or latest.get('evidence', {}).get('error_code') != 'live_worker_container_identity_mismatch'):
+        raise RuntimeContractError('subtitle_format_unresolved_breaker')
+    for event in breaker.get('reasons', []):
+        if event != trip and (
+            event.get('reason_code') != 'runtime_change'
+            or event.get('evidence', {}).get('error_code') != 'live_worker_container_identity_mismatch'
+        ):
+            raise RuntimeContractError('subtitle_format_unresolved_breaker')
+    seen = set()
+    for member in members:
+        if not isinstance(member, Mapping):
+            raise RuntimeContractError('subtitle_format_member_invalid')
+        obligation = str(member.get('obligation_id') or '')
+        attempt = str(member.get('attempt_id') or '')
+        job_hash = hashlib.sha256(obligation.encode()).hexdigest()
+        if not obligation or not attempt or job_hash[:16] not in keys or job_hash in seen:
+            raise RuntimeContractError('subtitle_format_member_binding_invalid')
+        seen.add(job_hash)
+        if (job_hash[:16] == detail.get('job_key') and
+            hashlib.sha256(attempt.encode()).hexdigest() != detail.get('claim_identity_hash')):
+            raise RuntimeContractError('subtitle_format_trip_claim_unproven')
+        row = connection.execute(
+            'SELECT a.status,a.error_code,a.stage,a.detail,a.finished_at,o.canonical_path '
+            'FROM ai_delivery_attempts a JOIN ai_delivery_obligations o ON o.obligation_id=a.obligation_id '
+            'WHERE a.attempt_id=? AND a.obligation_id=?', (attempt, obligation),
+        ).fetchone()
+        path = str(member.get('canonical_path') or '')
+        if (not row or tuple(row[:4]) != ('retryable_failure', 'opencc_unknown', 'opencc',
+                                         'ASS source contains no Dialogue events')
+            or not isinstance(row[4], (int, float)) or not 0 < row[4] <= trip['observed_at']
+            or not path or row[5] != path):
+            raise RuntimeContractError('subtitle_format_attempt_not_preserved')
+        cohort = connection.execute(
+            'SELECT claim_identity_hash FROM m2_observation_gate_jobs WHERE gate_id=? AND job_id=?',
+            (request['old_gate_id'], job_hash),
+        ).fetchone()
+        if not cohort or cohort[0] != hashlib.sha256(attempt.encode()).hexdigest():
+            raise RuntimeContractError('subtitle_format_frozen_claim_unproven')
+        if source_hold(connection, path):
+            if member.get('disposition') != 'HELD_UNKNOWN_CONTINUITY':
+                raise RuntimeContractError('subtitle_format_held_member_not_classified')
+            continue
+        if member.get('disposition') != 'VERIFIED_CURRENT_SOURCE':
+            raise RuntimeContractError('subtitle_format_current_source_unproven')
+        try:
+            media = SourceSnapshot(**member['media_snapshot'])
+            source = SourceSnapshot(**member['selected_source_snapshot'])
+            video = Path(path).resolve()
+            subtitle = Path(source.canonical_path).resolve()
+            if (media.canonical_path != str(video) or not media.sha256 or not source.sha256
+                or subtitle.suffix.lower() != '.srt' or subtitle.parent != video.parent
+                or not subtitle.name.startswith(video.stem + '.')):
+                raise ValueError('source selection identity is not bound to the video')
+            verify_source_snapshot(media)
+            verify_source_snapshot(source)
+        except (KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
+            raise RuntimeContractError('subtitle_format_current_source_unproven') from exc
+    if detail.get('job_key') not in keys or {value[:16] for value in seen} != set(keys):
+        raise RuntimeContractError('subtitle_format_trip_claim_unproven')
 
 
 def _planned_change_receipt(config: Any, root_cause: Mapping[str, Any]) -> dict[str, Any]:
@@ -1558,7 +1664,11 @@ def _planned_change_incident(
             raise RuntimeContractError('reconciliation_frozen_policy_changed')
         if breaker != request.get('breaker'):
             raise RuntimeContractError('reconciliation_breaker_evidence_changed')
-        if root_cause.get('incident_kind') in _RECONCILIATION_INCIDENT_KINDS:
+        if root_cause.get('incident_kind') == 'subtitle_format_dispatch':
+            _validate_postprocess_recovery_proof(config, evidence, root_cause)
+            _validate_subtitle_format_incident(connection, config=config, request=request,
+                                               root_cause=root_cause, breaker=breaker)
+        elif root_cause.get('incident_kind') in _RECONCILIATION_INCIDENT_KINDS:
             _validate_postprocess_recovery_proof(config, evidence, root_cause)
             incident_key = ('language_vote_incident' if root_cause.get('incident_kind') == 'source_language_vote_mismatch' else
                             'line_repair_incident' if root_cause.get('incident_kind') == 'line_repair_evidence_incomplete'
@@ -2419,6 +2529,52 @@ def _prepare_pending_recovery_resume(
     }
 
 
+def _committed_planned_recovery(
+    connection: sqlite3.Connection, evidence: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Find an exact committed DB intent before retrying its file handoff.
+
+    A process may die after COMMIT but before the breaker file is retired. Its
+    durable event is the authority; making a new UUID on replay is not recovery.
+    All normal live, source, hold, snapshot and incident checks still run.
+    """
+    root = evidence['root_cause']
+    rows = connection.execute(
+        "SELECT payload_json FROM m2_recovery_events WHERE event_type='CONTROLLED_BREAKER_RECOVERY' "
+        "AND json_extract(payload_json,'$.old_gate_id')=? AND json_extract(payload_json,'$.new_worker_sha')=? "
+        "ORDER BY created_at DESC LIMIT 2",
+        (root.get('expected_old_gate_id'), evidence.get('worker_commit_sha')),
+    ).fetchall()
+    if not rows:
+        return None
+    if len(rows) != 1:
+        raise RuntimeContractError('committed_recovery_identity_ambiguous')
+    record = json.loads(rows[0][0])
+    epoch = record.get('recovered_at_epoch')
+    if (not isinstance(epoch, (int, float)) or not math.isfinite(epoch) or epoch <= 0
+        or record.get('contract') != BREAKER_RECOVERY_CONTRACT
+        or record.get('recovery_mode') != root.get('mode')
+        or record.get('planned_change_receipt_sha256') != root.get('planned_change_receipt_sha256')
+        or record.get('planned_deployment_handoff') != root.get('expected_deployment_handoff')
+        or record.get('recovery_incident_kind') != root.get('incident_kind')
+        or (root.get('incident_kind') and record.get('incident_root_cause_evidence') != dict(root))
+        or not isinstance(record.get('completion_runtime'), Mapping)
+        or any(evidence.get(key) != value for key, value in record['completion_runtime'].items())
+        or not str(record.get('recovery_record_id') or '').startswith('m2breakerrec_')
+        or record.get('production_resources_affected') is not False):
+        raise RuntimeContractError('committed_recovery_evidence_mismatch')
+    return record
+
+
+def _write_recovery_evidence_once(path: Path, payload: Mapping[str, Any]) -> None:
+    """Export/resume one immutable evidence file without rewriting its history."""
+    if path.exists():
+        if _read_json(path) != payload:
+            raise RuntimeContractError('committed_recovery_export_conflict')
+        return
+    atomic_write_text(path, json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + '\n')
+
+
 def recover_runtime_local(
     config: Any,
     evidence: Mapping[str, Any],
@@ -2528,7 +2684,8 @@ def recover_runtime_local(
             raise RuntimeContractError("planned_change_signature_invalid")
         if root_cause.get('incident_kind') in _RECONCILIATION_INCIDENT_KINDS:
             _validate_postprocess_recovery_proof(config, evidence, root_cause)
-        category = ("SOURCE_LANGUAGE_VOTE_REPAIR" if root_cause.get('incident_kind') == 'source_language_vote_mismatch' else
+        category = ("SUBTITLE_FORMAT_DISPATCH_REPAIR" if root_cause.get('incident_kind') == 'subtitle_format_dispatch' else
+                    "SOURCE_LANGUAGE_VOTE_REPAIR" if root_cause.get('incident_kind') == 'source_language_vote_mismatch' else
                     "LINE_REPAIR_EVIDENCE_REPAIR" if root_cause.get('incident_kind') == 'line_repair_evidence_incomplete'
                     else "ASR_POSTPROCESS_EVIDENCE_REPAIR" if root_cause.get('incident_kind') else "PLANNED_RUNTIME_CHANGE")
     elif collision_mode:
@@ -2628,6 +2785,11 @@ def recover_runtime_local(
         ).fetchone() is not None:
             raise RuntimeContractError("running_work_has_not_reached_safe_boundary")
         before = _durable_recovery_snapshot(connection)
+        committed = _committed_planned_recovery(connection, evidence) if planned_mode else None
+        if committed is not None:
+            if before != committed.get('after'):
+                raise RuntimeContractError('committed_recovery_snapshot_changed')
+            recovery_record_id = committed['recovery_record_id']
         threshold = int(getattr(config, "m2_server_canary_identical_failure_threshold", 3) or 3)
         incident = _planned_change_incident(
             connection, config=config, evidence=evidence, breaker=breaker, now=timestamp,
@@ -2698,7 +2860,8 @@ def recover_runtime_local(
                 connection, root_cause=root_cause, old_worker_sha=old_worker_commit,
                 recovery_record_id=recovery_record_id, now=timestamp,
             )
-        reset_failure_streaks(connection)
+        if committed is None:
+            reset_failure_streaks(connection)
         after = _durable_recovery_snapshot(connection)
         for key in (
             "queue_count",
@@ -2780,12 +2943,15 @@ def recover_runtime_local(
                     "configuration_fingerprint", "decision",
                 )},
             })
-        record_breaker_recovery(
-            connection,
-            recovery_record_id=recovery_record_id,
-            evidence=recovery_evidence,
-            now=timestamp,
-        )
+        if committed is not None:
+            recovery_evidence = committed
+        else:
+            record_breaker_recovery(
+                connection,
+                recovery_record_id=recovery_record_id,
+                evidence=recovery_evidence,
+                now=timestamp,
+            )
         connection.commit()
     except BaseException:
         store.rollback()
@@ -2793,13 +2959,12 @@ def recover_runtime_local(
     finally:
         store.close()
 
+    # Keep the original record/export identities after a DB-to-file interruption.
+    timestamp = float(recovery_evidence['recovered_at_epoch'])
     stamp = datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     log_root = Path(str(getattr(config, "log_path", config.work_path)))
     log_path = log_root / f"m2-production-recovery-{stamp}-{recovery_record_id[-8:]}.json"
-    atomic_write_text(
-        log_path,
-        json.dumps(recovery_evidence, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-    )
+    _write_recovery_evidence_once(log_path, recovery_evidence)
     if planned_mode and _read_json(breaker_path) != breaker:
         raise RuntimeContractError("planned_change_breaker_changed_before_retirement")
     disarmed_state = dict(prior_runtime)
@@ -2834,10 +2999,7 @@ def recover_runtime_local(
                    "latest_trip": breaker.get("latest_trip") or occurrence}
     if planned_mode and _read_json(breaker_path) != breaker:
         raise RuntimeContractError("planned_change_breaker_changed_before_archive")
-    atomic_write_text(
-        archive_path,
-        json.dumps(breaker, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
-    )
+    _write_recovery_evidence_once(archive_path, breaker)
     breaker_recovery_record = {
         "contract": BREAKER_RECOVERY_CONTRACT,
         "recovery_record_id": recovery_record_id,
