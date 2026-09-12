@@ -2,6 +2,34 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+Sep12 15:42UTC: ad5bdade07d000ca28160cc38b919120700f10af is actually deployed
+and controlled recovery completed ARMED. Deployment20260912T152306Z-2976210 exit0;
+actual-image340 tests, real collection metadata replay/Docker restart and fresh
+7/7 breakers PASS.69 holds/UNPROVEN retained,0 new handoff differences;6850
+recoverable/7225 retained identities are not deliveries. Old Gate145452 is
+INVALIDATED_BY_RUNTIME_CHANGE with all4 members unchanged. Earlier failed
+Gate125703 and immutable20-member summary remain unchanged. New Gate152911 starts
+15:29:11.952471Z/baselinef8f95cbe280c55ab570cbe05/initial0/20; no waiting/backfill.
+One reviewed profile3583 was reconciled through existing metadata APIs, preserving
+provider/season and adding independently verified aliases; reopen/idempotency
+verified. One ordinary3583:6 recovery request submitted, not manually consumed.
+Preflight confirms no validTC/source+17sidecars unchanged/no running target/no
+existing newhash torrent. Need actual server download/extraction, original QC,
+formal manifest/final reread/task convergence/dedup. Formal additions remain
+AI0/download0/extraction0, M2 NOT COMPLETE; no further deployment for these docs.
+Evidence /logs/m2-collection-identity-deploy-20260912T1525/ and
+/logs/m2-collection-target-20260912T1545/.
+Follow-up evidence: public3583 request automatically consumed/newhash admitted,
+but15:43:59 snapshot stalledDL/0bytes/0seeds and no extraction. Existing bounded
+timeout/alternatives retained, not a formal success. AI separately auto-claimed,
+ASR heartbeat+new valid detection checkpoint, safely NEEDS_REVIEW; another scan
+claim followed. claim-evidence-1789227977574137277.json; no new recovery-row dispatch
+or independently verified formal subtitle counted.
+Final bounded15:49:46 check confirms actual download21,595,226bytes/0.4626%,
+2seeds/downloading; earlier zero-peer wait resolved automatically. No extraction
+job yet; source not complete/formal0. Continue at exact-source completion or
+durable failure, do not resubmit or wait for the whole download/Gate.
+
 Sep12 15:20UTC: reproducible collection-prefix/range alias defect, isolated fix
 only in mikan_worker.py. Independent catalog aliases recorded, Production mapping
 not changed. Local27/server300 and real metadata Docker restart PASS at collection-

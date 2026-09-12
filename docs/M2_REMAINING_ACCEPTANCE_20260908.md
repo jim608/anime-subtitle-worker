@@ -1,5 +1,139 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-12 15:42 UTC — collection repair deployed; one verified-source request
+
+**M2 NOT COMPLETE.** New verified formal additions remain **AI0 / download0 /
+extraction0**. Prior accepted M3 engineering and AI1 remain separate. A source
+selection test, metadata correction or request is not a formal delivery.
+
+### Actual deployment and retained Gate disposition
+
+- Worker **ad5bdade07d000ca28160cc38b919120700f10af**, image
+  `sha256:e3d2d7258177663f5068c66736d3b0499566ad4cc096e4f50c4a764c412148e1`,
+  source revision `ae0e07c79a8947f2af53d53264c1506f48dac2643a0e306748aacbfeceab29b1`.
+- WebUI **175a02a7bad46e0b6fa2372c59f39e8dd272911e** and image/source unchanged.
+- Existing safe-update-stack deployment **20260912T152306Z-2976210**, exit0;
+  matching backup `/work/deployment_backups/20260912T152306Z-2976210/` retained.
+  Owned bounded drain reached idle; no forced termination or another actor's
+  pause release. Coordinator ended normally; do not relaunch it.
+- Actual-image `python -B -m unittest test_mikan_release_alias_identity
+  test_mikan_source test_mikan_worker test_mikan_matcher
+  test_mikan_season_mapping_recovery test_mikan_enqueue_fairness
+  test_mikan_import_validation test_m2_planned_runtime_change
+  test_m2_authorized_reconciliation -q`: **340 PASS**. Earlier local27/server300
+  overlap and must not be summed. Real two-source metadata replay and isolated
+  Docker restart PASS, not downloaded content or a Production restart test.
+- Fresh isolated breakers **7/7 PASS**, Production resources affected=false:
+  `/logs/m2-guardrail-fi-20260912T152903146038Z-ae21497e/result.json`.
+- Reconciliation **m2-recon-collection-identity-20260912T1525**, receipt
+  `/logs/m2-reconciliation-m2-recon-collection-identity-20260912T1525.json`, SHA
+  `83507f680a88da9cb9042d063ab5c837a46847d40a1fe37142781947cf9f2610`;
+  linked planned receipt SHAe4d7da2ddf6071b55eb5ea1ee3532e3d0213bb19996364f57eafa25d4186947c
+  and previous alias reconciliation. **69 holds unchanged,0 new handoff deltas,
+  6850 recoverable/7225 retained identities**. Historical preservation **UNPROVEN**.
+- Controlled recovery **m2breakerrec_98561cf135154100b5ed78905e7344e6** completed
+  ARMED/unpaused/no reconciliation hold. Full log
+  `/logs/m2-production-recovery-20260912T152906299832Z-5e7344e6.json`, SHA
+  `5445e776522e9bda37883fabb6050ee416fe70b3683d9dfbac45d19770a38f64`.
+
+Full logs `/logs/m2-collection-identity-deploy-20260912T1525/`.
+Its read-only `gate-closeout-1789227413642370224.json` verifies the old
+Gate145452 is **INVALIDATED_BY_RUNTIME_CHANGE**, all4 enrolled member rows
+unchanged. Original Gate125703 remains SETTLED/FAIL6strict/14review with original
+summarySHAf13782698addc2936de1c992801f8290e56a2ca21eeff8333b5ea3929b05b4a3 unchanged.
+No results were transferred or members replaced.
+
+The actual runtime change created **m2-gate-20260912T152911952471Z-5cab10fdae**,
+start **2026-09-12T15:29:11.952471Z**, baseline
+**m2-guardrail-v1:f8f95cbe280c55ab570cbe05**, initial0/20. One bounded closeout
+read observed ACTIVE0 enrolled/0 settled, not a later/current completion claim.
+Configsha11198e9e15070bc5667dcc53e93adc99dbb73366eaa603e27b227bab57453bb3,
+schema1/frozen-first20 policy unchanged. No Gate wait or rebuild for documentation.
+
+### Verified profile reconciliation and actual target preconditions
+
+Existing historical target **3583:6**, anonymous obligation identity preserved
+in `/logs/m2-collection-target-20260912T1545/preflight.json`, still lacks a valid
+TC subtitle. Four TC-classified old sidecars fail original QC (920 overlaps and
+513 consecutive repeats in the sampled1292-cue report); their presence is not a
+valid completed target. No file was removed to create a missing-subtitle case.
+Current source hash/size/mtime and all17 old sidecar hashes/mtime match the retained
+before-evidence, and no target job was running. Exact qB query for new collection
+e22d51b05c55f0b9ddccba88daf42a2d2d8a5d36 returned0; it is not an old failed hash.
+This query neither added a torrent nor touched any unrelated qB task.
+
+The existing metadata API reconciliation record
+**m2-profile-alias-3583-20260912** preserves providerAniList178701/Mikan3583,
+season1/year2025/confidence1 and other original fields; adds independently verified
+catalog aliases and uses the existing manual/locked-profile mechanism to preserve
+them against automatic replacement. Prior profile and catalog evidence are retained
+in profile-intent/profile-applied records and the existing metadata store's meta
+record. No QC, model, runtime configuration, Queue or source hold was changed.
+This is new evidence of current identity, not proof of historical continuity.
+
+`/logs/m2-collection-profile-fixture-20260912-gTZQIm/` verifies real isolatedSQLite
+interrupted-write rollback, incorrect provider/season refusal, Docker restart,
+idempotent events and automatic-update preservation. The applied API helper and
+catalog match the frozen fixture bytes. Actual Production reopen/replay then
+verified changed=false, and the effective normal mapping selects the reviewed
+new collection while retaining the old failed hash exclusion.
+
+Exactly one public `request_replacement_enqueue([MikanReplacementTarget(3583,6)])`
+was submitted; request-intent/request.json are retained under the target log
+directory. **No manual consumer, torrent add, extraction or publication** was
+performed by the diagnostic helper. Existing server admission, live-source search,
+retry/backoff, matching, extraction and original QC remain responsible for processing.
+Do not resubmit the same request simply because no formal output is yet observed.
+
+### Bounded server continuation evidence
+
+At15:49:46UTC, the final bounded check
+source-status-1789228186518775494.json confirms **downloading**, progress
+0.004625838350943413 (0.4626%), **21,595,226 bytes received**,80,248bytes/s and2
+seeds. The peer wait below has therefore ended: actual download byte transfer
+is now proven, not just request/qB acceptance. The full source is still incomplete
+and no extraction job exists yet; formal additions remain0. Do not call this a
+continuing zero-peer outage, resubmit the request, or wait for the whole collection.
+The existing server watches completion and owns extraction/retry/alternatives.
+Next verification trigger is this exact source completing or entering a durable
+failure/review state; preserve incomplete content and original safety checks.
+
+At15:43:59UTC, source-status-1789227839235600205.json proves the server consumed
+the request (remaining targets empty) and qB added the new collection at
+1789227728/15:42:08UTC. Pending state points to the new hash; old failed hash is
+retained. The single-source snapshot is **stalledDL,0 downloaded bytes,0 speed,
+0 seeds**, with no extraction job. Thus actual source admission is proven, but
+downloaded content, extraction and publication are not. This is a current peer/
+availability wait at that earlier timestamp, not permanent absence of subtitles, bad media, or a global
+outage. Do not re-add/resubmit. Actual configuration gives180s start grace,
+300s metadata/unhealthy grace,600s post-progress stall window and300s watch interval;
+existing normal source expiry/alternative policy owns the next disposition.
+The old217e source failure was mapped_path_missing/source_video_missing, not
+content corruption; its old path is still absent and the failed hash is retained.
+
+Separate AI continuation evidence:
+claim-evidence-1789227977574137277.json under the deployment directory proves
+aiobl_acaa2fa624de971dc93d884e02d8328be04b2407c83478182f97b0a120a83c55
+claimed at1789226956.3468828, entered ASR with heartbeat1789227375.60324 and a
+new hash-valid detection checkpoint
+e24ebfb796ad7d835cc5ce6e874f94bbdcfa2824fb8eaa7aa195c1132d84d10b.
+It correctly ended NEEDS_REVIEW, not a false completed job. Subsequent ordinary
+scan obligationaiobl_c7d4e43ecd64ab7aa6e2e51d5a8aefb41cc125907ea418c11c31a22788b524a6
+claimed1789227443.2982023 and ran detection/postprocessing/QC with valid checkpoints.
+It is not independently counted as a new formal subtitle delivery. Neither
+attempt is a new m2_recovery_jobs dispatch (no related row); normal AI automatic
+processing, historical recovery dispatch and download are distinct evidence.
+Both sources are outside holds. Bounded host process evidence
+/logs/m2-collection-processes-20260912T1548.log shows the Worker process alive and
+an mkvextract child; that child alone is not attributed to the3583 download.
+
+Remaining: complete the supported download,
+episode/language validation and original QC; then safe formal publication with
+manifest/final reread/source checksum/task convergence and real dedup evidence.
+If this source is unavailable or fails QC, retain bounded failure/backoff and
+report the exact block. Do not count the isolated selection/profile/request as
+download or extraction acceptance. No M3/M4 work or further code change this closeout.
+
 ## 2026-09-12 15:20 UTC — independent collection identity and targeted parser candidate
 
 Production remains c65d856/ARMED,69 holds; no new deployment or formal subtitle.

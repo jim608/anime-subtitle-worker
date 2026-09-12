@@ -1,5 +1,47 @@
 # M2 Production Observation
 
+## 2026-09-12 15:42 UTC — deployed collection identity baseline and retained cohorts
+
+Actual Workerad5bdade07d000ca28160cc38b919120700f10af, WebUI175a02a unchanged;
+safe deployment20260912T152306Z-2976210 and controlled recovery exit0. Actual-image
+340 tests, isolated real metadata restart and fresh7/7 breakers PASS. ARMED,
+own admission pause released,69 source holds unchanged,0 new handoff differences,
+preservation UNPROVEN. Full evidence `/logs/m2-collection-identity-deploy-20260912T1525/`.
+
+Reconciliation m2-recon-collection-identity-20260912T1525 retains original receipt
+and previous reconciliation.6850 recoverable/7225 retained identities are not
+deliveries. Read-only gate-closeout-1789227413642370224.json verifies Gate145452
+INVALIDATED_BY_RUNTIME_CHANGE, all4 members unchanged; original Gate125703 remains
+SETTLED/FAIL6strict/14review with its original immutable20-member summary unchanged.
+No member replacement, historical backfill or different-version score transfer.
+
+Actual runtime change created m2-gate-20260912T152911952471Z-5cab10fdae, start
+2026-09-12T15:29:11.952471Z, baseline m2-guardrail-v1:f8f95cbe280c55ab570cbe05,
+initial0/20. One bounded read observed ACTIVE0/20; no wait or final progress claim.
+Configuration fingerprint11198e9e.../schema1 and frozen-first20 rule unchanged.
+
+One independently verified metadata profile correction and one ordinary3583:6
+recovery request are recorded at `/logs/m2-collection-target-20260912T1545/`.
+Original provider/season/fields retained; source+17sidecars unchanged at preflight,
+no validTC output or active target, new collection absent from qB/failed hashes.
+No manual consumer or formal publication. This metadata evidence is not a runtime
+deployment, Gate rebuild or historical preservation upgrade. Formal additions
+AI0/download0/extraction0; prior M3 AI1 separate. M2 NOT COMPLETE until real formal
+download/extraction artifacts, original QC/manifest/final reread/dedup are proven.
+
+Subsequent target-bound source-status-1789227839235600205.json confirms automatic
+request consumption and newhash admission at15:42:08UTC; at15:43:59 its status is
+stalledDL/0bytes/0seeds, no extraction job. Preserve normal bounded waiting and
+source alternatives, never treat this as a completed download. Separate actual
+AI claim/ASR heartbeat/detection checkpoint and a successor scan claim are retained
+in claim-evidence-1789227977574137277.json. First AI attempt safely NEEDS_REVIEW;
+neither is a new historical recovery-row dispatch or verified new formal delivery.
+No Gate progress query was added for these source/claim observations.
+Final bounded check15:49:46UTC source-status-1789228186518775494.json shows real
+download progress:21,595,226bytes/0.4626%,2seeds,downloading. Earlier zero-peer wait
+resolved automatically; no resubmission. Full source not complete/no extraction
+job/formal0. Existing server continues; no backlog/download-completion/Gate20 wait.
+
 ## 2026-09-12 15:20 UTC — collection parser candidate; no runtime/Gate change yet
 
 Current c65d856/ARMED/69holds and Gate145452 remain. A bounded read observed4
