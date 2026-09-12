@@ -2,6 +2,11 @@
 
 ## 2026-09-12 18:03 UTC — bounded live follow-up, no Gate replacement
 
+Closeout18:08: progress-identity fixd09754248581a226e3a17444a9a9656622b5a864 is pushed
+with257 server testsPASS, NOT deployed. Fresh readonly idle check refuses
+planned_change_work_not_idle; no pause or runtime/Gate mutation. Latest formal
+check1789236502464669515 finds0 post-request manifests/0 verified deliveries.
+
 Same Worker72f6e5e/ARMED,70holds/UNPROVEN and Gate173915. Latest bounded Gate
 ACTIVE2 enrolled/1 settled, not20 or acceptance. Two independent AI claims were
 observed with real transcription stages; first claim1789235097 precedes optional

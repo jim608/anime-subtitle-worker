@@ -2,6 +2,11 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+Closeout18:08: progress fixd09754248581a226e3a17444a9a9656622b5a864 pushed/257serverPASS,
+notdeployed: freshplanned_change_work_not_idle, existingtranscription preserved,
+no newpause. Actual72f6e5e/ARMED/currentGateunchanged. Finalformalcheck0newmanifest;
+thethirdsource'sJune successrowisnotnewdelivery. Nextsafeidlehandoff+realTCproof.
+
 Sep12 18:03UTC: M2 NOT COMPLETE. Actual72f6e5e/ARMED/70holds, sameGate173915
 ACTIVE2/1 at bounded snapshot. Real historical3583:2 retained-download claimattempt2
 and automatic nextsource35a7 download393129896bytes/100%+extract both failed original

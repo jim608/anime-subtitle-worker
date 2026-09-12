@@ -2,6 +2,17 @@
 
 ## 2026-09-12 18:03 UTC — real automatic claims; QC refusal and progress-identity repair
 
+Closeout18:08: progress-identity repair committed/pushed
+**d09754248581a226e3a17444a9a9656622b5a864**, NOT deployed. Its candidate source
+hashaba88500ab3d5eb56aae35d4b5a1d65732b4e8a0b6e7f5f5b33884635e014ac0 matches the
+257-pass server receipt. A single fresh idle check refused planned_change_work_not_idle:
+/logs/m2-progress-identity-20260912T1758/idle-preflight-1789236410565219695.json.
+No new pause, latch action, container restart or Gate reset was made for this fix.
+Live process evidence /logs/m2-progress-runtime-processes-20260912T1808.log retained.
+Latest formal check1789236502464669515 still finds0 post-request manifests/0 verified
+formal outputs. Its success extraction row is the third source's oldJune record,
+not a new delivery. Further formal acceptance awaits valid current source/output.
+
 **M2 NOT COMPLETE; new verified formal AI0/download0/extraction0.** Runtime remains
 72f6e5e4c6a06aa418045ebef645480741da7112/ARMED; WebUI unchanged,70holds/UNPROVEN.
 New Gate173915 latest bounded snapshot: ACTIVE2 enrolled/1 settled, not accepted.
