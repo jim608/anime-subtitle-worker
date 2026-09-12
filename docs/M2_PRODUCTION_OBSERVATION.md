@@ -1,5 +1,24 @@
 # M2 Production Observation
 
+## 2026-09-12 16:02 UTC — bounded source/file evidence, no Gate transition
+
+One actual read15:57UTC confirms Workerad5bdad/ARMED/runtime_baseline_match,
+69 holds and unchanged Gate152911, ACTIVE2 enrolled/2 settled. No final automatic
+summary yet; no wait, member replacement or mixed-runtime result. Evidence:
+/logs/m2-collection-target-20260912T1545/mapped-files-1789228620151412337.json.
+Actual download801,386,877bytes/17.183%, correct Worker mapping and unique EP06
+selection. EP06 remains incomplete by qB despite its allocated full stat_size;
+no partial-media extraction or publication was attempted.
+
+Read-only formal verification correctly records0 manifests/0 extraction jobs,
+WAITING_FOR_FORMAL_PUBLICATION in formal-verification-1789228858599669449.json.
+Receipt checker11 local/server tests PASS, not formal artifact proof. Existing
+runtime/QC/admission, Gate and69 holds unchanged; new formal AI/download/extraction0.
+No new deployment/config/profile/request or M3/M4 action. M2 remains incomplete.
+Existing target resolver matched the exact S01E06 formal path through the episode
+index at16:06UTC; metadata/path-only evidence target-resolution-1789229183446329828.json.
+It does not add an extraction, formal output or Gate credit.
+
 ## 2026-09-12 15:42 UTC — deployed collection identity baseline and retained cohorts
 
 Actual Workerad5bdade07d000ca28160cc38b919120700f10af, WebUI175a02a unchanged;

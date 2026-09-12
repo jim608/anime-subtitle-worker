@@ -1,5 +1,61 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-12 16:02 UTC — live file mapping and fail-closed artifact checks
+
+M2 NOT COMPLETE; new verified formal AI0/download0/extraction0. No runtime code,
+configuration, deployment, metadata correction or recovery resubmission this step.
+Git3174da9 is the prior docs commit, not the actual runtime SHA.
+
+One exact-source read at15:57UTC:
+/logs/m2-collection-target-20260912T1545/mapped-files-1789228620151412337.json.
+Actual Workerad5bdad/runtime_baseline_match/ARMED,69 holds and same Gate152911.
+Gate ACTIVE2 enrolled/2 settled; no final automatic summary exists yet. This is
+a bounded snapshot, not Gate acceptance. An unrelated AI remediation job is
+running; it was not interrupted and its work is not attributed to this download.
+
+The new collection is actively downloading:801,386,877 bytes/17.183%,12 files.
+The existing mapping resolves qB /anime to Worker /qbit_subtitle_extractor;
+the collection directory exists and the existing episode selector returns exactly
+the EP06 MKV for pending episode6. That file is readable, but qB marks it only
+16.3033% complete. Its stat_size already equals283,464,270bytes because allocation
+is not completion proof. No ffprobe/decoder/extraction was run on partial content,
+no file priority/timeout was changed, and no torrent was re-added.
+
+At16:06UTC, the existing target resolver also returned the exact expected S01E06
+formal library path through its indexed-target branch, using retained actual qB
+file metadata/current pending entry/current verified profile:
+/logs/m2-collection-target-20260912T1545/target-resolution-1789229183446329828.json.
+TARGET_RESOLUTION_PASS is pre-dispatch path/metadata matching, not proof of
+complete media or a completed extraction stage. No partial-media decoding,
+global episode fallback, new source request or publication was performed.
+
+Added operational read-only helpers (under ignored work/, not deployed code):
+m2_collection_mapped_files_probe.py and m2_collection_formal_probe.py, with
+test_m2_collection_formal_probe.py. The formal checker examines only the exact
+target's publication-version directory and exact download/extraction records.
+It requires the actual official manifest schema/naming contract, a post-request
+completed receipt, unique complete output set, final hashes/parse/original QC/
+language/source analysis, unchanged target source and existing subtitles. Replacing
+a previously QC-invalid sidecar requires its prior-invalid evidence and an intact
+version backup; it separately records new output paths versus newly valid targets.
+It never modifies media, metadata, Queue, Gate, receipts or runtime.
+
+Local and actual-server receipt checks **11/11 PASS** (same suite, not additive):
+/logs/m2-collection-formal-check-tests-20260912T1602.log.
+These exercise wrong-target/pre-request/prepared/schema/order/duplicate/hash/path/
+TC-language refusals and valid TC/SC manifest shapes; they are not actual subtitle
+delivery evidence. The live one-shot checker then correctly returned
+WAITING_FOR_FORMAL_PUBLICATION,0 manifests/0 extraction jobs:
+/logs/m2-collection-target-20260912T1545/formal-verification-1789228858599669449.json.
+Even future file-check success is explicitly PENDING_SOURCE_LINEAGE_LEDGER_AND_REAL_DEDUP,
+not full acceptance; remaining source/season/episode linkage, terminal retry state
+and actual duplicate-trigger evidence must still be inspected.
+
+Continue from source completion or a real durable failure; do not repeatedly
+resubmit or poll the full Queue. Existing server handles download/extraction/
+recovery. Do not turn this normal in-progress transfer into a permanent-source
+block or manufacture a valid output. No M3/M4 or Gate20 waiting.
+
 ## 2026-09-12 15:42 UTC — collection repair deployed; one verified-source request
 
 **M2 NOT COMPLETE.** New verified formal additions remain **AI0 / download0 /

@@ -2,6 +2,18 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+Sep12 16:02UTC: read-only exact-source mapping verified on ad5bdad/ARMED/69holds.
+Download801,386,877bytes/17.183%; EP06 correctly selected/readable but only16.3033%
+complete despite full allocated file size. No partial-media decoding/publication.
+Same Gate152911 ACTIVE2/20, no final summary/wait. Read-only formal checker with
+11 local/server receipt checks PASS; live result0 manifests/0 extraction jobs,
+WAITING_FOR_FORMAL_PUBLICATION. Actual source-lineage/ledger/dedup remain mandatory
+after future file checks. No runtime/config/deploy/new request; M2 NOT COMPLETE.
+Details and full server evidence in latest remaining-acceptance doc.
+Existing resolver also matched exact S01E06 via indexed target at16:06UTC
+(target-resolution-1789229183446329828.json), without partial-media decoding or
+global fallback. Metadata/path match is not an executed extraction/publication.
+
 Sep12 15:42UTC: ad5bdade07d000ca28160cc38b919120700f10af is actually deployed
 and controlled recovery completed ARMED. Deployment20260912T152306Z-2976210 exit0;
 actual-image340 tests, real collection metadata replay/Docker restart and fresh
