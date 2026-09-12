@@ -2,6 +2,19 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+Sep12 15:00UTC: c65d8565864517fa8b5b95cb636aa060f4721405 actually deployed by
+safe-update-stack20260912T144844Z-2672655; controlled recovery ARMED,69holds retained,
+0new handoff deltas,6854 recoverable/7221 retained identities (not deliveries).
+Actual-image329/real metadata Docker restart/fresh7 breakers PASS. Auto AI claim
+b62db841... enteredASR with hash-valid detection checkpoint; no new historical
+recovery-lane dispatch or formal delivery claimed. Full logs /logs/m2-alias-identity-20260912T1450/.
+Old Gate125703 remains SETTLED FAIL6strict/14review with all20/evidence unchanged.
+Actual runtime change alone created Gate145452, baseline9955ddd46a660dfd147e5d42,
+start14:54:52.910031Z/initial0/20; do not wait, backfill or rebuild for docs.
+Three more known missing-TC targets3583:6/3552:12/3368:12 are source/identity blocked;
+no torrents added or formal subtitles published. Next requires a safe complete
+source and real formal artifact/QC/manifest/dedup proof. M2 NOT COMPLETE.
+
 Sep12 14:47UTC: exact-alias refusal reason finalized; local16/server289 and
 real metadata isolated Docker restart PASS at candidate-c1G520. Runtime remains
 1d5d737/ARMED/69holds; earlier alias handoff stopped before any pause/deployment

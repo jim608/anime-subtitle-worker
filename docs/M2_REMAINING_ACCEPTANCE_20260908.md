@@ -1,5 +1,114 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-12 15:00 UTC — c65d856 deployed and recovered; formal download still blocked
+
+M2 NOT COMPLETE. New verified formal additions: **AI0 / download0 / extraction0**.
+The prior accepted M3 AI1 and unaffected engineering evidence remain separate.
+This round completed actual deployment/recovery, not formal subtitle acceptance.
+Final read-only check at2026-09-12T15:03:00Z again verifies the deployed source/
+container identity, ARMED, paused=false and reconciliation_hold=false:
+`/logs/m2-alias-identity-20260912T1450/runtime-final-20260912T1503.json`.
+It did not query Queue or Gate progress. Following closeout edits are docs-only.
+
+### Deployed repair and controlled handoff
+
+- Worker **c65d8565864517fa8b5b95cb636aa060f4721405**, image
+  `sha256:635dde4681fd9193a3645a285f1fda804e0e101df1e94eac7498fc17b643bcae`,
+  source revision `a212a57dc2d0bf36478df122b12ae03ae524f360f4d309b1fa8046ac13e379c1`.
+- WebUI **175a02a7bad46e0b6fa2372c59f39e8dd272911e**, image/source unchanged.
+- Existing safe-update-stack deployment **20260912T144844Z-2672655**, exit0,
+  deployment_completed; rollback backup `/work/deployment_backups/20260912T144844Z-2672655/`.
+  Bounded owned drain observed idle on its first check. No job was killed or other
+  actor's pause released. Built-in legacy-report migration reported2457 directories,
+ 0 matched/migrated/deleted; no additional media-library inventory was launched.
+- Server candidate289 tests and actual-image329 tests PASS (overlapping suites,
+  not additive). Real seven-release metadata replay and isolated Docker restart
+  PASS on the deployed image; unresolved mirrors and ambiguous pools still refuse.
+  Fresh isolated breakers **7/7 PASS**, Production resources affected=false:
+  `/logs/m2-guardrail-fi-20260912T145446011096Z-b69fd2d3/result.json`.
+- Reconciliation **m2-recon-alias-identity-20260912T1450**,
+  `/logs/m2-reconciliation-m2-recon-alias-identity-20260912T1450.json`, SHA
+  `0fb0d2cffb77e5061769ab30b84fb151916920b04a572202dfea4430998f062f`.
+  Linked original planned receipt SHA038000e6aa77027055be54a85ea36939322b0784a1e8439c46c2bf7b2b104eee
+  and prior opencc-history reconciliation. **69 holds unchanged;0 new handoff
+  differences;6854 recoverable and7221 retained identities**, not deliveries.
+  Historical preservation remains **UNPROVEN**.
+- Controlled recovery **m2breakerrec_cfaadfbaa3d746b8b58f631332f4e224** completed
+  ARMED, own admission pause released. Recovery log
+  `/logs/m2-production-recovery-20260912T145449026241Z-32f4e224.json`.
+
+Full handoff logs and actual-image attestations:
+`/logs/m2-alias-identity-20260912T1450/`. The prior1420 attempt remains a preserved
+pre-pause idle refusal, never relabelled a successful deployment.
+
+### Frozen Gate and actual automatic processing
+
+`gate-closeout-1789224952046598162.json` verifies original Gate125703 still
+SETTLED/FAIL, all20 members byte-values unchanged, original receipt and auto-summary
+SHAf13782698addc2936de1c992801f8290e56a2ca21eeff8333b5ea3929b05b4a3 unchanged.
+Its6 strict/14 review result remains a failed cohort, never backfilled.
+
+The actual runtime change created new Gate
+**m2-gate-20260912T145452910031Z-b3f0643035**, start
+**2026-09-12T14:54:52.910031Z**, baseline
+**m2-guardrail-v1:9955ddd46a660dfd147e5d42**. Initial0/20 and one bounded
+post-handoff snapshot0 enrolled/0 settled; not a claim of current or final progress.
+Configuration fingerprint remains
+`sha256:11198e9e15070bc5667dcc53e93adc99dbb73366eaa603e27b227bab57453bb3`,
+decision schema1, frozen-first20 policy unchanged. No Gate wait or score transfer.
+
+`claim-evidence-1789224952927312951.json` proves automatic AI claim
+**aiobl_b62db841c020460e7d098269f9cd4ca0bc49257b48741ac33fc62e3b1788bf37**,
+attempt aiatt_4ba906b7906a441156e44c0f0352c7d91d36272f6006f2c104084e58b8b1e026,
+claimed1789224897.7364092 from auto_review_remediation. Actual job
+ae9bbe8bd71b4e7c98049ce4252bd4d0 entered ASR with heartbeat1789224906.622289.
+Its newly succeeded SUBTITLE_DETECTION checkpoint is nonempty and hash-valid
+(`1f6a71eb67ef82aa90c17008f8b522fc347aaad5397b67b7d25410afe92ef4e4`);
+ASR's checkpoint is not yet populated. Source stat matches job. No m2_recovery_jobs
+claim row exists for this attempt: this is **normal automatic AI remediation**,
+not proof of a new historical-recovery-lane dispatch or a download/extraction claim.
+All69 held paths still fail the existing publish guard, held post-start claims0.
+No enqueue, claim, historical retry or checkpoint is counted as a new delivery.
+
+### Final bounded three-case download check
+
+All three targets were already in the frozen historical failure inventory, each
+has exactly one unchanged current indexed target, no hold/running claim at check,
+and no valid TC sidecar. No full inventory or new torrent/request was created.
+
+| Historical obligation | Retained/download/source evidence | Disposition |
+| --- | --- | --- |
+| 3583:6 | Missing-target144501; source144557: exact old hash absent and saved complete file absent; primary1 eligible already failed; fallback2 includes one new collection hash but unknown Chinese aliases | Preserve matching review; needs independently verified alias/source identity, not a forced selection |
+| 3552:12 | Missing-target144713; source145553: two saved paths/hashes absent; primary2 eligible both failed; fallback4 consists of those hashes and2 unresolved mirrors | Wait for an eligible nonfailed source or verified retained content; mirrors cannot bypass failed-hash dedup |
+| 3368:12 | Missing-target145624; source145804: saved path/hash absent; primary2 eligible both failed; fallback2 is failed hash plus unresolved mirror | Same bounded alternative-source policy; no re-add of failed hashes |
+
+Full missing-target reports `/logs/m2-known-missing-target-20260912T144501758452Z/`,
+`...T144713157647Z/`, `...T145624802656Z/`; full source reports
+`/logs/m2-known-source-reuse-20260912T144557477366Z/`, `...T145553501124Z/`,
+`...T145804705838Z/` (each result.json). All six fallback providers answered;
+no global source outage or corrupt-media finding is supported. Target hashes,
+mtime and existing sidecars remained unchanged. No valid acquired source reached
+extraction/QC/publication, therefore there is no new formal manifest to verify.
+
+The earlier1765/3100/3606 requests were all consumed automatically (remaining
+request targets=[]), with existing failed hashes retained and retry/backoff
+counters advanced. Evidence
+`/logs/m2-known-target-controlled-request-20260912/consumer-observation-1789225000768231751.json`.
+This proves source-stage continuation only. The normal due-known-episode mechanism
+and bounded round-robin discovery remain enabled; a due timestamp is not a promise
+of immediate claim in the next300-second watch interval. Do not resubmit these
+requests or reinterpret source absence as permanent no-subtitle/Whisper authority.
+
+### Remaining acceptance boundary
+
+The blocking item is still **one trustworthy complete download, original parse/QC
+PASS, safe new formal subtitle/manifest, final reread and task/dedup convergence**.
+Continue only when a known source becomes newly eligible/available or independent
+matching evidence resolves a retained candidate. Keep alternatives/backoff and
+unrelated automatic AI processing running. Do not widen QC, remap titles by guess,
+redo this deployment, rebuild Gate for documents, or wait for Gate20. The old
+frozen result has been truthfully disposed; the new cohort is not accepted.
+
 ## 2026-09-12 14:47 UTC — final alias reason verified; runtime still unchanged
 
 M2 NOT COMPLETE. New formal deliveries AI0/download0/extraction0. Worker remains

@@ -1,5 +1,33 @@
 # M2 Production Observation
 
+## 2026-09-12 15:00 UTC — actual alias handoff, original failed Gate retained
+
+Worker c65d8565864517fa8b5b95cb636aa060f4721405 is deployed; WebUI175a02a unchanged.
+Safe deployment20260912T144844Z-2672655 and controlled recovery exit0, actual-image
+329 tests/real metadata isolated restart/fresh7 breakers PASS (overlapping suites).
+Runtime ARMED, own admission pause released,69 holds unchanged,0 new handoff deltas,
+preservation UNPROVEN. Evidence `/logs/m2-alias-identity-20260912T1450/`.
+
+Reconciliation m2-recon-alias-identity-20260912T1450 retains old receipt/Gate;
+6854 recoverable/7221 retained identities are not delivered subtitles.
+Gate125703 remains SETTLED/FAIL,20 fixed members and immutable summary unchanged:
+6 strict/14 review, no replacement or transfer. Only the actual code/image change
+created Gate m2-gate-20260912T145452910031Z-b3f0643035, start
+2026-09-12T14:54:52.910031Z, baseline m2-guardrail-v1:9955ddd46a660dfd147e5d42,
+initial0/20. Configuration fingerprint11198e9e... and decision schema1 unchanged.
+One bounded post-deploy read observed0/20; no waiting or later completion claim.
+
+Automatic AI remediation aiobl_b62db841... was claimed after recovery and entered
+ASR with a newly hash-valid SUBTITLE_DETECTION checkpoint. No held post-start
+claims;69/69 source publish guards refuse. This is not a downloaded subtitle or
+a new m2_recovery_jobs dispatch. Three earlier download requests were automatically
+consumed with no safe source and retained retry evidence; formal additions remain
+AI0/download0/extraction0. Three additional known targets also lack a safe complete
+source. M2 NOT COMPLETE. See latest M2_REMAINING_ACCEPTANCE_20260908.md for exact
+source groups, manifest/QC acceptance blocker, hashes and continuation conditions.
+Final runtime-only evidence `runtime-final-20260912T1503.json` confirms ARMED and
+both own pauses released at15:03UTC, without another Gate/Queue observation.
+
 ## 2026-09-12 14:47 UTC — alias candidate correction, no deployed baseline change
 
 Worker remains1d5d7372f1227e875117d23f8918e778557c1b45, WebUI175a02a,
