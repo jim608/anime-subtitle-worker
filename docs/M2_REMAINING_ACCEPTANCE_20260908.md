@@ -1,5 +1,99 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-12 — frozen Gate failed; bounded formal-download acceptance blocked
+
+M2 remains **NOT COMPLETE**. Current runtime was checked, not redeployed:
+Worker `1d5d7372f1227e875117d23f8918e778557c1b45`, WebUI
+`175a02a7bad46e0b6fa2372c59f39e8dd272911e`, ARMED, admission unpaused,69 holds.
+Tracked HEAD before this documentation step was docs-only `7cfdc41417263b5cb4756eff6215bbe55dccead4`.
+No production program/config/model/QC change, container restart or new Gate.
+Previously verified M3 engineering and its one formal AI delivery remain separate.
+
+### Frozen Gate disposition
+
+Gate `m2-gate-20260912T125703199544Z-56ccb74937`, baseline
+`m2-guardrail-v1:3a892c9880d22f735900edf9`, automatically settled at
+**2026-09-12T13:27:41.630165Z**:20 enrolled/20 terminal,6 strict-verified,
+14 NEEDS_REVIEW,0 FAILED; **safety_gate FAIL**. No members were replaced.
+Read-only disposition: `STRICT_GATE_FAILED_RETAIN_ALL_20_NO_BACKFILL`.
+All20 ordinals/identities are unique and contiguous, claims are after Gate start,
+and every stored runtime baseline matches the frozen version.
+
+Server-generated summary `/work/m2_server_canary_observations/m2-gate-20260912T125703199544Z-56ccb74937.json`
+matches the durable payload and SHA256
+`f13782698addc2936de1c992801f8290e56a2ca21eeff8333b5ea3929b05b4a3`.
+Read-only proof `/logs/m2-frozen-gate-disposition-20260912T133514158715Z/result.json`;
+same directory `review-causes.json` verifies all14 immutable event hashes:
+all stopped at `source_selection_review` / `source_selection_needs_review`.
+Retain those reviews; no failed claim becomes COMPLETED or disappears from cohort.
+The summary's `checkpoint_loss_count=14` counts missing complete stage/checkpoint
+evidence in these early reviews; it is NOT evidence that14 checkpoint files were lost.
+Strict-false checksum/publish predicates likewise do not prove source mutation or
+duplicate publication. Recorded mutation/duplicate/false-completion/breaker/OOM/
+parse-failure/hallucination-block/quarantine incidents are all0 in this Gate.
+Strategies:ASR_JA_AUDIO1,CONVERT_ZH_CN5,OTHER14. No additional delivery counted from
+these metrics without final-location/manifest acceptance. Old Gates/receipts and
+preservation UNPROVEN remain unchanged. No polling/waiting for Gate completion.
+
+### Exact historical download candidates, not a new library inventory
+
+Seven known historical targets were inspected, stopping at each actually missing
+QC-valid TC target.1781:12,2598:1,3155:10,3891:5 already have valid TC and were
+preserved/excluded. Three candidates below have no valid TC; current source strong
+checksums and all existing sidecar checksums/mtimes were verified unchanged.
+
+| Anonymous obligation | Historical key | Actual source-stage blocker |
+| --- | --- | --- |
+| m2dl_8b1351c3ed47933e52f9 | 1765:25 | Known old extraction download/path absent; primary1 eligible candidate is its failed hash; fallback6 releases/0 extractable candidates |
+| m2dl_5ecdfbd9e8d37b4c1d37 | 3100:3 | Exact4 old hashes absent; primary4 eligible candidates all failed hashes; fallback12 releases/3 eligible, all already failed |
+| m2dl_f7d1cebcb5ebf5d19e7c | 3606:11 | Exact2 old hashes absent; primary2 eligible candidates both failed hashes; fallback4 releases/0 extractable candidates |
+
+All three Mikan primary RSS lookups succeeded. For each case all six configured
+fallback providers answered successfully; no provider circuit/error backoff was
+reported in these bounded checks. This is NOT a blanket network failure and does
+not prove permanent lack of subtitles or damaged media. A newly available,
+identity-safe, extractable source not excluded by retained failed-hash policy is
+required before these paths can proceed. Do not re-add those7 failed hashes.
+Evidence terminology: source searches use their normal source-cache bookkeeping.
+The diagnostic `production_writes:false` fields refer to no media/output/job
+mutation during lookup; they must not be cited as proof of zero source-cache writes.
+Only the later public target-bound request intentionally changes recovery scheduling.
+
+Primary evidence `/logs/m2-primary-known-targets-20260912T133319090123Z/result.json`.
+Per-case reuse/source reports:
+`/logs/m2-known-source-reuse-20260912T132811462816Z/result.json`,
+`/logs/m2-known-source-reuse-20260912T133008774602Z/result.json`,
+`/logs/m2-known-source-reuse-20260912T133136464524Z/result.json`.
+Missing-target/QC/checksum evidence is linked in each report. Correction:304:10
+has valid AI TC; authoritative content+translated-QC recheck is
+`/logs/m2-download-focused-20260912T131905666125Z/result.json`. The earlier
+131540 missing-TC result used a source-only classifier that skips AI files and is
+not valid absence evidence. That was a diagnostic-helper error, not a proven
+production defect. Valid AI subtitles were not overwritten.
+
+Three target-bound requests were handed to the existing public
+`request_replacement_enqueue` entry, retaining prior failure hashes and backoff;
+no manual consumer/claim call. Receipt and verified preconditions:
+`/logs/m2-known-target-controlled-request-20260912/`.
+One bounded live read proves the server consumer actually handled1765:25 without
+Codex calling it: retained failed hash, no new download, no-candidate retry1->2,
+next source eligibility2026-09-12T14:38:55.546944Z.3100:3 and3606:11 remain durably
+scheduled in original round-robin order; request next_retry_at
+2026-09-12T13:43:55.721947Z, no error/yield reason. Evidence
+`consumer-observation-1789220416688708133.json` in that directory also verifies all
+three source/old-sidecar checksums and mtimes unchanged. This establishes real
+automatic source-recovery consumption/backoff, NOT a download/extraction claim.
+No Codex-online dependency or immediate repeated source query is needed.
+This is a recovery request, not a download/extraction claim or delivery acceptance.
+Verified additions this turn remain AI0/download0/extraction0; no formal publish,
+manifest or final-output QC PASS can be claimed for these blocked candidates.
+No mock/isolated output, prior AI result or existing subtitle was counted instead.
+
+Next: preserve this settled failed Gate and review reasons; continue only through
+existing source retry/backoff policy until a trustworthy complete QC-valid source
+exists, then perform actual extraction/formal publication/final manifest verification.
+Do not rerun these unchanged source searches or finished deployment tests immediately.
+
 ## 2026-09-12 13:03 UTC — recovery deployed and automatic continuation proven
 
 Worker runtime **1d5d7372f1227e875117d23f8918e778557c1b45**, image

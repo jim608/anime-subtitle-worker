@@ -1,5 +1,37 @@
 # M2 Production Observation
 
+## 2026-09-12 — automatic frozen Gate settlement: FAIL, retained unchanged
+
+Gate `m2-gate-20260912T125703199544Z-56ccb74937`, frozen baseline
+`m2-guardrail-v1:3a892c9880d22f735900edf9`, automatically SETTLED at
+2026-09-12T13:27:41.630165Z.20/20 enrolled and terminal,6 strict-verified,
+14 NEEDS_REVIEW,0 FAILED; safety_gate FAIL. Disposition:
+`STRICT_GATE_FAILED_RETAIN_ALL_20_NO_BACKFILL`. No new Gate, replacement member,
+mixed-version evidence or historical-recovery backfill was introduced.
+
+Authoritative automatic summary:
+`/work/m2_server_canary_observations/m2-gate-20260912T125703199544Z-56ccb74937.json`,
+SHA256 `f13782698addc2936de1c992801f8290e56a2ca21eeff8333b5ea3929b05b4a3`.
+Read-only proof `/logs/m2-frozen-gate-disposition-20260912T133514158715Z/result.json`
+checks summary bytes against durable payload/hash, fixed contiguous unique members,
+post-start claims and equal runtime baselines. `review-causes.json` in the same
+directory verifies all14 immutable terminal events:source_selection_review /
+source_selection_needs_review. Preserve all14 reviews and original strict failures.
+
+Claims after start20; strict6; review14; failed/quarantined/hallucination-blocked/
+output-parse-failure/source-mutation/duplicate-job/duplicate-publish/breaker-trip/
+checkpoint-resume/OOM/false-completed counts0. Strategies ASR_JA_AUDIO1,
+CONVERT_ZH_CN5,OTHER14. Raw checkpoint_loss_count14 means incomplete successful
+stage/checkpoint evidence for the early reviews; actual checkpoint deletion is
+not established. Do not relabel missing strict evidence as a proven incident.
+
+Current Worker1d5d7372f1227e875117d23f8918e778557c1b45/WebUI175a02a unchanged,
+ARMED/unpaused,69 source holds and historical preservation UNPROVEN retained.
+No deployment/configuration or Gate mutation for this read/documentation step.
+The Gate finished independently while bounded source work ran; Codex did not wait
+or poll20. M2 remains NOT COMPLETE: real download/extraction formal acceptance0.
+See M2_REMAINING_ACCEPTANCE_20260908.md for the seven-target bounded disposition.
+
 ## 2026-09-12 13:03 UTC — controlled recovery ARMED; no Gate backfill
 
 Actual Worker1d5d7372f1227e875117d23f8918e778557c1b45, WebUI175a02a unchanged.

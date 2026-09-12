@@ -2,6 +2,19 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+Sep12 bounded closeout: frozen Gate125703 automatically SETTLED20/20 at13:27:41Z,
+strict6/review14, safetyFAIL. Its immutable auto-summary hash and20 fixed members
+were verified; all14 review events are source_selection_needs_review. Preserve
+the failed Gate with no backfill/new Gate. Worker1d5d737,ARMED,69holds unchanged.
+Seven known historical download targets:4 already valid TC preserved;3 truly
+missing TC have no retained complete download and all primary eligible hashes
+already failed. Six fallback providers healthy, no safe new selection. Three
+public target-bound recovery requests retained for existing server backoff.
+New verified formal AI0/download0/extraction0; M2 NOT COMPLETE. No production code,
+config, deployment or M3/M4 change; full evidence and next conditions in latest
+docs/M2_REMAINING_ACCEPTANCE_20260908.md. Do not repeat finished deployment/Gate
+initialization or immediately re-query unchanged blocked source candidates.
+
 Sep12 13:03UTC:1d5d737 deployed safely; actual-image329/two restarts/history28/7FI
 PASS. Controlled recovery ARMED, own pause released,69holds/UNPROVEN preserved.
 New reconciliation m2-recon-opencc-history-20260912; failed predecessor retained.
