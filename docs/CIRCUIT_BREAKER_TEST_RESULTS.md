@@ -1,5 +1,17 @@
 # M2 Circuit Breaker Test Results
 
+## Sep12 recovered-history regression
+
+Deployed0a2b1ab actual-image323 tests, both isolated Docker restarts and7/7 FI PASS,
+but Production controlled recovery safely refused the28 already-recovered reasons.
+Original failed attempt remains `/logs/m2-opencc-runtime-recovery-20260912/host-recovery.log`.
+New positive regression first failed with the exact unresolved-breaker error.
+Candidate local85/server110 PASS; six added tests cover proven retained history,
+receipt hash, retired archive, exact export, and extra earlier/later faults.
+Real unchanged ancestor evidence prefix28 PASS via exact exported DB row plus
+receipt/archive/runtime, at `m2-opencc-history-candidate-20260912-kNqiLx/evidence-only-68lQYA`.
+No Production recovery was invoked by that probe; new correction not deployed.
+
 ## 2026-09-12 — subtitle-format candidate and durable handoff restart
 
 Server `/logs/m2-opencc-recovery-20260911-wVrqzj/`: targeted323 PASS, exit0;

@@ -1459,6 +1459,66 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
         raise RuntimeContractError('postprocess_recovery_code_not_tested')
 
 
+def _proven_recovered_breaker_history(
+    connection: sqlite3.Connection, *, config: Any, request: Mapping[str, Any],
+    breaker: Mapping[str, Any], trip: Mapping[str, Any],
+) -> list[Any]:
+    """Authenticate retained history, never ignore an older fault by timestamp."""
+    from m2_production_observation import circuit_breaker_state_path
+
+    reference = (request.get('authorization') or {}).get('ancestor_receipt')
+    if not reference:
+        return []
+    try:
+        log_root = Path(str(getattr(config, 'log_path', config.work_path))).resolve()
+        path = Path(reference['path']).resolve()
+        if not path.is_relative_to(log_root) or 'sha256:' + sha256_file(path) != reference['sha256']:
+            raise ValueError('ancestor receipt hash mismatch')
+        ancestor = _read_json(path)['request']
+        old_gate = request['old_gate']
+        rows = connection.execute(
+            "SELECT payload_json FROM m2_recovery_events WHERE event_type='CONTROLLED_BREAKER_RECOVERY' "
+            "AND json_extract(payload_json,'$.planned_change_receipt_sha256')=? "
+            "AND json_extract(payload_json,'$.new_worker_sha')=? LIMIT 2",
+            (reference['sha256'], old_gate['worker_sha']),
+        ).fetchall()
+        if len(rows) != 1:
+            raise ValueError('ancestor recovery must be unique and durable')
+        record = json.loads(rows[0][0])
+        epoch = record['recovered_at_epoch']
+        identity = record['completion_runtime']
+        if (record.get('contract') != BREAKER_RECOVERY_CONTRACT
+            or record.get('recovery_mode') != 'authorized_reconciliation'
+            or record.get('production_resources_affected') is not False
+            or record.get('old_gate_id') != ancestor['old_gate_id']
+            or not isinstance(epoch, (int, float)) or not math.isfinite(epoch)
+            or not 0 < epoch <= old_gate['gate_start_epoch'] < trip['observed_at']
+            or not str(record.get('recovery_record_id') or '').startswith('m2breakerrec_')
+            or any(identity.get(key) != old_gate[field] for key, field in (
+                ('worker_commit_sha','worker_sha'), ('worker_container_id','worker_container_id'),
+                ('worker_image_id','container_image_id'), ('configuration_fingerprint','configuration_fingerprint')))
+            or any(identity.get(key) != ancestor['runtime_identity'].get(key) for key in (
+                'worker_commit_sha','worker_container_id','worker_image_id',
+                'worker_source_revision','configuration_fingerprint'))):
+            raise ValueError('ancestor runtime or recovery boundary mismatch')
+        stamp = datetime.fromtimestamp(epoch, tz=timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
+        suffix = record['recovery_record_id'][-8:]
+        export = log_root / f'm2-production-recovery-{stamp}-{suffix}.json'
+        bp = circuit_breaker_state_path(config)
+        archive = bp.with_name(f'{bp.stem}.tripped-{stamp}-{suffix}.json')
+        if _read_json(export) != record or _read_json(archive) != ancestor['breaker']:
+            raise ValueError('retired breaker and durable recovery exports required')
+        history = ancestor['breaker']['reasons']
+        if (not isinstance(history, list) or not history
+            or any(not isinstance(event, Mapping) or not isinstance(event.get('observed_at'), (int, float))
+                   or not 0 < event['observed_at'] <= epoch for event in history)
+            or breaker.get('reasons', [])[:len(history)] != history):
+            raise ValueError('retained history must be an unchanged recovered prefix')
+        return history
+    except (KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
+        raise RuntimeContractError('subtitle_format_recovered_history_unproven') from exc
+
+
 def _validate_subtitle_format_incident(
     connection: sqlite3.Connection, *, config: Any, request: Mapping[str, Any],
     root_cause: Mapping[str, Any], breaker: Mapping[str, Any],
@@ -1494,7 +1554,9 @@ def _validate_subtitle_format_incident(
     if latest != trip and (latest.get('reason_code') != 'runtime_change'
         or latest.get('evidence', {}).get('error_code') != 'live_worker_container_identity_mismatch'):
         raise RuntimeContractError('subtitle_format_unresolved_breaker')
-    for event in breaker.get('reasons', []):
+    history = _proven_recovered_breaker_history(
+        connection, config=config, request=request, breaker=breaker, trip=trip)
+    for event in breaker.get('reasons', [])[len(history):]:
         if event != trip and (
             event.get('reason_code') != 'runtime_change'
             or event.get('evidence', {}).get('error_code') != 'live_worker_container_identity_mismatch'

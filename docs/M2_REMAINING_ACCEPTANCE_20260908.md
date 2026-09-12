@@ -1,5 +1,35 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-12 12:37 UTC — deployed; recovered-history boundary correction
+
+Worker0a2b1ab0955922ba1a573b6774122408318e3c7e deployed safely, image
+5ec0f8190440ddeb454c6aa430b8fa21c245cf427d31f4d4730bf0e7d0af2564,
+source2e2d89adbc62f38e1ffc0aec9b718d362911b57d0d8ee83d96ac280a2a8fd0d7.
+WebUI175a02a unchanged. Deployment2140/231 tests PASS; actual-image323, both
+isolated Docker restart boundaries and fresh seven breakers PASS (overlap).
+Root `/logs/m2-opencc-runtime-recovery-20260912/`; safe-deploy.exit0.
+
+Controlled recovery refused `subtitle_format_unresolved_breaker`; orchestrator
+exit1 preserved. Receipt m2-recon-opencc-format-20260912 SHA
+bb2b46a5858002796ff48d4aefb9b84f9fd51f23ff75bc8982a3e011d72059d4 retains
+69 holds,0 new differences,6905 recoverable/7170 retained identities (not deliveries).
+Original Gate225436 is INVALIDATED_BY_RUNTIME_CHANGE with9 members retained;
+no replacement Gate or claim resume. Owned reconciliation pause remains active.
+
+Reproduced defect: all retained reasons were treated as unresolved, including28
+events already covered by a prior successful recovery. New correction requires
+the exact ancestor receipt hash, unique durable recovery row, immutable recovery
+export, retired breaker archive, matching old Gate runtime, and unchanged history
+prefix. Timestamps alone never authorize omission; extra/unknown faults refuse.
+Local85/server110 targeted tests PASS. Real exact-row evidence probe PASS28 at
+`/logs/m2-opencc-history-candidate-20260912-kNqiLx/evidence-only-68lQYA/`.
+Earlier same-root read-only SQLite mount probe failed to open DB; preserved.
+Corrected probe uses one exact read-only exported DB row in isolated memory DB,
+plus actual receipt/archive/runtime; no recovery invoked or Production mutation.
+This correction is not deployed yet. Next: preserve failed handoff and transfer
+only its owned pause to a new sealed reconciliation, safe deploy and actual-image
+proof. Do not modify the old receipt or clear the latch. Formal download/extraction0.
+
 ## 2026-09-12 — exact OpenCC recovery candidate ready for guarded deployment
 
 The existing authorized reconciliation now binds `subtitle_format_dispatch` to

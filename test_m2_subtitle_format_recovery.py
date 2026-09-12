@@ -1,5 +1,6 @@
 """Exact format incident recovery in isolated durable stores; never generic reset."""
 import copy
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -9,7 +10,7 @@ from unittest.mock import patch
 import m2_guardrail_runtime as runtime
 from m2_observation_store import enroll_claim, gate_by_id
 from m2_production_observation import circuit_breaker_state_path
-from m2_production_recovery import require_source_not_held, RecoveryError
+from m2_production_recovery import require_source_not_held, RecoveryError, record_breaker_recovery
 from safe_files import sha256_file
 from source_integrity import capture_source_snapshot
 import test_m2_planned_runtime_change as fixtures
@@ -183,6 +184,71 @@ class SubtitleFormatRecoveryTest(unittest.TestCase):
         self.breaker['reasons'].insert(0, {'reason_code': 'source_mutation', 'observed_at': self.now - 100})
         self.save_breaker()
         self.assert_refused('unresolved_breaker')
+
+    def retained_recovered_history(self):
+        gate = self.request['old_gate']
+        epoch = gate['gate_start_epoch'] - 5
+        historical = {'reason_code':'incorrect_completion','observed_at':epoch-10,
+            'evidence':{'stage':'prior_incident','error_code':'prior_incident'}}
+        prior_breaker = {'tripped':True,'reasons':[historical],'latest_trip':historical}
+        identity = {'worker_commit_sha':gate['worker_sha'],'worker_container_id':gate['worker_container_id'],
+            'worker_image_id':gate['container_image_id'],
+            'configuration_fingerprint':gate['configuration_fingerprint'],'worker_source_revision':'a'*64}
+        ancestor = Path(self.config.log_path)/'fixture-ancestor-receipt.json'
+        ancestor.write_text(json.dumps({'request':{'old_gate_id':'fixture-ancestor-gate',
+            'runtime_identity':identity,'breaker':prior_breaker}}))
+        reference = {'path':str(ancestor),'sha256':'sha256:'+sha256_file(ancestor)}
+        self.request['authorization']['ancestor_receipt'] = reference
+        record = {'contract':runtime.BREAKER_RECOVERY_CONTRACT,'recovery_record_id':'m2breakerrec_'+'a'*32,
+            'recovered_at_epoch':epoch,'old_gate_id':'fixture-ancestor-gate','new_worker_sha':gate['worker_sha'],
+            'recovery_mode':'authorized_reconciliation','planned_change_receipt_sha256':reference['sha256'],
+            'completion_runtime':identity,'production_resources_affected':False}
+        record_breaker_recovery(self.connection,recovery_record_id=record['recovery_record_id'],evidence=record,now=epoch)
+        self.f.state.commit()
+        stamp = datetime.fromtimestamp(epoch,tz=timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
+        suffix = record['recovery_record_id'][-8:]
+        export = Path(self.config.log_path)/f'm2-production-recovery-{stamp}-{suffix}.json'
+        export.write_text(json.dumps(record))
+        bp = circuit_breaker_state_path(self.config)
+        archive = bp.with_name(f'{bp.stem}.tripped-{stamp}-{suffix}.json')
+        archive.write_text(json.dumps(prior_breaker))
+        self.breaker['reasons'].insert(0,historical)
+        self.save_breaker()
+        self.request['verified_snapshot'] = runtime._planned_change_snapshot(self.connection,self.f.old_gate)
+        return ancestor, export, archive
+
+    def test_proven_previous_recovery_history_is_not_an_unresolved_incident(self):
+        files = self.retained_recovered_history()
+        prior = {p:p.read_bytes() for p in files}
+        self.recover(self.evidence())
+        self.assertEqual(prior,{p:p.read_bytes() for p in files})
+
+    def test_previous_history_requires_matching_receipt_hash(self):
+        ancestor,_,_ = self.retained_recovered_history()
+        ancestor.write_text('{}')
+        self.assert_refused('recovered_history_unproven')
+
+    def test_previous_history_requires_retired_breaker_archive(self):
+        _,_,archive = self.retained_recovered_history()
+        archive.unlink()
+        self.assert_refused('recovered_history_unproven')
+
+    def test_previous_history_requires_matching_durable_export(self):
+        _,export,_ = self.retained_recovered_history()
+        export.write_text('{}')
+        self.assert_refused('recovered_history_unproven')
+
+    def test_previous_history_does_not_ignore_a_later_unresolved_fault(self):
+        self.retained_recovered_history()
+        self.breaker['reasons'].insert(1,{'reason_code':'source_mutation','observed_at':self.now-100})
+        self.save_breaker()
+        self.assert_refused('unresolved_breaker')
+
+    def test_previous_history_does_not_absorb_an_extra_earlier_fault(self):
+        self.retained_recovered_history()
+        self.breaker['reasons'].insert(0,{'reason_code':'source_mutation','observed_at':self.now-1000})
+        self.save_breaker()
+        self.assert_refused('recovered_history_unproven')
 
     def test_unclassified_delta_after_seal_refused(self):
         evidence = self.evidence()

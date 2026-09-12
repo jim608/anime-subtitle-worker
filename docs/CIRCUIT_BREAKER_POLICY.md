@@ -1,5 +1,16 @@
 # M2 Circuit Breaker Policy
 
+## Recovered history is retained, not silently treated as unresolved or ignored
+
+The Sep12 actual handoff exposed28 retained reasons from a previously completed
+controlled recovery. A subtitle-format reconciliation may recognize only a prefix
+authenticated by the ancestor receipt SHA, unique durable CONTROLLED_BREAKER_RECOVERY,
+identical recovery export and retired breaker archive, and old Gate runtime/time
+binding. An extra event, missing archive, changed export/receipt or unproven record
+refuses. Merely predating the present incident is insufficient. All original
+history and UNPROVEN continuity remain unchanged. This correction is candidate
+only; deployed0a2b1ab currently refuses and keeps the owned pause/breaker active.
+
 ## 2026-09-12 — exact subtitle-format reconciliation candidate (not deployed)
 
 `authorized_reconciliation` / `subtitle_format_dispatch` accepts only the retained

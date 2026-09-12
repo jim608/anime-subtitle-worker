@@ -2,6 +2,14 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+Sep12 postdeployment:0a2b1ab deployed; actual323/restart/7FI PASS. Formal recovery
+refused because28 already-recovered historical reasons were treated as unresolved.
+Exact history-chain correction reproduced, local85/server110 and real receipt/DB/
+archive/runtime probe PASS; not yet deployed. Original Gate225436 invalidated with
+9 members retained;69 holds and own reconciliation pause remain. Preserve receipt
+m2-recon-opencc-format-20260912 and transfer only owned pause for next safe handoff.
+Do not call current runtime ARMED. Formal download/extraction0; M2 incomplete.
+
 Sep12 current: exact subtitle-format authorized reconciliation implemented and
 candidate-tested, including a reproduced DB-COMMIT/file-handoff restart defect.
 323 server targeted tests and both real isolated Docker restart boundaries PASS;

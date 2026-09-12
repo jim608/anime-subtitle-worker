@@ -1,5 +1,16 @@
 # M2 Production Observation
 
+## 2026-09-12 postdeployment — failed recovery preserved
+
+Runtime0a2b1ab deployed, actual-image323/restart/7FI PASS, but controlled recovery
+refused subtitle_format_unresolved_breaker. Old Gate225436 now INVALIDATED_BY_RUNTIME_CHANGE,
+all9 frozen members retained; no new Gate or score transfer.69 holds/UNPROVEN remain.
+Receipt m2-recon-opencc-format-20260912,0 new differences, own pause still active.
+Exact historical-recovery chain correction is candidate-tested, not deployed.
+Evidence `/logs/m2-opencc-runtime-recovery-20260912/` and
+`/logs/m2-opencc-history-candidate-20260912-kNqiLx/evidence-only-68lQYA/`.
+No formal download/extraction delivery or M2 acceptance claim.
+
 ## 2026-09-12 — candidate recovery verification; existing Gate retained
 
 Read-only readiness evidence `mapped-readiness-1789215926286505684.json` under
