@@ -2,6 +2,15 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+Sep12 20:05UTC: evidence-bound single-job repair candidate implemented through
+mikan.requeue_extract; atomic original-row archive+pending+existingQueue transition,
+preserved budgets/exclusions, claim/publication source+runtime guards and manifest
+binding. Server489 testsPASS; real4-container loss/restart/resume and freshreal
+ffmpeg351cue fixturePASS. NOTdeployed, formalAI0/download0/extraction0, M2 NOTCOMPLETE.
+Live19:40Worker5e73636c.../ARMED/70holds/UNPROVEN, Gate183251 ACTIVE10/10 retained.
+Nextone safehandoff+actualimage/fresh7+controlledrecovery+realc1102formalcanary.
+See docs/M2_REVIEWED_EXTRACTION_RECOVERY_20260912.md. No M3/M4/Gate20wait.
+
 Sep12 19:32UTC: narrow parallel-CN/JP ASS candidate passes74 local/server tests
 and real isolated ffmpeg/import/publisher, cross-container idempotency and
 source-hold refusal. Keeps380 text lines;351cue output passes original QC.

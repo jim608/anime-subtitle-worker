@@ -2050,7 +2050,10 @@ def _execute_control_command(config, logger, action: str, target: str, parameter
         job_key = str(parameters.get("job_key") or target or "").strip()
         if not job_key:
             raise ValueError("mikan.requeue_extract requires a job_key")
-        requeued = requeue_mikan_extract_job(config, job_key=job_key)
+        requeued = requeue_mikan_extract_job(config, job_key=job_key,
+            **({"reviewed_repair": parameters["reviewed_repair"]} if "reviewed_repair" in parameters else {}))
+        if isinstance(requeued, dict):
+            return {"action": normalized, **requeued}
         if not requeued:
             raise ValueError("Extraction job is not in a retryable failed state")
         return {"action": normalized, "job_key": job_key, "requeued": True}

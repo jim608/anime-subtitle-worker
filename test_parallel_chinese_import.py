@@ -4,7 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from test_subtitle_language_projection import bilingual_ass,configuration
 from subtitle_extract import (
@@ -137,6 +137,20 @@ class ParallelChineseImportTests(unittest.TestCase):
             changed,replacements=_apply_completed_extract_result(pending,torrent,[],result)
             self.assertTrue(changed);self.assertFalse(replacements)
             self.assertTrue(_pending_is_terminal_success(entry))
+
+    def test_publication_guard_refusal_rolls_back_prepared_manifest_without_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);config,target,_=self.setup_case(root)
+            normalized,_=normalize_parallel_chinese_ass(bilingual_ass(),language='zh-tw',config=config)
+            staged=root/'staged.ass';staged.write_bytes(normalized.encode())
+            guard=Mock(side_effect=[{'contract':'fixture-reviewed-recovery'},RuntimeError('source changed before publish')])
+            with self.assertRaisesRegex(RuntimeError,'source changed before publish'):
+                _publish_official_subtitle_set(target,[(staged,target.with_suffix('.zh-TW.ass'),'zh-tw')],config,
+                                              publication_guard=guard)
+            self.assertFalse(target.with_suffix('.zh-TW.ass').exists())
+            manifest=json.loads(next(config.work_path.glob('official_subtitle_versions/*/*/manifest.json')).read_text(encoding='utf-8'))
+            self.assertEqual(manifest['status'],'rolled_back')
+            self.assertEqual(manifest['reviewed_recovery']['contract'],'fixture-reviewed-recovery')
 
 
 if __name__=='__main__':unittest.main()

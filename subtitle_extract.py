@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import tempfile
 import time
-from typing import Any
+from typing import Any, Callable
 
 from config import AppConfig
 from resource_scheduler import wait_for_extraction_pressure
@@ -130,6 +130,7 @@ def extract_available_subtitles(
     cancel_event: Any | None = None,
     deadline_monotonic: float | None = None,
     validate_for_import: bool = False,
+    publication_guard: Callable[[], dict[str, Any]] | None = None,
 ) -> list[ExtractedSubtitle]:
     source_video = Path(video_path)
     output_video = Path(output_video_path) if output_video_path is not None else source_video
@@ -232,6 +233,8 @@ def extract_available_subtitles(
         transforms = {str(candidate.source_path): candidate.source_transform for candidate in selected if candidate.source_transform}
         if transforms:
             publication_options["source_transforms"] = transforms
+        if publication_guard is not None:
+            publication_options["publication_guard"] = publication_guard
         _publish_official_subtitle_set(output_video, publications, config, **publication_options)
         for candidate, (_source, output, _language) in zip(selected, publications, strict=True):
             extracted.append(
@@ -436,11 +439,13 @@ def _publish_official_subtitle_set(
     *,
     preserve_valid_existing: bool = False,
     source_transforms: dict[str, dict[str, Any]] | None = None,
+    publication_guard: Callable[[], dict[str, Any]] | None = None,
 ) -> None:
     """Validate and atomically publish one complete official subtitle set."""
 
     from m2_production_recovery import require_source_not_held
     require_source_not_held(config, output_video)
+    recovery_evidence = publication_guard() if publication_guard is not None else None
 
     if not publications:
         return
@@ -548,6 +553,7 @@ def _publish_official_subtitle_set(
             "status": "prepared",
             "video": str(output_video),
             "created_at": time.time(),
+            **({"reviewed_recovery": recovery_evidence} if recovery_evidence is not None else {}),
             "publications": [
                 {
                     "source": str(source),
@@ -572,6 +578,8 @@ def _publish_official_subtitle_set(
             manifest_path,
             json.dumps(prepared_manifest, ensure_ascii=False, indent=2) + "\n",
         )
+        if publication_guard is not None:
+            publication_guard()
         for source, output, _language, _sha256 in effective:
             published.append(output)
             verified_copy_replace(source, output)
@@ -695,6 +703,7 @@ def normalize_sidecar_subtitles_for_output(
     extra_sidecar_paths: list[str | Path] | None = None,
     deadline_monotonic: float | None = None,
     validate_for_import: bool = False,
+    publication_guard: Callable[[], dict[str, Any]] | None = None,
 ) -> list[ExtractedSubtitle]:
     video = Path(video_path)
     output_video = Path(output_video_path) if output_video_path is not None else video
@@ -769,7 +778,8 @@ def normalize_sidecar_subtitles_for_output(
             )) != len(staged_candidates):
                 return []
         _publish_official_subtitle_set(output_video, publications, config,
-            **({"preserve_valid_existing": True} if validate_for_import else {}))
+            **({"preserve_valid_existing": True} if validate_for_import else {}),
+            **({"publication_guard": publication_guard} if publication_guard is not None else {}))
 
         for candidate in selected:
             output = _subtitle_output_path(output_video, candidate.language)

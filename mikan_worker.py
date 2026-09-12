@@ -3932,6 +3932,7 @@ class MikanWorker:
                 root,
                 cancel_event=cancel_event,
                 deadline_monotonic=deadline_monotonic,
+                **_reviewed_extraction_publication_options(self.config, pending_entries, source_video, target_video),
             )
             record_member(source_video, target_video, target_result)
             if target_result.defer_seconds > 0:
@@ -3997,7 +3998,10 @@ class MikanWorker:
         *,
         cancel_event: threading.Event | None = None,
         deadline_monotonic: float | None = None,
+        publication_guard: Callable[[], dict[str, Any]] | None = None,
     ) -> MikanExtractResult:
+        if publication_guard is not None:
+            publication_guard()
         if (cancel_event is not None and cancel_event.is_set()) or (
             deadline_monotonic is not None and time.monotonic() >= deadline_monotonic
         ):
@@ -4036,6 +4040,8 @@ class MikanWorker:
                         cancellation_kwargs["cancel_event"] = cancel_event
                     if deadline_monotonic is not None:
                         cancellation_kwargs["deadline_monotonic"] = deadline_monotonic
+                    if publication_guard is not None:
+                        cancellation_kwargs["publication_guard"] = publication_guard
                     extracted = extract_available_subtitles(
                         source_video,
                         self.config,
@@ -4088,6 +4094,8 @@ class MikanWorker:
                 normalization_kwargs: dict[str, Any] = {}
                 if deadline_monotonic is not None:
                     normalization_kwargs["deadline_monotonic"] = deadline_monotonic
+                if publication_guard is not None:
+                    normalization_kwargs["publication_guard"] = publication_guard
                 try:
                     extracted = normalize_sidecar_subtitles_for_output(
                         source_video,
@@ -6953,7 +6961,7 @@ def _sync_mikan_state_db(pending_path: Path, pending: dict[str, Any]) -> None:
         conn.execute(
             """
             DELETE FROM mikan_download_events
-            WHERE event != 'mapped_source_available_recovery'
+            WHERE event NOT IN ('mapped_source_available_recovery', 'reviewed_extraction_repair')
             AND id NOT IN (
                 SELECT id FROM mikan_download_events
                 ORDER BY id DESC
@@ -7523,11 +7531,16 @@ def requeue_failed_mikan_extract_jobs(
             conn.close()
 
 
-def requeue_mikan_extract_job(config: AppConfig, *, job_key: str) -> bool:
+def requeue_mikan_extract_job(
+    config: AppConfig, *, job_key: str, reviewed_repair: dict[str, Any] | None = None,
+) -> bool | dict[str, Any]:
     """Requeue exactly one completed failure without disturbing other jobs."""
     normalized_key = str(job_key or "").strip()
     if not normalized_key:
         raise MikanWorkerError("A Mikan extraction job key is required")
+    if reviewed_repair is not None:
+        from mikan_extraction_repair import request_reviewed_repair
+        return request_reviewed_repair(config, job_key=normalized_key, request=reviewed_repair)
     now = time.time()
     conn: sqlite3.Connection | None = None
     try:
@@ -8514,6 +8527,24 @@ def _mikan_extract_dispatch_counts(config: AppConfig) -> tuple[int, int]:
             conn.close()
 
 
+def _reviewed_extraction_publication_options(
+    config: AppConfig, entries: list[dict[str, Any]], source: Path, target: Path,
+) -> dict[str, Any]:
+    bindings = [entry["reviewed_extraction_repair"] for entry in entries if "reviewed_extraction_repair" in entry]
+    if not bindings:
+        return {}
+    if len(bindings) != 1 or len(entries) != 1:
+        raise MikanWorkerError("reviewed_extraction_repair_member_ambiguous")
+    from mikan_extraction_repair import guard_reviewed_extraction
+    def guard() -> dict[str, Any]:
+        evidence = guard_reviewed_extraction(config, bindings[0])
+        if (evidence["target_identity"]["canonical_path"] != str(target.resolve())
+                or evidence["download_identity"]["canonical_path"] != str(source.resolve())):
+            raise MikanWorkerError("reviewed_extraction_repair_member_changed")
+        return evidence
+    return {"publication_guard": guard}
+
+
 def _mikan_admission_allowed(config: AppConfig, logger: logging.Logger | None = None) -> bool:
     """Use the existing runtime/hold authority at download and extract claims."""
     from m2_production_observation import admit_new_job, circuit_breaker_active
@@ -8556,6 +8587,21 @@ def _claim_mikan_extract_jobs(config: AppConfig, *, limit: int) -> list[MikanExt
             torrent = _torrent_from_request_payload(_json_object(torrent_json))
             pending_entries_raw = _json_list(pending_entries_json)
             pending_entries = [entry for entry in pending_entries_raw if isinstance(entry, dict)]
+            repair_bindings = [entry["reviewed_extraction_repair"] for entry in pending_entries
+                               if "reviewed_extraction_repair" in entry]
+            if repair_bindings:
+                try:
+                    from mikan_extraction_repair import guard_reviewed_extraction
+                    if len(repair_bindings) != 1 or len(pending_entries) != 1:
+                        raise MikanWorkerError("reviewed_extraction_repair_member_ambiguous")
+                    guard_reviewed_extraction(config, repair_bindings[0])
+                except Exception as exc:
+                    # Keep the receipt/budget and let unrelated jobs progress.
+                    conn.execute("UPDATE mikan_extract_jobs SET status='queued',worker_id='',lease_until=?,last_error=?,updated_at=? "
+                                 "WHERE job_key=? AND ((status='queued' AND lease_until<=?) OR (status='running' AND lease_until<=?))",
+                                 (now + max(60.0, _mikan_extract_failed_retry_seconds(config)),
+                                  str(exc)[:2000], now, job_key, now, now))
+                    continue
             unsafe_detail = _unsafe_recovered_mapping_detail(pending_entries)
             if unsafe_detail:
                 review_id = ""
@@ -9432,7 +9478,7 @@ def _compact_legacy_mikan_events(conn: sqlite3.Connection) -> None:
     for event_id, item_key, event, detail, detail_json, occurrence_count, last_seen_at, created_at in rows:
         # This is an immutable recovery receipt and a lifetime retry-budget token,
         # not a transient UI event. Preserve its original bytes and stable key.
-        if event == 'mapped_source_available_recovery':
+        if event in {'mapped_source_available_recovery', 'reviewed_extraction_repair'}:
             continue
         compact_detail = _compact_mikan_event_detail(str(detail or ""))
         payload = _json_object(detail_json)

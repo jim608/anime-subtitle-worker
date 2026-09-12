@@ -1,5 +1,21 @@
 # M2 Production Observation
 
+## 2026-09-12 20:05 UTC — reviewed-repair candidate; existing Gate unchanged
+
+M2 NOT COMPLETE; formalAI0/download0/extraction0. Bounded live report
+runtime-1789242020621114780.json (19:40UTC, /logs/m2-source-followthrough-20260912T1848/)
+confirms actualWorker5e73636c.../WebUI175a02a7.../ARMED/70holds/UNPROVEN;
+same Gate183251 ACTIVE10 enrolled/10 settled. No Gate result is inferred from
+fixture claims, and no Gate reset/backfill/deployment occurred in this work.
+Original settled20 FAIL6strict/14review evidence remains unchanged.
+
+Existing single-job reviewed recovery candidate passed489 server related tests,
+real container transaction-loss/resume fixtures and fresh real-media isolation.
+It now carries a durable receipt/source/runtime guard through claim/publication;
+the old completion receipt and failed-source exclusions remain. These are not
+Production claim/delivery evidence. Details and pending safe deployment/formal
+canary acceptance: `docs/M2_REVIEWED_EXTRACTION_RECOVERY_20260912.md`.
+
 ## 2026-09-12 19:32 UTC — bounded live observation; candidate tests do not change Gate
 
 M2 NOT COMPLETE; new formal AI0/download0/extraction0. Live report

@@ -1,5 +1,27 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-12 20:05 UTC — controlled single-job repair candidate verified
+
+**M2 NOT COMPLETE; formal AI0/download0/extraction0.** The missing recovery mode
+is implemented in the existing `mikan.requeue_extract` entry, not a parallel Queue.
+It binds current revisions/runtime/source/matching/QC evidence, archives old rows,
+preserves attempts/exclusions and enforces one durable reopen budget. Original
+receipt82ace3 is unchanged. Claim and immediate prepublication guards bind the
+same identities and immutable event to the final manifest.
+
+Server489 related tests PASS; four real disposable containers verify midtransaction
+process-loss rollback, single durable retry, normal claim/heartbeat, no concurrent
+claim, valid-lease preservation and normal expired-lease resume. qB/runtime are
+explicit fixtures in that restart test. Fresh real ffmpeg/QC/publication/replay/
+hold-refusal fixture also passed with351cues; no formal additions are counted.
+Evidence and exact deployment/acceptance steps:
+`docs/M2_REVIEWED_EXTRACTION_RECOVERY_20260912.md`.
+
+No Production restart/deployment/pause/state change yet. Actual last bounded
+19:40 runtime remains5e73636c.../WebUI175a02a7.../ARMED/70 holds/UNPROVEN;
+Gate183251 ACTIVE10 enrolled/10 settled, unchanged baseline. Fresh safe deployment
+and real canary claim/formal publish/final-path verification are still required.
+
 ## 2026-09-12 19:32 UTC — parallel subtitle candidate verified, not deployed
 
 **M2 NOT COMPLETE. Formal additions AI0/download0/extraction0.** Real c1102 EP2
