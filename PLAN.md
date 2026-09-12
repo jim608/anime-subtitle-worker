@@ -2,6 +2,17 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+Sep12 20:39UTC: actual88598848... deployed; safe-update/controlledrecoveryEXIT0,
+actualimage637/fresh7PASS, ARMED/71holds/UNPROVEN. Real existingmailbox->Workerclaim
+->extract->formalTC1->final351cueparse/QC/targetchecksum+backups verified. AI0;
+download1/extraction1 are the same obligation, not two deliveries. Full-chain
+acceptance stillOPEN: companionSC samehash at renamed path, originalmanifestpath
+missing; needrenameprovenance/durablepathdisposition+realreplay+freshserverdownload
+checksum. ChromeDebuggerunattached afterreset; doNOTrepeatcompletedhandoff.
+OldGate183251 actuallySETTLED20/20 beforehandoff,5strict15reviewFAIL/all20preserved.
+NewGate202742 baseline4d664e39... initialized0/20,boundedACTIVE2/2. NoM3/M4/20wait.
+See docs/M2_REVIEWED_EXTRACTION_DEPLOYMENT_20260912.md. M2 NOTCOMPLETE.
+
 Sep12 20:05UTC: evidence-bound single-job repair candidate implemented through
 mikan.requeue_extract; atomic original-row archive+pending+existingQueue transition,
 preserved budgets/exclusions, claim/publication source+runtime guards and manifest

@@ -1,5 +1,25 @@
 # M2 Production Observation
 
+## 2026-09-12 20:39 UTC — actual deployment and immutable terminal Gate result
+
+Old Gate183251 automatically settled20/20 at20:16:01.257804Z:5 strict/15 needs
+review,FAIL. All20members and automatic report SHA
+efea89fa89681dfc8a105b61d752209e9bb59877ee04e7cae9a98a407c4407bf preserved;
+it remains SETTLED, not a rewritten pass/invalidation. Earlier125703 FAIL unchanged.
+
+Worker88598848ebf2efaf945a9128c320ba188074f3b6 safely deployed, image3bffd64b...,
+WebUI175a02a7...unchanged; actual-image637/fresh7PASS, runtimeARMED,71holds/UNPROVEN.
+New Gate m2-gate-20260912T202742079916Z-9d08eceb76 starts
+2026-09-12T20:27:42.079916Z, baseline m2-guardrail-v1:4d664e39de091fb35df67e9b;
+0/20 initialization, one bounded ACTIVE2/2 closeout. No backfill/version mixing.
+
+Historical download/extraction target m2dl_f0133acfdbb11284e318 truly claimed and
+produced1 new valid formal TC (351cues), not a Gate replacement or new AI delivery.
+Both final TC and renamed SC parse/QC pass, but SC manifest relocation provenance
+and production replay remain unverified; full-chain acceptance and M2 remain open.
+Chrome Debugger unattached blocks the remaining server check, not Worker admission.
+Evidence/boundaries: `docs/M2_REVIEWED_EXTRACTION_DEPLOYMENT_20260912.md`.
+
 ## 2026-09-12 20:05 UTC — reviewed-repair candidate; existing Gate unchanged
 
 M2 NOT COMPLETE; formalAI0/download0/extraction0. Bounded live report

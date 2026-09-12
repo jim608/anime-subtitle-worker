@@ -1,5 +1,27 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-12 20:39 UTC — deployed; real TC delivered; final lineage/replay open
+
+**M2 NOT COMPLETE.** Worker88598848ebf2efaf945a9128c320ba188074f3b6 deployed via
+safe-update-stack20260912T201652Z-1272366; actual-image637/fresh breakers7PASS,
+controlled recovery ARMED.70 old holds+1 unexplained removal held=71;UNPROVEN.
+Real obligation m2dl_f0133acfdbb11284e318 was automatically claimed, extracted and
+completed through the existing mailbox/Worker flow. New valid formal TC1,351cues,
+final parse/hardQC PASS; target source and valid/unrelated subtitles unchanged.
+Download1/extraction1 refer to this same target, not two deliveries; new AI0.
+The invalid old canonical TC file has a verified versioned backup.
+
+Full-chain acceptance is still open: companion SC SHA survives at a renamed
+path, but the original manifest path is absent; rename provenance and real replay
+are unverified. Chrome control now returns Debugger unattached; one reset failed.
+Do not rerun deployment, overwrite valid TC, edit old manifests or assume the
+sublangid service is responsible. Exact evidence/remaining action:
+`docs/M2_REVIEWED_EXTRACTION_DEPLOYMENT_20260912.md`.
+
+Gate183251 naturally settled20/20 before deployment:5strict/15review/FAIL,20members
+preserved. New Gate202742 baseline4d664e39de091fb35df67e9b starts20:27:42.079916Z,
+initialized0/20, boundedcloseoutACTIVE2/2. No waiting/backfill/mixed scores.
+
 ## 2026-09-12 20:05 UTC — controlled single-job repair candidate verified
 
 **M2 NOT COMPLETE; formal AI0/download0/extraction0.** The missing recovery mode

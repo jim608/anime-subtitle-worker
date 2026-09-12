@@ -1,5 +1,12 @@
 # M2 reviewed extraction recovery — 2026-09-12
 
+Update20:39UTC: this candidate was actually deployed as88598848...,637actual-image
+tests/fresh7PASS and controlled recovery completed. One new real formal TC is
+verified, but companion SC manifest-path relocation/replay remains open; M2 is
+NOT COMPLETE. See `M2_REVIEWED_EXTRACTION_DEPLOYMENT_20260912.md` for current facts.
+The candidate-only boundary below is retained historical evidence, not current
+deployment status.
+
 Candidate verified; not yet deployed. M2 NOT COMPLETE. Formal additions remain
 AI0/download0/extraction0. This is the necessary completion of the existing M2
 single-job recovery path, not a new Queue, state machine, milestone or QC policy.
