@@ -1,5 +1,25 @@
 # M2 Production Observation
 
+## 2026-09-12 19:32 UTC — bounded live observation; candidate tests do not change Gate
+
+M2 NOT COMPLETE; new formal AI0/download0/extraction0. Live report
+`/logs/m2-source-followthrough-20260912T1848/runtime-1789241104407110358.json`
+confirms Worker5e73636c317cc32919ce1a8104dafc0d05ce0b5c and WebUI175a02a7...
+unchanged, ARMED,70 source holds, operator pause=false/reconciliation_hold=false.
+Gate `m2-gate-20260912T183251418961Z-5f0cbe7f8a` remains ACTIVE7 enrolled/7 settled,
+same baseline m2-guardrail-v1:a4504d3092426d19e4ab433d. No cohort reset/backfill.
+Original Gate125703 report SHA f13782698addc2936de1c992801f8290e56a2ca21eeff8333b5ea3929b05b4a3
+reverified; its settled20 FAIL6strict/14review is not upgraded or transferred.
+No Gate20 wait; no new Production claim is inferred from this snapshot.
+
+Candidate parallel-subtitle repair passed74 related local/server
+tests plus real fixture publication/restart/idempotency/held-source refusal.
+No Production output directory or state DB was mounted in fault fixtures; both
+real videos were read-only and hash/mtime unchanged. No deployment/restart/pause
+or runtime baseline change was made. Full details and remaining controlled
+single-job recovery work: `docs/M2_PARALLEL_SUBTITLE_REPAIR_20260912.md`.
+Preservation UNPROVEN and accepted M3 evidence stay unchanged.
+
 ## 2026-09-12 18:42 UTC — actual deployment and controlled Gate handoff
 
 M2 NOT COMPLETE; formal additions AI0/download0/extraction0. Actual Worker

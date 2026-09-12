@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 from pathlib import Path
@@ -67,6 +67,7 @@ class _SubtitleCandidate:
     priority: tuple[int, int]
     title: str = ""
     forced: bool = False
+    source_transform: dict[str, Any] | None = None
 
 
 TEXT_SUBTITLE_CODECS = {"ass", "ssa", "subrip", "srt", "webvtt", "mov_text"}
@@ -218,6 +219,7 @@ def extract_available_subtitles(
         if validate_for_import:
             candidates = _validated_import_candidates(
                 candidates, output_video, config, diagnostics, deadline_monotonic,
+                normalize_parallel_chinese=True,
             )
         selected = _select_best_subtitle_candidates(candidates)
         if allowed_languages is not None:
@@ -226,8 +228,11 @@ def extract_available_subtitles(
             (candidate.source_path, _subtitle_output_path(output_video, candidate.language), candidate.language)
             for candidate in selected
         ]
-        _publish_official_subtitle_set(output_video, publications, config,
-            **({"preserve_valid_existing": True} if validate_for_import else {}))
+        publication_options: dict[str, Any] = {"preserve_valid_existing": True} if validate_for_import else {}
+        transforms = {str(candidate.source_path): candidate.source_transform for candidate in selected if candidate.source_transform}
+        if transforms:
+            publication_options["source_transforms"] = transforms
+        _publish_official_subtitle_set(output_video, publications, config, **publication_options)
         for candidate, (_source, output, _language) in zip(selected, publications, strict=True):
             extracted.append(
                 ExtractedSubtitle(
@@ -250,6 +255,7 @@ def _validated_import_candidates(
     config: AppConfig,
     diagnostics: list[dict[str, Any]] | None,
     deadline_monotonic: float | None,
+    *, normalize_parallel_chinese: bool = False,
 ) -> list[_SubtitleCandidate]:
     """Apply the existing source policy before any external subtitle is published."""
     from source_analyzer import AnalyzerThresholds, analyze_subtitle_candidate
@@ -325,8 +331,61 @@ def _validated_import_candidates(
                 ]),
             })
         if passed:
+            if candidate.source_transform:
+                candidate = replace(candidate, source_transform={
+                    **candidate.source_transform,
+                    "target_validation": {"target": str(target_video), "output_parse": "PASS",
+                        "hard_qc": "PASS", "source_analysis": analysis.to_dict(), "quality": quality_report},
+                })
             accepted.append(candidate)
+        elif normalize_parallel_chinese and parse_pass and quality_report and any(
+            issue.get("code") == "timing_overlap" for issue in quality_report.get("issues", [])
+        ):
+            normalized = _normalized_chinese_import_candidate(candidate, config, diagnostics, deadline_monotonic)
+            if normalized is not None:
+                # Recursive validation does not enable normalization again.
+                # Keep the original rejection and all unchanged target/QC gates.
+                accepted.extend(_validated_import_candidates(
+                    [normalized], target_video, config, diagnostics, deadline_monotonic,
+                ))
     return accepted
+
+
+def _normalized_chinese_import_candidate(
+    candidate: _SubtitleCandidate, config: AppConfig,
+    diagnostics: list[dict[str, Any]] | None, deadline_monotonic: float | None,
+) -> _SubtitleCandidate | None:
+    """Normalize only a private staged embedded candidate, never an existing output."""
+    if candidate.language not in {"zh-tw", "zh-cn"} or candidate.source_path.suffix.casefold() != ".ass":
+        return None
+    from ass_utils import AssExportError
+    from subtitle_language_projection import ParallelSubtitleError, normalize_parallel_chinese_ass
+    _raise_if_extract_deadline_reached(deadline_monotonic)
+    try:
+        if candidate.source_path.stat().st_size > 8 * 1024 * 1024:
+            raise ParallelSubtitleError("parallel_projection_byte_limit")
+        raw = candidate.source_path.read_bytes()
+        original_sha256 = hashlib.sha256(raw).hexdigest()
+        result = normalize_parallel_chinese_ass(raw.decode("utf-8-sig"), language=candidate.language, config=config)
+        if result is None:
+            return None
+        normalized, evidence = result
+        _raise_if_extract_deadline_reached(deadline_monotonic)
+        if sha256_file(candidate.source_path) != original_sha256:
+            raise SubtitleExtractError("Embedded subtitle staging source changed during normalization")
+        path = candidate.source_path.with_name(candidate.source_path.stem + ".parallel-" + original_sha256[:12] + ".ass")
+        atomic_write_text(path, normalized)
+        transformation = {**evidence, "original_source": str(candidate.source_path), "original_sha256": original_sha256}
+        if diagnostics is not None:
+            diagnostics.append({"source": "parallel_chinese_normalization", "status": "candidate_normalized",
+                                "path": str(path), "evidence": transformation})
+        classification = _classify_subtitle_content_detail(_read_subtitle_sample(path), metadata_language=candidate.language)
+        return replace(candidate, source_path=path, classification=classification, source_transform=transformation)
+    except (ParallelSubtitleError, AssExportError, UnicodeError) as exc:
+        if diagnostics is not None:
+            diagnostics.append({"source": "parallel_chinese_normalization", "status": "refused",
+                                "path": str(candidate.source_path), "detail": str(exc)[:500]})
+        return None
 
 
 def verified_official_subtitle_languages(video: Path, config: AppConfig) -> set[str]:
@@ -376,6 +435,7 @@ def _publish_official_subtitle_set(
     config: AppConfig,
     *,
     preserve_valid_existing: bool = False,
+    source_transforms: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     """Validate and atomically publish one complete official subtitle set."""
 
@@ -425,6 +485,20 @@ def _publish_official_subtitle_set(
                 f"source={source} reasons={','.join(failures) or 'no_dialogue'}"
             )
         source_sha256 = sha256_file(source)
+        transformation = (source_transforms or {}).get(str(source))
+        if transformation is not None:
+            original = Path(transformation.get("original_source", ""))
+            target_validation = transformation.get("target_validation") or {}
+            if (transformation.get("strategy") != "parallel_chinese_ass_projection"
+                    or transformation.get("version") != "parallel-chinese-ass-v1"
+                    or transformation.get("normalized_sha256") != source_sha256
+                    or target_validation.get("target") != str(output_video)
+                    or target_validation.get("output_parse") != "PASS"
+                    or target_validation.get("hard_qc") != "PASS"
+                    or (target_validation.get("source_analysis") or {}).get("eligible") is not True
+                    or not original.is_file()
+                    or sha256_file(original) != transformation.get("original_sha256")):
+                raise SubtitleExtractError("Official subtitle normalization lineage changed before publication")
         if output.is_file() and sha256_file(output) == source_sha256:
             continue
         if preserve_valid_existing and output.is_file():
@@ -452,6 +526,17 @@ def _publish_official_subtitle_set(
     published: list[Path] = []
     prepared_manifest: dict[str, Any] = {}
     try:
+        persisted_transforms: dict[str, dict[str, Any]] = {}
+        for index, (source, _output, _language, _sha256) in enumerate(effective):
+            transformation = (source_transforms or {}).get(str(source))
+            if transformation is None:
+                continue
+            original = Path(transformation["original_source"])
+            snapshot = version_root / f"source-original-{index}.ass"
+            verified_copy_replace(original, snapshot)
+            if sha256_file(snapshot) != transformation["original_sha256"]:
+                raise SubtitleExtractError("Official subtitle normalization source snapshot changed")
+            persisted_transforms[str(source)] = {**transformation, "original_snapshot": str(snapshot)}
         for index, (_source, output, _language, _sha256) in enumerate(effective):
             if not output.is_file():
                 continue
@@ -469,6 +554,8 @@ def _publish_official_subtitle_set(
                     "output": str(output),
                     "language": language,
                     "sha256": source_sha256,
+                    **({"source_transformation": persisted_transforms[str(source)]}
+                       if str(source) in persisted_transforms else {}),
                 }
                 for source, output, language, source_sha256 in effective
             ],

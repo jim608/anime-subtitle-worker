@@ -2,6 +2,17 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+Sep12 19:32UTC: narrow parallel-CN/JP ASS candidate passes74 local/server tests
+and real isolated ffmpeg/import/publisher, cross-container idempotency and
+source-hold refusal. Keeps380 text lines;351cue output passes original QC.
+Candidate NOT deployed; real formalAI0/download0/extraction0; M2 NOT COMPLETE.
+Actual5e73636c.../WebUI175a02a7.../ARMED/70holds/UNPROVEN unchanged; Gate183251
+ACTIVE7enrolled/7settled. Original20 FAIL report hash reverified; no Gate mutation.
+Next: evidence-bound one-shot re-extraction for the exact replaced c1102 job
+through existing single-job recovery, then one safe handoff/real formalcanary.
+No manual DB rewrite, failed-hash removal or old receipt reuse. Details and
+test/lineage evidence: docs/M2_PARALLEL_SUBTITLE_REPAIR_20260912.md.
+
 Sep12 18:42UTC: progress fix deployed at Worker5e73636c317cc32919ce1a8104dafc0d05ce0b5c.
 Safe deployment20260912T182521Z-306768/controlled recovery exit0, actual-image421
 tests +fresh7/7 breakers PASS; runtimeARMED,70holds/UNPROVEN retained,0new deltas.

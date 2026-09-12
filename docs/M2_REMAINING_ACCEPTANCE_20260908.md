@@ -1,5 +1,34 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-12 19:32 UTC — parallel subtitle candidate verified, not deployed
+
+**M2 NOT COMPLETE. Formal additions AI0/download0/extraction0.** Real c1102 EP2
+download is complete; its original parallel CN/JP ASS overlaps fail unchanged QC.
+A narrow private-candidate normalization now proves350 exact JP/CN pairs,
+retains all380 remaining text lines in their time windows, and produces351cue
+TC ASS passing the original target-aware parse/language/hard QC. No wording,
+model, QC threshold, Decision Schema or source-selection relaxation.
+
+Local/server74 targeted tests PASS. Real isolated ffmpeg→validation→publisher
+phase1 produced one fixture manifest; a second container produced0 duplicates;
+a third container refused a held source without changing output/manifest.
+Original ASS snapshot/transform lineage and source/target SHA are retained.
+These are NOT formal additions. Evidence and exact next steps:
+`docs/M2_PARALLEL_SUBTITLE_REPAIR_20260912.md`,
+`/logs/m2-source-followthrough-20260912T1848/parallel-integration-Nz6Kge/`.
+
+Fresh bounded live snapshot1789241104: Worker5e73636c317cc32919ce1a8104dafc0d05ce0b5c,
+WebUI175a02a7bad46e0b6fa2372c59f39e8dd272911e, ARMED/70 holds/UNPROVEN unchanged.
+Current Gate183251 ACTIVE7 enrolled/7 settled; no restart/deployment/Gate change.
+Original settled20 FAIL report hash f137826... reverified unchanged.
+
+Remaining blocker is concrete: c1102's extraction row is replaced; existing
+single-job Retry excludes it, while old completion-revalidation request82ace3...
+is bound to e22. Complete an evidence-bound one-shot repair mode in the existing
+recovery entry, preserving old row/pending/failed hashes and retry budget, before
+one safe deployment and real autonomous claim/formal publication. Do not modify
+DB state manually, clear exclusions, rerun old handoffs, or count fixture delivery.
+
 ## 2026-09-12 18:42 UTC — progress fix deployed; automatic ASR claim verified
 
 **M2 NOT COMPLETE. New verified formal deliveries: AI0/download0/extraction0.**
