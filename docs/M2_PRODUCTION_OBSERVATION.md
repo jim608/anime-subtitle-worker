@@ -1,5 +1,16 @@
 # M2 Production Observation
 
+## 2026-09-12 14:19 UTC — candidate only; settled Gate unchanged
+
+A reproducible exact-alias matcher correction is isolated-tested, not deployed.
+Final289 tests and actual metadata/Docker restart PASS; unresolved mirror hashes,
+unknown aliases and ambiguous seasons still refuse. No production/config/Gate
+change yet; Worker1d5d737/ARMED,69 holds and preservation UNPROVEN retained.
+Gate125703 remains settled6 strict/14 review,FAIL. Candidate tests and historical
+source work do not alter its20 members or add formal deliveries (download0,
+extraction0). See latest M2_REMAINING_ACCEPTANCE_20260908.md for evidence and
+the required safe deployment/controlled recovery step.
+
 ## 2026-09-12 — automatic frozen Gate settlement: FAIL, retained unchanged
 
 Gate `m2-gate-20260912T125703199544Z-56ccb74937`, frozen baseline

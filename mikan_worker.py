@@ -10035,6 +10035,37 @@ def _mapping_release_identity_context(
     return identities, expected_seasons, alias_seasons
 
 
+def _verified_release_alias_identity(
+    release: MikanRelease,
+    identities: set[str],
+) -> bool:
+    """Accept a joined title only when every explicit alias is already known.
+
+    Keep the recorded release identity unchanged. Unknown aliases, contradictory
+    metadata and mixed seasons are not discarded to manufacture an exact match.
+    An unresolved mirror cannot enter a newly accepted path past failed-hash
+    deduplication. Season authorization remains with the existing caller.
+    """
+    if re.fullmatch(r"[0-9a-f]{40}", str(release.info_hash or "")) is None:
+        return False
+    parts = re.split(r"(?<=\s)/(?=\s)", unicodedata.normalize("NFKC", release.title))
+    if not 2 <= len(parts) <= 4:
+        return False
+    if normalize_match_text(release.series_identity) != normalize_match_text(
+        release_series_identity(release.title)
+    ):
+        return False
+    aliases = [normalize_match_text(release_series_identity(part)) for part in parts]
+    if any(len(alias) < 3 or alias not in identities for alias in aliases):
+        return False
+    seasons = {season for part in parts if (season := release_season_number(part)) is not None}
+    if len(seasons) > 1:
+        return False
+    if seasons != ({release.season_number} if release.season_number is not None else set()):
+        return False
+    return True
+
+
 def _assess_release_identity(
     release: MikanRelease,
     mappings: list[dict[str, object]],
@@ -10078,7 +10109,7 @@ def _assess_release_identity(
             "",
             "missing_verified_series_identity",
         )
-    if identity not in identities:
+    if identity not in identities and not _verified_release_alias_identity(release, identities):
         related = any(
             candidate in identity or identity in candidate
             for candidate in identities

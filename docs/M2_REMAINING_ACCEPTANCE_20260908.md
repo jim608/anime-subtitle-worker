@@ -1,5 +1,61 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-12 14:19 UTC — exact-alias defect reproduced; guarded candidate verified
+
+Production still Worker1d5d7372f1227e875117d23f8918e778557c1b45, ARMED,69 holds.
+No deployment has occurred for this candidate. Settled Gate125703 remains6/20
+strict and14 review/FAIL, unchanged. M2 NOT COMPLETE; new formal AI/download/
+extraction counts remain0. Previous accepted M3 AI1 is not counted again.
+
+One completed-only qB API request, filtered by this project's category/tag and
+limited10, returned0 torrents: `/logs/m2-completed-project-downloads-20260912T134728152478Z/result.json`.
+It also proves the server consumed the second prior recovery request; only3606:11
+remained scheduled at that read. No torrent/Queue mutation or full Queue polling.
+The retained3085 ZIP's other24 subtitle members all fail original QC
+(cps_too_high/timing_overlap/very_long_line), source checksum unchanged:
+`/logs/m2-retained-zip-historical-qc-20260912T135121301465Z/result.json`.
+Together with the earlier E13 checks, this package provides0 QC-valid members.
+Other archive episodes were not assumed eligible historical targets. The first
+diagnostic's no-other-historical-target assertion failure is retained in
+`/logs/m2-retained-zip-history-launch-20260912T1352.log`; the corrected run is
+source-only isolated QC, never formal import or an invented missing-target claim.
+
+Three additional, bounded historical targets4038:10/4005:1/3932:10 are genuinely
+missing valid TC. Their recorded complete extraction paths and exact failed hashes
+are absent.4038's three primary candidates are already failed hashes;4005 has two
+new candidate hashes but distinct4005:1/4005:unknown season identity groups;
+3932 primary lookup reached its bounded discovery deadline and fallback supplied
+no extractable candidate. Six fallback providers answered each lookup; a deadline
+is not conclusive no-subtitle evidence. No new torrent was added.
+Per-case evidence `/logs/m2-known-source-reuse-20260912T135403925682Z/`,
+`/logs/m2-known-source-reuse-20260912T135547419182Z/`,
+`/logs/m2-known-source-reuse-20260912T135918102654Z/` (each result.json).
+
+Actual4005 metadata revealed a separate reproducible matcher defect: all three
+known language aliases in one release title were concatenated and falsely called
+a sequel. `mikan_worker.py` now accepts this path only when every spaced-slash
+alias exactly matches existing identities, title/identity/season metadata agree,
+and a canonical40-hex hash is available for existing failed/seen-hash deduplication.
+Unknown/empty/sequel aliases, unverified or mixed seasons, conflicting metadata
+and unresolved mirror hashes remain rejected. No season-one inference, mapping
+write, QC change or Decision Schema change. Full candidate selection for4005
+still refuses; `/logs/m2-4005-identity-evidence-20260912T140119286758Z/result.json`
+shows tvshow.nfo absent, only local episode/season NFOs present. Do not fabricate
+that missing series identity evidence or force this target through the guard.
+
+Final candidate server evidence:
+`/logs/m2-alias-identity-candidate-20260912-YcWcvF/`.
+Actual deployed-image regression fails as expected;289 targeted/shared-boundary
+tests PASS, including16 new alias/dedup tests. Actual seven-source-metadata replay
+and isolated Docker restart PASS with unchanged input/output hashes,0 dispatch,
+0 publication, unresolved mirrors rejected and whole ambiguous pool still blocked.
+Earlier cHmCiv candidate passed narrower287 tests but lacked the new mirror guard;
+its failing safety regression is preserved in YcWcvF/intermediate-mirror.log.
+No earlier candidate was deployed. Local broad-suite output was not recovered;
+do not count it as PASS. Server results are authoritative. Next: safe idle-window
+deployment and actual-image verification through the existing planned-runtime-change
+and authorized reconciliation process, preserving all prior Gates/receipts/holds.
+
 ## 2026-09-12 — frozen Gate failed; bounded formal-download acceptance blocked
 
 M2 remains **NOT COMPLETE**. Current runtime was checked, not redeployed:

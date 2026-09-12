@@ -2,6 +2,16 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+Sep12 14:19UTC candidate: exact verified slash aliases no longer falsely classify
+as sequel; canonical hash required so unresolved mirrors cannot bypass failed-hash
+dedup. All season/unknown identity/QC guards retained. Server final289 tests and
+actual metadata replay/Docker restart PASS at /logs/m2-alias-identity-candidate-
+20260912-YcWcvF/. Not deployed yet; runtime1d5d737/ARMED/69holds and settled failed
+Gate125703 remain. Need existing safe deployment/controlled reconciliation and
+actual-image proof. Completed-only project qB query0; retained ZIP26/26 QC-invalid;
+three more known targets source/identity-blocked. Formal download/extraction0,
+M2 incomplete; no M3/M4 or fabricated source/season evidence.
+
 Sep12 bounded closeout: frozen Gate125703 automatically SETTLED20/20 at13:27:41Z,
 strict6/review14, safetyFAIL. Its immutable auto-summary hash and20 fixed members
 were verified; all14 review events are source_selection_needs_review. Preserve
