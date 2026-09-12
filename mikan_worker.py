@@ -10052,7 +10052,27 @@ def _verified_release_alias_identity(
         release_series_identity(release.title)
     ):
         return False
-    aliases = [normalize_match_text(release_series_identity(part)) for part in parts]
+    # These explicit collection markers are packaging, not an additional series
+    # alias. Do not strip arbitrary extra bracketed identities or season labels.
+    parts[0] = re.sub(
+        r"^\s*\[(?:個人製作合集|个人制作合集|合集|collection|batch)\]\s*(?=\[)",
+        "", parts[0], count=1, flags=re.IGNORECASE,
+    )
+    aliases = []
+    for part in parts:
+        episode_range = re.search(
+            r"\s+-\s+(\d{1,3})\s*[-~]\s*(\d{1,3})(?=\s*(?:\[|\(|$))", part,
+        )
+        if episode_range:
+            first, last = map(int, episode_range.groups())
+            expected = tuple(range(first, last + 1))
+            if (not 0 < first <= last <= 999
+                    or tuple(release_episode_numbers(release)) != expected
+                    or extract_episode_numbers(release.title) != expected
+                    or (release.episode is not None and release.episode != first)):
+                return False
+            part = part[:episode_range.start()]
+        aliases.append(normalize_match_text(release_series_identity(part)))
     if any(len(alias) < 3 or alias not in identities for alias in aliases):
         return False
     seasons = {season for part in parts if (season := release_season_number(part)) is not None}

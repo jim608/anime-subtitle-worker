@@ -1,5 +1,47 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-12 15:20 UTC — independent collection identity and targeted parser candidate
+
+Production remains c65d856/ARMED,69 holds; no new deployment or formal subtitle.
+The bounded current-state report
+`/logs/m2-collection-identity-20260912T151634231571Z/result.json` confirms the same
+Gate145452 (one read:4 enrolled/3 settled), an unrelated active scan job, and the
+3583 profile's AniList178701/native title/year2025/season1. No source mutation,
+metadata write, Gate rebuild or torrent add occurred in this investigation.
+
+Independent [Bangumi501702](https://bgm.tv/subject/501702) lists the two Chinese
+aliases, native and romanized titles for this12-episode TV work; its linked
+[official site](https://arumajo-anime.com/) corroborates native title/air date and
+final episode12. Web-verified extracted facts are retained at
+`/logs/m2-collection-catalog-web-evidence-20260912T1515.json`.
+The server's separate catalog request returned HTTP520, retained in
+`/logs/m2-collection-evidence-launch-20260912T1513.log`; it was not retried and no
+server raw-page capture is claimed. Independent catalog identity is not video,
+subtitle QC or publication proof. Production aliases remain unchanged.
+
+Even with those independently verified aliases, actual c65d856 still rejects the
+new nonfailed collection e22d51b05c55f0b9ddccba88daf42a2d2d8a5d36: it retains an
+explicit collection prefix and01-12 range as part of a series alias. Regression
+first failed on the actual image. The candidate changes only the existing alias
+branch in mikan_worker.py, not stored release identity, source-parser/cache schema,
+Decision Schema, models, QC or generic exact-title matching. Recognized packaging
+prefixes may be removed only before a release-group tag; arbitrary extra tags are
+not discarded. A numeric range must match both original title parsing and every
+recorded episode member/primary episode. All aliases still require independent
+verification; season and canonical-hash guards remain unchanged.
+
+Candidate proof `/logs/m2-collection-candidate-20260912-fFwAkj/`: local27 and
+server300 targeted/shared-boundary tests PASS (overlap), plus real two-candidate
+metadata replay and actual isolated Docker restart PASS. The original metadata
+mapping still refuses both sources; only the explicitly verified fixture alias
+mapping selects the new collection, never the old failed hash. Output digest
+97c6fc77968de42274cf8cb23d6af1ddd98062151471a4c1ebd3f483f10d3584 is unchanged after
+restart. This is **ISOLATED_SELECTION_PASS_NOT_DOWNLOADED**, formal AI/download/
+extraction0. Next: safe deployment if an idle boundary exists, then controlled
+single-profile alias reconciliation through the existing metadata API, followed
+by one target-bound ordinary recovery request. Do not claim formal acceptance
+until actual extraction, original QC, manifest/final reread and dedup all pass.
+
 ## 2026-09-12 15:00 UTC — c65d856 deployed and recovered; formal download still blocked
 
 M2 NOT COMPLETE. New verified formal additions: **AI0 / download0 / extraction0**.

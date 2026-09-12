@@ -2,6 +2,13 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+Sep12 15:20UTC: reproducible collection-prefix/range alias defect, isolated fix
+only in mikan_worker.py. Independent catalog aliases recorded, Production mapping
+not changed. Local27/server300 and real metadata Docker restart PASS at collection-
+candidate-fFwAkj; no download/publication. Current c65d856/Gate145452/ARMED/69holds
+unchanged. Next safe deployment and existing scoped metadata/recovery APIs;
+formal downloaded/extracted artifact proof remains required. M2 NOT COMPLETE.
+
 Sep12 15:00UTC: c65d8565864517fa8b5b95cb636aa060f4721405 actually deployed by
 safe-update-stack20260912T144844Z-2672655; controlled recovery ARMED,69holds retained,
 0new handoff deltas,6854 recoverable/7221 retained identities (not deliveries).

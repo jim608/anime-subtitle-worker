@@ -1,5 +1,16 @@
 # M2 Production Observation
 
+## 2026-09-12 15:20 UTC — collection parser candidate; no runtime/Gate change yet
+
+Current c65d856/ARMED/69holds and Gate145452 remain. A bounded read observed4
+enrolled/3 settled; no wait or acceptance claim. Independent catalog evidence
+supports the missing3583 alias names, but the actual image still misparses the
+collection marker/range. Candidate-only300 tests and real metadata isolated
+restart PASS at `/logs/m2-collection-candidate-20260912-fFwAkj/`.
+Stored release identities, source cache schema, seasons, hash requirements and QC
+are preserved. Production metadata unchanged; formal AI/download/extraction0.
+See latest remaining-acceptance evidence and do not rebuild Gate for these docs.
+
 ## 2026-09-12 15:00 UTC — actual alias handoff, original failed Gate retained
 
 Worker c65d8565864517fa8b5b95cb636aa060f4721405 is deployed; WebUI175a02a unchanged.
