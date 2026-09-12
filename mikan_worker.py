@@ -898,6 +898,7 @@ class MikanWorker:
     def revalidate_recorded_completion(
         self, target: MikanReplacementTarget, *, expected_entry_sha256: str,
         source_identity: dict[str, Any], request_id: str, authorization_ref: str,
+        retained_download: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Reopen one reviewed historical completion through normal discovery.
 
@@ -937,9 +938,14 @@ class MikanWorker:
                 raise MikanWorkerError("completion_revalidation_state_busy")
             pending = _load_pending(self.pending_path)
             entry = _pending_entry(target.bangumi_id, target.episode, pending)
+            prior_review = entry.get("completion_revalidation") or {}
+            if retained_download is not None and prior_review:
+                if prior_review.get("retained_download_request") != retained_download:
+                    raise MikanWorkerError("completion_revalidation_download_request_changed")
             result = _revalidated_completed_entry(entry,
                 expected_entry_sha256=expected_entry_sha256,
-                request_id=request_id, source_identity=source_identity)
+                request_id=request_id, source_identity=source_identity,
+                reviewed_retained_download=retained_download is not None)
             if result == entry:
                 return {"request_id": request_id, "status": "already_recorded", "queued": 0}
             ownership = sqlite3.connect(scan_state_path(self.config).resolve().as_uri()
@@ -952,40 +958,49 @@ class MikanWorker:
                     raise MikanWorkerError("completion_revalidation_ai_owner_active")
             finally:
                 ownership.close()
-            if (has_ai_finished_subtitle(video, self.config)
-                    or has_finished_subtitle(video, self.config)
-                    or _target_has_required_chinese_subtitles(video, verify_config=self.config)):
+            from subtitle_extract import verified_official_subtitle_languages
+            valid_official = ("zh-tw" in verified_official_subtitle_languages(video, self.config)
+                if retained_download is not None else (
+                    has_finished_subtitle(video, self.config)
+                    or _target_has_required_chinese_subtitles(video, verify_config=self.config)))
+            if has_ai_finished_subtitle(video, self.config) or valid_official:
                 raise MikanWorkerError("completion_revalidation_valid_output_exists")
-            hashes = _pending_entry_release_hashes(entry)
+            if retained_download is not None:
+                reuse = self._verify_retained_completion_download(target, video, entry, retained_download, mappings)
+                hashes = {reuse["torrent_hash"]}
+            else:
+                reuse = None
+                hashes = _pending_entry_release_hashes(entry)
             # Failed sources can still own partial/reusable data. Include them
             # in the read-only check; never clear their exclusion/retry evidence.
-            for value in entry.get("failed_info_hashes") or []:
+            for value in (entry.get("failed_info_hashes") or []) if reuse is None else []:
                 candidate = str(value).strip().casefold()
                 if not re.fullmatch(r"[0-9a-f]{40}", candidate):
                     raise MikanWorkerError("completion_revalidation_download_identity_unknown")
                 hashes.add(candidate)
             if not hashes:
                 raise MikanWorkerError("completion_revalidation_download_identity_unknown")
-            jobs, available = _target_review_extract_jobs(self.config, hashes)
-            if not available or any(not jobs.get(h) for h in hashes):
-                raise MikanWorkerError("completion_revalidation_extract_evidence_unavailable")
-            for rows in jobs.values():
-                for job in rows:
-                    if job["status"] not in {"success", "replaced", "failed", "cancelled"}:
-                        raise MikanWorkerError("completion_revalidation_extract_not_terminal")
-                    raw_path = job["torrent"].get("content_path")
-                    mapped = map_remote_path(raw_path, self.config.qbit_path_mappings)
-                    if mapped is None:
-                        raise MikanWorkerError("completion_revalidation_download_mapping_unknown")
-                    if mapped.exists():
-                        raise MikanWorkerError("completion_revalidation_reuse_download_first")
-            qbit = self._qbit()
-            response = qbit._get_with_retry(qbit.base_url + "/api/v2/torrents/info",
-                params={"hashes": "|".join(sorted(hashes))}, attempts=1)
-            response.raise_for_status()
-            torrents = response.json()
-            if not isinstance(torrents, list) or torrents:
-                raise MikanWorkerError("completion_revalidation_existing_download_or_invalid_response")
+            if reuse is None:
+                jobs, available = _target_review_extract_jobs(self.config, hashes)
+                if not available or any(not jobs.get(h) for h in hashes):
+                    raise MikanWorkerError("completion_revalidation_extract_evidence_unavailable")
+                for rows in jobs.values():
+                    for job in rows:
+                        if job["status"] not in {"success", "replaced", "failed", "cancelled"}:
+                            raise MikanWorkerError("completion_revalidation_extract_not_terminal")
+                        raw_path = job["torrent"].get("content_path")
+                        mapped = map_remote_path(raw_path, self.config.qbit_path_mappings)
+                        if mapped is None:
+                            raise MikanWorkerError("completion_revalidation_download_mapping_unknown")
+                        if mapped.exists():
+                            raise MikanWorkerError("completion_revalidation_reuse_download_first")
+                qbit = self._qbit()
+                response = qbit._get_with_retry(qbit.base_url + "/api/v2/torrents/info",
+                    params={"hashes": "|".join(sorted(hashes))}, attempts=1)
+                response.raise_for_status()
+                torrents = response.json()
+                if not isinstance(torrents, list) or torrents:
+                    raise MikanWorkerError("completion_revalidation_existing_download_or_invalid_response")
             before = video.stat()
             digest = sha256_file(video)
             after = video.stat()
@@ -999,9 +1014,18 @@ class MikanWorker:
             result["completion_revalidation"].update({
                 "authorization_ref": authorization_ref.strip(),
                 "recorded_at": _utc_now().isoformat(),
-                "resume_via": "existing_known_episode_discovery",
+                "resume_via": "existing_completed_download_extraction" if reuse else "existing_known_episode_discovery",
                 "checked_download_hashes": sorted(hashes),
             })
+            if reuse is not None:
+                snapshot = reuse["prior_pending_entry"]
+                for key in ("torrent_url", "title", "source", "source_page", "pub_date", "seeders"):
+                    if key in snapshot:
+                        result[key] = snapshot[key]
+                result.update(info_hash=reuse["torrent_hash"], queued_at=_utc_now().isoformat(),
+                              last_progress=1.0, last_qbit_hash=reuse["torrent_hash"])
+                result["completion_revalidation"].update(
+                    retained_download_request=json.loads(json.dumps(retained_download)), download_evidence=reuse)
             # Preserve the same dictionary location expected by _pending_entry.
             entry.clear()
             entry.update(result)
@@ -1013,6 +1037,77 @@ class MikanWorker:
             if video_lock is not None:
                 video_lock.release()
             queue_lock.release()
+
+    def _verify_retained_completion_download(
+        self, target: MikanReplacementTarget, video: Path, entry: dict[str, Any],
+        request: dict[str, Any], mappings: list[dict[str, object]],
+    ) -> dict[str, Any]:
+        """Bind a reviewed completed obligation to existing complete bytes; never add a torrent."""
+        from m2_production_recovery import require_source_not_held
+        wanted = str(request.get("torrent_hash") or "").casefold()
+        expected = str(request.get("extract_result_sha256") or "")
+        if (not re.fullmatch(r"[0-9a-f]{40}", wanted) or not re.fullmatch(r"[0-9a-f]{64}", expected)
+                or wanted != str(entry.get("last_completed_info_hash") or "").casefold()
+                or wanted in _raw_pending_failed_info_hashes(entry)):
+            raise MikanWorkerError("completion_revalidation_retained_identity_invalid")
+        db = _mikan_state_existing_connect(self.config)
+        try:
+            cursor = db.execute("SELECT * FROM mikan_extract_jobs WHERE job_key=?", ("hash:"+wanted,))
+            row = cursor.fetchone()
+            job = dict(zip((col[0] for col in cursor.description), row)) if row else None
+        finally:
+            db.close()
+        if not job or job["status"] != "success" or job["worker_id"] or float(job["lease_until"] or 0) > time.time():
+            raise MikanWorkerError("completion_revalidation_retained_job_not_idle")
+        if hashlib.sha256(str(job["result_json"]).encode()).hexdigest() != expected:
+            raise MikanWorkerError("completion_revalidation_retained_receipt_changed")
+        snapshots = [e for e in _json_list(job["pending_entries_json"]) if isinstance(e, dict)
+                     and _pending_completion_key(e) == f"{target.bangumi_id}:{target.episode}"]
+        if len(snapshots) != 1 or not snapshots[0].get("torrent_url") or str(snapshots[0].get("info_hash") or "").casefold() != wanted:
+            raise MikanWorkerError("completion_revalidation_retained_member_unproven")
+        qbit = self._qbit()
+        response = qbit._get_with_retry(qbit.base_url+"/api/v2/torrents/info", params={"hashes":wanted}, attempts=1)
+        response.raise_for_status()
+        rows = response.json()
+        if not isinstance(rows, list) or len(rows) != 1 or rows[0].get("hash") != wanted:
+            raise MikanWorkerError("completion_revalidation_retained_download_unavailable")
+        raw = rows[0]
+        if (raw.get("category") != self.config.qbit_category
+                or not set(self.config.qbit_tags).issubset({s.strip() for s in str(raw.get("tags") or "").split(',')})
+                or float(raw.get("progress") or 0) < 1 or int(raw.get("amount_left") or 0) != 0):
+            raise MikanWorkerError("completion_revalidation_retained_download_incomplete_or_foreign")
+        torrent = _torrent_from_request_payload(raw)
+        if torrent is None:
+            raise MikanWorkerError("completion_revalidation_retained_download_invalid")
+        complete_files = [f for f in qbit.list_files(wanted) if f.progress >= 1 and f.size > 0]
+        candidates = _torrent_video_paths_from_file_list(torrent, complete_files, self.config)
+        selection = _select_source_videos_for_pending_episodes(candidates, {target.episode})
+        identity = request.get("source_identity")
+        if not isinstance(identity, dict) or len(selection.selected) != 1:
+            raise MikanWorkerError("completion_revalidation_retained_source_not_unique")
+        source = selection.selected[0]
+        expected_sizes = [f.size for f in complete_files
+            if source in _torrent_video_paths_from_file_list(torrent, [f], self.config)]
+        if len(expected_sizes) != 1 or source.stat().st_size != expected_sizes[0]:
+            raise MikanWorkerError("completion_revalidation_retained_file_size_mismatch")
+        if str(source.resolve()) != identity.get("canonical_path"):
+            raise MikanWorkerError("completion_revalidation_retained_source_changed")
+        require_source_not_held(self.config, source)
+        matched = _target_video_for_torrent_source(source, torrent, self.config, self.logger,
+            mappings, pending_entries=snapshots)
+        if matched is None or matched.resolve() != video.resolve():
+            raise MikanWorkerError("completion_revalidation_retained_match_unproven")
+        before = source.stat()
+        digest = sha256_file(source)
+        after = source.stat()
+        if ((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+                or after.st_size != identity.get("size") or after.st_mtime_ns != identity.get("mtime_ns")
+                or digest != identity.get("sha256")):
+            raise MikanWorkerError("completion_revalidation_retained_source_changed")
+        return {"torrent_hash":wanted, "extract_result_sha256":expected,
+            "prior_extraction_job":job, "prior_pending_entry":snapshots[0],
+            "source_identity":identity, "verified_at":time.time(), "historical_continuity":"UNKNOWN"}
 
     def request_replacement_enqueue(
         self,
@@ -7151,6 +7246,12 @@ def _upsert_mikan_extract_jobs(
                 or existing_status not in {"queued", "running", "success"}
                 or (force_requeue and existing_status == "success")
             )
+            retain_attempt_budget = any(
+                isinstance(e.get("completion_revalidation"), dict)
+                and e["completion_revalidation"].get("resume_via") == "existing_completed_download_extraction"
+                and (e["completion_revalidation"].get("download_evidence") or {}).get("torrent_hash") == torrent.hash
+                for e in pending_entries
+            )
             if reset_job_state:
                 queued += 1
             bangumi_ids = sorted(
@@ -7255,7 +7356,7 @@ def _upsert_mikan_extract_jobs(
                     now,
                     now,
                     1 if force_requeue else 0,
-                    1 if reset_job_state else 0,
+                    1 if reset_job_state and not retain_attempt_budget else 0,
                     1 if reset_job_state else 0,
                     1 if reset_job_state else 0,
                     1 if reset_job_state else 0,
@@ -10259,12 +10360,15 @@ def _revalidated_completed_entry(
     expected_entry_sha256: str,
     request_id: str,
     source_identity: dict[str, Any],
+    reviewed_retained_download: bool = False,
 ) -> dict[str, Any]:
     """Build an archival transition for the guarded revalidation consumer.
 
     This does not persist, enqueue, or authorize revalidation. The consumer must
-    hold existing locks and verify current source identity, missing valid output,
-    no live ownership and no reusable download before committing this result.
+    hold existing locks and verify current source identity, missing valid output
+    and no live ownership. Normal rediscovery additionally requires no reusable
+    download; retained-download mode instead requires exact completed bytes,
+    matching and an immutable prior extraction receipt before committing.
     Historical extraction rows and retry/seen evidence are never rewritten.
     """
     if not re.fullmatch(r"[0-9a-f]{64}", str(request_id or "")):
@@ -10283,7 +10387,7 @@ def _revalidated_completed_entry(
         raise MikanWorkerError("completion_revalidation_entry_changed")
     if not _pending_is_terminal_success(entry):
         raise MikanWorkerError("completion_revalidation_not_historical_success")
-    if (entry.get("download_recovery") or {}).get("decision") != "KEEP_RECORDED_COMPLETE_NOT_REVERIFIED":
+    if not reviewed_retained_download and (entry.get("download_recovery") or {}).get("decision") != "KEEP_RECORDED_COMPLETE_NOT_REVERIFIED":
         raise MikanWorkerError("completion_revalidation_not_reviewed_history")
     if _pending_has_active_release_fields(entry) or _pending_has_deferred_release_fields(entry):
         raise MikanWorkerError("completion_revalidation_download_active")

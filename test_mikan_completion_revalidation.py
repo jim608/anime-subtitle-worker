@@ -100,6 +100,7 @@ class GuardedCompletionRevalidationTest(unittest.TestCase):
         with sqlite3.connect(self.db) as db:
             db.execute('CREATE TABLE ai_candidate_queue(path TEXT, status TEXT)')
             db.execute('CREATE TABLE ai_job_state(path TEXT, status TEXT)')
+        db.close()
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
         def patched(name, **kwargs):
@@ -150,6 +151,7 @@ class GuardedCompletionRevalidationTest(unittest.TestCase):
                     db.execute('DELETE FROM ai_candidate_queue')
                     if condition == 'ai_running':
                         db.execute('INSERT INTO ai_candidate_queue VALUES (?,?)', (str(self.video), 'running'))
+                db.close()
                 if condition == 'checksum': self.source['sha256'] = 'f'*64
                 with self.assertRaisesRegex(RuntimeError, reasons[condition]): self.invoke()
                 self.assertEqual(self.current(), self.entry)
