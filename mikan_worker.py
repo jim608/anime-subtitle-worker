@@ -183,6 +183,8 @@ class MikanExtractResult:
     failure_context: dict[str, Any] = field(default_factory=dict)
     retryable: bool = False
     defer_seconds: float = 0.0
+    # None denotes a legacy aggregate receipt, not proof for every batch member.
+    entry_results: dict[str, dict[str, Any]] | None = None
 
 
 @dataclass(frozen=True)
@@ -2077,7 +2079,7 @@ class MikanWorker:
         The background completion watcher calls this in independent worker slots so
         slow subtitle extraction never blocks detection of newly completed torrents.
         """
-        if limit <= 0:
+        if limit <= 0 or not _mikan_admission_allowed(self.config, self.logger):
             return 0
         qbit = self._qbit()
         # Extraction slots are short-lived MikanWorker instances. Rebuilding
@@ -2971,12 +2973,15 @@ class MikanWorker:
                     retryable=False,
                 )
             if result.defer_seconds > 0:
-                _requeue_claimed_mikan_extract_job(
+                requeued = _requeue_claimed_mikan_extract_job(
                     self.config,
                     job,
                     reason=result.failure_detail or result.failure_reason or "Subtitle extraction deferred",
                     delay_seconds=result.defer_seconds,
+                    result=result,
                 )
+                if requeued:
+                    extraction_results.append((job.torrent, result))
                 self.logger.info(
                     "Deferred Mikan subtitle extraction without failure. torrent=%s retry_in=%ss reason=%s",
                     job.torrent.name,
@@ -2985,7 +2990,8 @@ class MikanWorker:
                 )
                 return
 
-            if result.extracted_count > 0 and job.torrent.hash:
+            fully_verified = _extract_result_covers_entries(result, job.pending_entries)
+            if fully_verified and job.torrent.hash:
                 try:
                     qbit.add_tags(job.torrent.hash, self.config.mikan_processed_tags)
                 except QBitError as exc:
@@ -2997,9 +3003,9 @@ class MikanWorker:
                         exc,
                     )
 
-            final_status = "success" if result.extracted_count > 0 else "failed"
+            final_status = "success" if fully_verified else "failed"
             if (
-                result.extracted_count <= 0
+                not fully_verified
                 and not result.retryable
                 and not _mikan_extract_failure_allows_replacement(result.failure_reason)
             ):
@@ -3207,47 +3213,9 @@ class MikanWorker:
             pending = _load_pending(self.pending_path)
             pending_changed = False
             for torrent, result in extraction_results:
-                if result.extracted_count > 0:
-                    if _clear_completed_pending_entries(
-                        pending,
-                        torrent,
-                        series_mappings,
-                        extracted_count=result.extracted_count,
-                    ):
-                        pending_changed = True
-                elif result.retryable:
-                    if _mark_completed_pending_extract_deferred(
-                        pending,
-                        torrent,
-                        series_mappings,
-                        deferred_reason=result.failure_reason,
-                        deferred_detail=result.failure_detail,
-                        failure_context=result.failure_context,
-                    ):
-                        pending_changed = True
-                else:
-                    failed_entries = _active_pending_entries_for_completed_torrent(
-                        pending,
-                        torrent,
-                        series_mappings,
-                    )
-                    failed_targets = _mark_completed_pending_extract_failed(
-                        pending,
-                        torrent,
-                        series_mappings,
-                        failure_reason=result.failure_reason,
-                        failure_detail=result.failure_detail,
-                        failure_context=result.failure_context,
-                        subtitle_diagnostics=result.subtitle_diagnostics,
-                    )
-                    # target_ambiguity intentionally creates no replacement
-                    # target, but it still archives the active release and
-                    # records the review failure on the pending entry.  Save
-                    # that state even when the replacement list is empty.
-                    if failed_entries:
-                        pending_changed = True
-                    if failed_targets:
-                        replacement_targets.extend(failed_targets)
+                changed, targets = _apply_completed_extract_result(pending, torrent, series_mappings, result)
+                pending_changed = pending_changed or changed
+                replacement_targets.extend(targets)
             if pending_changed:
                 _save_pending(self.pending_path, pending)
         finally:
@@ -3597,6 +3565,8 @@ class MikanWorker:
         deadline_monotonic: float | None = None,
         progress_callback: Callable[[int, int, str], None] | None = None,
     ) -> MikanExtractResult:
+        entry_results: dict[str, dict[str, Any]] = {}
+
         def cancelled_result(extracted_count: int, current: str = "") -> MikanExtractResult:
             context = {"current_source": current} if current else {}
             return MikanExtractResult(
@@ -3606,6 +3576,7 @@ class MikanWorker:
                 failure_context=context,
                 retryable=True,
                 defer_seconds=_mikan_extract_timeout_retry_seconds(self.config),
+                entry_results=entry_results if pending_entries else None,
             )
 
         def is_cancelled() -> bool:
@@ -3632,6 +3603,25 @@ class MikanWorker:
                 torrent,
                 series_mappings,
             )
+        for entry in pending_entries:
+            key = _pending_completion_key(entry)
+            if key:
+                entry_results[key] = _extract_result_request_payload(MikanExtractResult(
+                    0, failure_reason="completion_evidence_missing",
+                    failure_detail="No verified source result for this episode", retryable=True))
+
+        def record_member(source: Path, target: Path | None, result: MikanExtractResult) -> None:
+            episode = extract_episode_number(source.name) or extract_episode_number(torrent.name)
+            matching = [entry for entry in pending_entries
+                        if _pending_entry_primary_episode_number(entry) == episode]
+            if episode is None and len(pending_entries) == 1:
+                matching = pending_entries
+            if len(matching) != 1 or not _pending_completion_key(matching[0]):
+                return  # Ambiguous membership never supplies completion evidence.
+            entry_results[_pending_completion_key(matching[0])] = {
+                **_extract_result_request_payload(result), "source_video": str(source),
+                "target_video": str(target) if target is not None else "",
+            }
         source_videos = _torrent_video_paths_from_file_list(torrent, torrent_files or [], self.config)
         if not source_videos and root.exists():
             source_videos.extend(
@@ -3828,6 +3818,11 @@ class MikanWorker:
                     )
                     if target_diagnostics:
                         target_missing_context["target_candidates"] = target_diagnostics[:10]
+                record_member(source_video, None, MikanExtractResult(0,
+                    failure_reason="target_ambiguity" if ambiguous else "target_video_not_found",
+                    failure_detail=target_ambiguity_detail if ambiguous else target_missing_detail,
+                    failure_context=target_ambiguity_context if ambiguous else target_missing_context,
+                    retryable=not ambiguous))
                 report_source_finished()
                 continue
             target_key = str(_safe_resolve(target_video)).casefold()
@@ -3843,6 +3838,7 @@ class MikanWorker:
                 cancel_event=cancel_event,
                 deadline_monotonic=deadline_monotonic,
             )
+            record_member(source_video, target_video, target_result)
             if target_result.defer_seconds > 0:
                 busy_targets.append(str(target_video))
                 report_source_finished()
@@ -3869,6 +3865,7 @@ class MikanWorker:
                 failure_context={"busy_targets": busy_targets[:10]},
                 retryable=True,
                 defer_seconds=10,
+                entry_results=entry_results if pending_entries else None,
             )
         if not failure_reason and target_missing_detail:
             if target_ambiguity_detail:
@@ -3879,6 +3876,10 @@ class MikanWorker:
                 failure_reason = "target_video_not_found"
                 failure_detail = target_missing_detail
                 failure_context = target_missing_context
+        unresolved = any(item.get("failure_reason") == "completion_evidence_missing" for item in entry_results.values())
+        if unresolved and not failure_reason:
+            failure_reason = "completion_evidence_missing"
+            failure_detail = "At least one batch episode lacks exact completion evidence"
         return MikanExtractResult(
             extracted_count,
             failure_reason=failure_reason,
@@ -3886,8 +3887,9 @@ class MikanWorker:
             subtitle_diagnostics=subtitle_diagnostics,
             failure_context=failure_context,
             retryable=(
-                failure_reason == "target_video_not_found"
+                failure_reason == "target_video_not_found" or unresolved
             ),
+            entry_results=entry_results if pending_entries else None,
         )
 
     def _extract_completed_source_to_target(
@@ -4195,6 +4197,9 @@ class MikanWorker:
         try:
             if not self._release_can_be_queued(release, operation=operation, state_required=state_required):
                 return "skipped"
+            if not _mikan_admission_allowed(self.config, self.logger):
+                return self._store_deferred_release_with_state_lock(release,
+                    reason="runtime_guardrail_pause", operation=operation, state_required=state_required)
             tags = _queue_tags(self.config.qbit_tags, release.source)
             try:
                 qbit.add_url(
@@ -4430,6 +4435,8 @@ class MikanWorker:
         state_required: bool,
         queue_lock_held: bool,
     ) -> int:
+        if not _mikan_admission_allowed(self.config, self.logger):
+            return 0
         lock = self._acquire_state_lock_for_enqueue(
             "queue_deferred_releases_snapshot",
             required=state_required,
@@ -4481,6 +4488,8 @@ class MikanWorker:
 
         queued = 0
         for item in deferred:
+            if not _mikan_admission_allowed(self.config, self.logger):
+                break
             key = item["key"]
             title = item["title"]
             torrent_url = item["torrent_url"]
@@ -4732,37 +4741,9 @@ class MikanWorker:
             result = _extract_result_from_request_payload(record.get("result"))
             if torrent is None:
                 continue
-            if result.extracted_count > 0:
-                if _clear_completed_pending_entries(
-                    pending,
-                    torrent,
-                    series_mappings,
-                    extracted_count=result.extracted_count,
-                ):
-                    pending_changed = True
-            elif result.retryable:
-                if _mark_completed_pending_extract_deferred(
-                    pending,
-                    torrent,
-                    series_mappings,
-                    deferred_reason=result.failure_reason,
-                    deferred_detail=result.failure_detail,
-                    failure_context=result.failure_context,
-                ):
-                    pending_changed = True
-            else:
-                failed_targets = _mark_completed_pending_extract_failed(
-                    pending,
-                    torrent,
-                    series_mappings,
-                    failure_reason=result.failure_reason,
-                    failure_detail=result.failure_detail,
-                    failure_context=result.failure_context,
-                    subtitle_diagnostics=result.subtitle_diagnostics,
-                )
-                if failed_targets:
-                    pending_changed = True
-                    replacement_targets.extend(failed_targets)
+            changed, targets = _apply_completed_extract_result(pending, torrent, series_mappings, result)
+            pending_changed = pending_changed or changed
+            replacement_targets.extend(targets)
             applied += 1
         if pending_changed:
             _save_pending(self.pending_path, pending)
@@ -8432,8 +8413,25 @@ def _mikan_extract_dispatch_counts(config: AppConfig) -> tuple[int, int]:
             conn.close()
 
 
+def _mikan_admission_allowed(config: AppConfig, logger: logging.Logger | None = None) -> bool:
+    """Use the existing runtime/hold authority at download and extract claims."""
+    from m2_production_observation import admit_new_job, circuit_breaker_active
+    try:
+        for name, flag in (("ai_control.json", "reconciliation_hold"), ("deployment_hold.json", "active")):
+            path = Path(config.work_path) / name
+            if path.exists():
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(payload, dict) or payload.get(flag):
+                    return False
+        return not circuit_breaker_active(config) and bool(admit_new_job(config, logger=logger))
+    except Exception as exc:  # An unreadable safety authority must not admit work.
+        if logger is not None:
+            logger.warning("Mikan runtime admission unavailable; retaining pending work: %s", exc)
+        return False
+
+
 def _claim_mikan_extract_jobs(config: AppConfig, *, limit: int) -> list[MikanExtractJob]:
-    if limit <= 0:
+    if limit <= 0 or not _mikan_admission_allowed(config):
         return []
     worker_id = f"{os.getpid()}:{uuid.uuid4().hex[:12]}"
     now = time.time()
@@ -8621,6 +8619,7 @@ def _requeue_claimed_mikan_extract_job(
     *,
     reason: str,
     delay_seconds: float = 0.0,
+    result: MikanExtractResult | None = None,
 ) -> bool:
     now = time.time()
     available_at = now + max(0.0, float(delay_seconds or 0))
@@ -8634,6 +8633,7 @@ def _requeue_claimed_mikan_extract_job(
                 worker_id = '',
                 lease_until = ?,
                 last_error = ?,
+                result_json = COALESCE(?, result_json),
                 updated_at = ?,
                 started_at = 0,
                 finished_at = 0
@@ -8641,7 +8641,9 @@ def _requeue_claimed_mikan_extract_job(
               AND status = 'running'
               AND worker_id = ?
             """,
-            (available_at, str(reason or "")[:2000], now, job.job_key, job.worker_id),
+            (available_at, str(reason or "")[:2000],
+             json.dumps(_extract_result_request_payload(result), ensure_ascii=False, sort_keys=True) if result is not None else None,
+             now, job.job_key, job.worker_id),
         )
         conn.commit()
         return cursor.rowcount == 1
@@ -8749,7 +8751,7 @@ def _finish_mikan_extract_job(
     worker_id: str = "",
 ) -> bool | None:
     now = time.time()
-    if status == "success":
+    if status == "success" and _extract_result_is_complete(result):
         final_status = "success"
     elif _mikan_extract_result_should_be_replaced(result):
         final_status = "replaced"
@@ -8760,6 +8762,15 @@ def _finish_mikan_extract_job(
     conn: sqlite3.Connection | None = None
     try:
         conn = _mikan_state_existing_connect(config)
+        if final_status == "success":
+            row = conn.execute("SELECT pending_entries_json FROM mikan_extract_jobs WHERE job_key = ?", (job_key,)).fetchone()
+            if row is None:
+                return False
+            entries = json.loads(str(row[0] or "[]"))
+            if not isinstance(entries, list) or not _extract_result_covers_entries(result, entries):
+                result = replace(result, failure_reason="completion_evidence_missing",
+                    failure_detail="Batch result does not cover the persisted episode obligations", retryable=True)
+                final_status = "failed"
         where_sql = "WHERE job_key = ?"
         params: list[Any] = [
             final_status,
@@ -8815,7 +8826,7 @@ def _mikan_extract_failure_suppresses_replacement(reason: str) -> bool:
 
 def _mikan_extract_result_should_be_replaced(result: MikanExtractResult) -> bool:
     return (
-        result.extracted_count <= 0
+        not _extract_result_is_complete(result)
         and not bool(result.retryable)
         and _mikan_extract_failure_allows_replacement(result.failure_reason)
     )
@@ -9927,6 +9938,7 @@ def _extract_result_request_payload(result: MikanExtractResult) -> dict[str, Any
         "subtitle_diagnostics": result.subtitle_diagnostics[:10],
         "retryable": result.retryable,
         "defer_seconds": result.defer_seconds,
+        "entry_results": result.entry_results,
     }
 
 
@@ -9943,6 +9955,7 @@ def _extract_result_from_request_payload(value: object) -> MikanExtractResult:
         failure_context=failure_context if isinstance(failure_context, dict) else {},
         retryable=bool(value.get("retryable")),
         defer_seconds=float(value.get("defer_seconds") or 0),
+        entry_results=value.get("entry_results") if isinstance(value.get("entry_results"), dict) else None,
     )
 
 
@@ -10848,6 +10861,79 @@ def _pending_failure_used_extra_video(entry: dict[str, Any]) -> bool:
     if not isinstance(source_video, str) or not source_video:
         return False
     return _is_extra_video_path(Path(source_video))
+
+
+def _extract_result_is_complete(result: MikanExtractResult) -> bool:
+    if result.extracted_count <= 0 or result.failure_reason or result.retryable or result.defer_seconds > 0:
+        return False
+    if result.entry_results is not None:
+        return bool(result.entry_results) and all(
+            isinstance(item, dict) and _extract_result_is_complete(
+                _extract_result_from_request_payload({**item, "entry_results": None})
+            ) for item in result.entry_results.values()
+        )
+    return True
+
+
+def _extract_result_covers_entries(result: MikanExtractResult, entries: list[dict[str, Any]]) -> bool:
+    if not _extract_result_is_complete(result):
+        return False
+    if not entries:
+        return True
+    if result.entry_results is None:
+        return len(entries) == 1
+    keys = [_pending_completion_key(entry) for entry in entries]
+    return all(keys) and len(set(keys)) == len(keys) and set(keys) == set(result.entry_results)
+
+
+def _pending_completion_key(entry: dict[str, Any]) -> str:
+    bangumi = _coerce_int(entry.get("bangumi_id"))
+    episode = _pending_entry_primary_episode_number(entry)
+    return f"{bangumi}:{episode}" if bangumi is not None and episode is not None else ""
+
+
+def _apply_completed_extract_result(
+    pending: dict[str, Any], torrent: QBitTorrent,
+    series_mappings: list[dict[str, object]], result: MikanExtractResult,
+) -> tuple[bool, list[MikanReplacementTarget]]:
+    """Apply only exact member evidence; a positive aggregate cannot fill a batch."""
+    entries = _active_pending_entries_for_completed_torrent(pending, torrent, series_mappings)
+    targets: list[MikanReplacementTarget] = []
+    changed = False
+    for index, entry in enumerate(entries):
+        active_hash = str(entry.get("info_hash") or extract_torrent_info_hash(str(entry.get("torrent_url") or "")) or "").casefold()
+        if active_hash and torrent.hash and active_hash != str(torrent.hash).casefold():
+            continue  # A delayed old receipt cannot finish a replacement source.
+        key = _pending_completion_key(entry)
+        member = result
+        payload = result.entry_results.get(key) if result.entry_results is not None else None
+        if isinstance(payload, dict):
+            member = _extract_result_from_request_payload({**payload, "entry_results": None})
+        elif result.entry_results is not None or (result.extracted_count > 0 and len(entries) > 1):
+            # Legacy mixed receipts cannot identify which member succeeded.
+            # Keep the source/retry budget so a bounded revalidation can reuse it.
+            member = MikanExtractResult(0, failure_reason="completion_evidence_missing",
+                failure_detail=result.failure_detail or "Missing exact episode completion evidence; retain downloaded source for revalidation",
+                subtitle_diagnostics=result.subtitle_diagnostics, failure_context=result.failure_context,
+                retryable=True)
+        entry["last_extract_result"] = payload if isinstance(payload, dict) else _extract_result_request_payload(member)
+        scoped = {"items": {key or str(index): entry}}
+        if _extract_result_is_complete(member):
+            changed = bool(_clear_completed_pending_entries(scoped, torrent, series_mappings, extracted_count=1)) or changed
+        elif member.retryable or member.defer_seconds > 0:
+            changed = _mark_completed_pending_extract_deferred(scoped, torrent, series_mappings,
+                deferred_reason=member.failure_reason, deferred_detail=member.failure_detail,
+                failure_context=member.failure_context) or changed
+        else:
+            replacements = _mark_completed_pending_extract_failed(scoped, torrent, series_mappings,
+                failure_reason=member.failure_reason, failure_detail=member.failure_detail,
+                failure_context=member.failure_context, subtitle_diagnostics=member.subtitle_diagnostics)
+            # Collection release metadata lists all episodes; this obligation is
+            # only its primary episode, not a new request for successful siblings.
+            primary = _pending_entry_primary_episode_number(entry)
+            targets.extend(t for t in replacements if primary is None or t.episode == primary)
+            changed = True
+    return changed, targets
 
 
 def _clear_completed_pending_entries(

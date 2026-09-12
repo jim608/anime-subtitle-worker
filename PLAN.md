@@ -2,6 +2,19 @@
 
 ## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
 
+Sep12 16:52UTC: M2 NOT COMPLETE. Real collection finished/extracted but aggregate
+count1 falsely completed12 members; target3583:6 has no verified TC/new manifest,
+source checksum+17 sidecars unchanged. Incident persisted via existing breaker API:
+TRIPPED. Existing owned reconciliation hold m2-recon-batch-completion-20260912T1645
+contains admission; active AI Queue jobs0 at bounded snapshot. Runtime stillad5bdad,
+WebUI175a02a,69holds/UNPROVEN; same Gate152911 ACTIVE8/8, no reset/acceptance/wait.
+Candidate minimal per-member results, valid-subtitle preservation and Mikan breaker
+admission:369 server targeted tests PASS plus real ffmpeg/ffprobe preservation and
+SQLite latch/restart replay. Not deployed; no formal AI/download/extraction additions.
+Next engineering work: controlled tripped-runtime handoff (not old ARMED-only script),
+exact12 completion revalidation reusing full download, safe deployment/recovery,
+formal artifact proof. Details in latest remaining-acceptance and observation docs.
+
 Sep12 16:02UTC: read-only exact-source mapping verified on ad5bdad/ARMED/69holds.
 Download801,386,877bytes/17.183%; EP06 correctly selected/readable but only16.3033%
 complete despite full allocated file size. No partial-media decoding/publication.

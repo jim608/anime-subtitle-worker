@@ -226,7 +226,8 @@ def extract_available_subtitles(
             (candidate.source_path, _subtitle_output_path(output_video, candidate.language), candidate.language)
             for candidate in selected
         ]
-        _publish_official_subtitle_set(output_video, publications, config)
+        _publish_official_subtitle_set(output_video, publications, config,
+            **({"preserve_valid_existing": True} if validate_for_import else {}))
         for candidate, (_source, output, _language) in zip(selected, publications, strict=True):
             extracted.append(
                 ExtractedSubtitle(
@@ -373,6 +374,8 @@ def _publish_official_subtitle_set(
     output_video: Path,
     publications: list[tuple[Path, Path, str]],
     config: AppConfig,
+    *,
+    preserve_valid_existing: bool = False,
 ) -> None:
     """Validate and atomically publish one complete official subtitle set."""
 
@@ -424,6 +427,16 @@ def _publish_official_subtitle_set(
         source_sha256 = sha256_file(source)
         if output.is_file() and sha256_file(output) == source_sha256:
             continue
+        if preserve_valid_existing and output.is_file():
+            existing = classify_sidecar_subtitle(output)
+            if existing.language == expected_language and _validated_import_candidates(
+                [_SubtitleCandidate(output, expected_language, -1, existing, (0, 0), "", False)],
+                output_video, config, None, None,
+            ):
+                # Automatic download/import is gap filling, not authorization
+                # to replace another valid rendition. Explicit versioned
+                # publication retains its existing default contract.
+                continue
         effective.append((source, output, expected_language, source_sha256))
     if not effective:
         return
@@ -668,7 +681,8 @@ def normalize_sidecar_subtitles_for_output(
                 staged_candidates, output_video, config, diagnostics, deadline_monotonic,
             )) != len(staged_candidates):
                 return []
-        _publish_official_subtitle_set(output_video, publications, config)
+        _publish_official_subtitle_set(output_video, publications, config,
+            **({"preserve_valid_existing": True} if validate_for_import else {}))
 
         for candidate in selected:
             output = _subtitle_output_path(output_video, candidate.language)

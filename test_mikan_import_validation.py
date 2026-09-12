@@ -20,6 +20,28 @@ def dialogue_srt(text):
 
 
 class MikanImportValidationTest(unittest.TestCase):
+    def test_import_does_not_overwrite_a_different_valid_official_subtitle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "download" / "Show - 01.mkv"
+            source.parent.mkdir()
+            source.write_bytes(b"download source unchanged")
+            sidecar = source.with_suffix(".zh-TW.ass")
+            sidecar.write_text(dialogue_ass("這裡是新下載的繁體字幕，我們選擇另外一門課程"), encoding="utf-8")
+            target = root / "library" / "Show - S01E01.mkv"
+            target.parent.mkdir()
+            target.write_bytes(b"source unchanged")
+            official = target.with_suffix(".zh-TW.ass")
+            official.write_text(dialogue_ass(), encoding="utf-8")
+            before = official.read_bytes(), official.stat().st_mtime_ns
+            config = SimpleNamespace(work_path=root / "work", mikan_remove_ai_after_extract=False)
+            with patch("source_inventory._probe_media", return_value={"format": {"duration": "100"}}):
+                normalize_sidecar_subtitles_for_output(source, config, output_video_path=target, validate_for_import=True)
+            self.assertEqual((official.read_bytes(), official.stat().st_mtime_ns), before)
+            self.assertEqual(source.read_bytes(), b"download source unchanged")
+            self.assertEqual(target.read_bytes(), b"source unchanged")
+            self.assertFalse(list((root / "work" / "official_subtitle_versions").glob("*/*/manifest.json")))
+
     def test_invalid_and_signs_only_cannot_publish_or_retire_ai(self):
         for text in ("<html>這裡的學校讓我們一起選擇明天的課程</html>", dialogue_ass(count=1),
                      dialogue_ass().replace("0:00:01.00", "bad-time")):

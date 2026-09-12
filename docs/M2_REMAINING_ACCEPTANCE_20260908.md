@@ -1,5 +1,84 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-12 16:52 UTC — real incorrect completion contained; tested repair checkpoint
+
+**M2 NOT COMPLETE. New verified formal deliveries: AI0/download0/extraction0.**
+The collection completed automatically (4,664,918,120 bytes, qB100%, amount_left0)
+and its extraction job ran1789229823.830913–1789229897.7482421. Its result was
+success/extracted_count1 while retaining subtitle_validation_failed/hard_qc_failed;
+all12 pending episodes became completed. This was not12 successful deliveries.
+
+Exact target3583:6 / anonymous obligation **m2dl_624abd694053c6466d4c** was then
+re-read: no currently verified TC/SC, unchanged source full checksum, all17 original
+sidecars unchanged, and no post-request official manifest. Its two old manifests
+predate this recovery. Exact indexed resolution of all12 members also found no
+post-request manifest. At least the target6 completion is demonstrably false;
+the other11 terminal claims require individual revalidation, not blanket failure
+or success. Do not reset/re-add the completed torrent or use aggregate count1 as
+a new subtitle delivery.
+
+Evidence in /logs/m2-collection-target-20260912T1545/:
+- publication-protection-extraction-inspect.json (actual completed extraction row).
+- pending-scope-1789230091723964802.json (all12 completed).
+- completion-evidence-1789230596852012716.json (real false completion and hashes).
+- incorrect-completion-trip.json (existing guardrail API incident, proof digest).
+Earlier pause/cancellation helpers made **no** qB pause/cancel or forced termination.
+
+The real incorrect_completion incident was persisted using trip_circuit_breaker.
+Existing Mikan loops obeyed deployment/reconciliation holds but lacked a breaker
+check at claim/add boundaries. Therefore the existing authorized reconciliation
+pause now contains new admission with owner ID
+**m2-recon-batch-completion-20260912T1645**. This is an owned hold/intent, **not**
+a sealed reconciliation receipt or completed recovery. Other owners were checked
+before setting it; no running job was terminated, latch cleared, DB patched or
+checkpoint deleted. Preserve this hold until safe controlled handoff is complete.
+
+Latest bounded live state:
+/logs/m2-batch-completion-candidate-20260912T1700/current-status-1789231762260812402.json.
+Worker **ad5bdade07d000ca28160cc38b919120700f10af**, image
+sha256:e3d2d7258177663f5068c66736d3b0499566ad4cc096e4f50c4a764c412148e1;
+WebUI **175a02a7bad46e0b6fa2372c59f39e8dd272911e**, unchanged.
+Breaker **TRIPPED**, active AI Queue jobs0, holds69/UNPROVEN retained.
+Same Gate **m2-gate-20260912T152911952471Z-5cab10fdae**, ACTIVE8 enrolled/8 settled,
+no final20 summary or acceptance. No deployment, Gate reset, cohort substitution,
+M3/M4 work or waiting for Gate20 occurred in this repair step.
+
+Minimal candidate changes (not deployed):
+- mikan_worker.py: persist per-obligation extraction results through durable jobs,
+  partial deferral and delayed state writes; success applies only to the exact
+  member; incomplete legacy aggregate receipts cannot complete a collection.
+  Reject stale receipt/source-hash mismatches and whole-job success missing members.
+  Use existing runtime/breaker/hold admission checks before new download or claim.
+- subtitle_extract.py: automatic validated imports preserve a different existing
+  valid official subtitle; explicit versioned publisher behavior remains unchanged.
+- test_mikan_batch_completion.py / test_mikan_import_validation.py: regressions.
+No source policy, matching/QC thresholds, model routes or decision schema changed.
+
+Tests and full server evidence:
+- /logs/m2-batch-baseline-regressions-20260912T1650.log: old actual image reproduces
+  both false-completion assertions; missing per-member field separately reported.
+- /logs/m2-batch-completion-candidate-20260912T1700/: real ffmpeg/ffprobe fixture
+  reproduces existing-valid overwrite on old image; candidate preserves bytes/
+  mtime with no new manifest on repeat import. Fixture-only, not formal delivery.
+  Initial candidate269 tests PASS (superseded by the final overlapping suite).
+- /logs/m2-batch-completion-final-20260912T1650/: **369 targeted tests PASS**,
+  exit0; candidate-files.sha256 pins tested files. Actual SQLite+breaker fixture:
+  old image claims despite latch; candidate and fresh-container replay refuse,
+  retaining queued/attempts0/empty owner and identical breaker evidence.
+  No Production DB/media mounted in these containers; no network enabled.
+
+Next: review/finish the minimal controlled handoff for a *tripped* runtime, then
+safe-update-stack at the verified idle boundary, fresh deployed-image/fault proof,
+new reconciliation baseline and proper Gate invalidation/transition. The existing
+prepare_runtime_change entry requires ARMED and a clear breaker; it must NOT be
+used by clearing this incident or pretending it was a planned clean deployment.
+The existing historical revalidate_recorded_completion entry also explicitly
+refuses retained downloaded files (reuse_download_first); use/extend the existing
+controlled path to reconcile these exact12 obligations and reuse the complete
+download, not generic re-discovery. Preserve original successful members and all
+failed/unknown evidence. Actual new formal TC publication, lineage, final QC/hash,
+duplicate trigger and post-recovery claim remain unproven. Keep Goal active.
+
 ## 2026-09-12 16:02 UTC — live file mapping and fail-closed artifact checks
 
 M2 NOT COMPLETE; new verified formal AI0/download0/extraction0. No runtime code,

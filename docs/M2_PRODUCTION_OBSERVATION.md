@@ -1,5 +1,36 @@
 # M2 Production Observation
 
+## 2026-09-12 16:52 UTC — incorrect-completion incident; cohort retained
+
+M2 NOT COMPLETE; new formal AI0/download0/extraction0. Real download completed,
+but aggregate extraction count1 incorrectly completed all12 episodes; target3583:6
+has no verified TC and no new manifest. Full source checksum and17 prior sidecar
+hashes/mtimes are unchanged. Real evidence:
+/logs/m2-collection-target-20260912T1545/completion-evidence-1789230596852012716.json.
+Existing trip API persisted **incorrect_completion/TRIPPED** with the proof digest;
+receipt incorrect-completion-trip.json in that same directory is immutable evidence.
+
+Bounded live snapshot current-status-1789231762260812402.json under
+/logs/m2-batch-completion-candidate-20260912T1700/ confirms unchanged Workerad5bdad,
+WebUI175a02a,69 source holds/UNPROVEN,0 active AI Queue jobs, and original Gate
+m2-gate-20260912T152911952471Z-5cab10fdae **ACTIVE8 enrolled/8 settled**. No final20
+automatic report, acceptance, member substitution or baseline change was made.
+Historical recovery is not cohort progress. Prior settled failed20 evidence retained.
+
+Owned existing reconciliation hold **m2-recon-batch-completion-20260912T1645** stops
+new background download/extraction admission while tested code remains undeployed;
+owned-hold-intent.json/applied.json identify original control and authority. This
+is not a sealed recovery baseline, not permission to clear the breaker, and not a
+request to terminate active work. Existing work drained normally.
+
+Candidate per-member persistence, valid-output preservation and Mikan breaker
+admission are covered by369 server targeted tests plus real isolated import and
+durable latch replay. Evidence /logs/m2-batch-completion-final-20260912T1650/ and
+the candidate directory above. These are not fresh deployed-runtime7/7 or new
+formal subtitle evidence. Controlled tripped-runtime handoff and exact12-member
+revalidation using the existing complete download remain engineering work before
+admission can resume. Do not re-run old clean-ARMED planned handoff scripts.
+
 ## 2026-09-12 16:02 UTC — bounded source/file evidence, no Gate transition
 
 One actual read15:57UTC confirms Workerad5bdad/ARMED/runtime_baseline_match,
