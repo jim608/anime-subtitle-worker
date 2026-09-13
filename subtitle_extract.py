@@ -1540,6 +1540,27 @@ def _classify_subtitle_content_detail(text: str, *, metadata_language: str | Non
     text_chars = len(cleaned)
     chinese_language = _classify_chinese_text(cleaned)
     chinese_evidence = max(traditional_score, simplified_score)
+    if (
+        metadata_language == "ja"
+        and japanese_score >= 8
+        and japanese_score >= cjk_chars
+        and _cjk_without_kana_line_chars(cleaned) <= (cjk_chars + japanese_score) * 0.05
+    ):
+        # A hash-validated Japanese source may contain many kanji that also
+        # occur in the Chinese script marker sets.  Dominant kana plus the
+        # absence of a substantial standalone Chinese dialogue layer resolves
+        # that conflict.  A tag alone, kanji-only text, and bilingual Chinese
+        # dialogue must never be promoted through this branch.
+        return _classification(
+            "ja",
+            "japanese_context_dominant_kana",
+            metadata_language,
+            traditional_score,
+            simplified_score,
+            japanese_score,
+            cjk_chars,
+            text_chars,
+        )
     if chinese_language is not None and chinese_evidence >= 2:
         return _classification(
             chinese_language,

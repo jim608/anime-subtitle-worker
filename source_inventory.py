@@ -15,8 +15,8 @@ from typing import Any
 import uuid
 
 
-SOURCE_INPUT_IDENTITY_VERSION = "source-input-identity-v1"
-SOURCE_INVENTORY_VERSION = "source-inventory-v1"
+SOURCE_INPUT_IDENTITY_VERSION = "source-input-identity-v2"
+SOURCE_INVENTORY_VERSION = "source-inventory-v2"
 MATERIALIZED_SUBTITLE_CACHE_VERSION = "materialized-subtitle-v1"
 SIDECAR_SUBTITLE_EXTENSIONS = frozenset({".ass", ".ssa", ".srt", ".vtt"})
 TEXT_SUBTITLE_CODECS = frozenset({"ass", "ssa", "subrip", "srt", "webvtt", "mov_text"})
@@ -1031,7 +1031,17 @@ def _subtitle_metrics(path: Path) -> _SubtitleMetrics:
         valid_timing_count=valid,
         empty_event_count=empty,
         sample_text="\n".join(samples)[:MAX_SAMPLE_CHARACTERS],
-        content_sha256=_canonical_sha256(semantic_events),
+        # ASS and SRT can serialize the same timed cues in different orders.
+        # Hash the exact multiset, not serialization order; retain duplicate
+        # multiplicity and every timestamp/text difference.  The v2 cheap
+        # identity prevents reuse of v1 decisions under this digest contract.
+        content_sha256=_canonical_sha256(sorted(
+            semantic_events,
+            key=lambda event: (
+                event["start"] is None, event["start"] or 0.0,
+                event["end"] is None, event["end"] or 0.0, event["text"],
+            ),
+        )),
     )
 
 

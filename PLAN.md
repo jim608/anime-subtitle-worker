@@ -1,6 +1,18 @@
 # Incremental Delivery Plan
 
-## Active Goal — M2 download/extraction acceptance and frozen Gate disposition
+## Active Goal — M2 strict Gate review root causes and necessary shared repair
+
+Sep13: old Gate183251 remains20/20,5strict/15review/FAIL. Bounded original-attempt
+classification:8TRUE_EXCEPTION/7FALSE_REVIEW/0AUTOMATABLE_GAP. Common defects:
+JA kanji classifiedasChinese bylegacyadapter; exactsameASS/SRTtimedcues falsely
+differentbecause serializationorder. Minimalcandidatefixes+v2cheapidentity;
+local146/server336PASS+7hash-pinnedartifactchecks. UnderlyinghardQCstillblocks,
+71holds/UNPROVEN preserved; nooldJobsrerun, noM3. Runtime885988/ARMED andcurrentGate
+202742ACTIVE20enrolled18settledatinitialsnapshot unchanged. Deploy/actualpostfixclaim
+stillpending; useexistingcontrolledhandoff, notGatechangeforanalysis/docs.
+See docs/M2_STRICT_GATE_REVIEW_ROOT_CAUSE_20260913.md. M2 ProductionNOTACCEPTED.
+
+## Prior bounded Goal — download/extraction acceptance and frozen Gate disposition
 
 Sep12 20:57UTC: BOUNDED GOAL ACCEPTANCE COMPLETE, overallM2 ProductionNOTACCEPTED.
 RealformalTC1/fullserverfinalQC+target/downloadchecksums+manifestlineagePASS;

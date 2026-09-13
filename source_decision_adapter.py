@@ -162,7 +162,11 @@ def resolve_source_decision(
         config,
         expected_candidate_fingerprint=candidate_fingerprint,
     )
-    classification = classify_subtitle_content_file(materialized)
+    classification = (
+        classify_subtitle_content_file(materialized, metadata_language="ja")
+        if strategy == TRANSLATE_JA_SUBTITLE
+        else classify_subtitle_content_file(materialized)
+    )
     detected_language = str(classification.language or "").strip().casefold()
     expected_languages = {
         USE_EXISTING_ZH_TW: {"zh-tw"},

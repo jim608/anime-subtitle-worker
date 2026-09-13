@@ -1,5 +1,16 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-13 — strict Gate review root-cause repair in progress
+
+Old5strict/15reviewFAIL retained. Complete bounded primary-cause classification:
+8TRUE_EXCEPTION,7FALSE_REVIEW,0AUTOMATABLE_GAP; details and per-member evidence:
+`docs/M2_STRICT_GATE_REVIEW_ROOT_CAUSE_20260913.md`.
+Two shared source-classification/dedup fixes pass local146/server336 tests and
+seven historical-artifact checks. Underlying hardQC remains enforced; no old
+Gate jobs were rerun. Current runtime885988/ARMED/71holds and Gate202742 retained
+during analysis. Safe deploy, new-runtime attestation and real eligible post-fix
+claim crossing the old blocker remain pending. No M3; M2 Production NOT ACCEPTED.
+
 ## 2026-09-12 20:57 UTC — bounded download/extraction acceptance complete
 
 Real formal TC1 is now fully verified, including server-side target/download
