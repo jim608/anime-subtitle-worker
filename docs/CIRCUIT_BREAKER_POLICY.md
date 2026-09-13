@@ -1,5 +1,18 @@
 # M2 Circuit Breaker Policy
 
+## 2026-09-13 — policy unchanged, deployed source review repair
+
+Worker `b6473598830b909cc37f139d8422c1f13697b43e`, runtimeARMED after safe deployment,
+actual-image395/fresh7PASS and existing authorized reconciliation. All101holds
+remain isolated and preservationUNPROVEN. Source hard-QC rejection now feeds
+existing safe candidate priority; it does not admit failed captions, uncertain
+source identity or incomplete inventory. Retry/checkpoint/breaker rules unchanged.
+CurrentGate `m2-gate-20260913T005933146136Z-085b1b3991` initialized0/20 at
+2026-09-13T00:59:33.146136Z; last bounded observation1enrolled/0settled. Prior
+Gates invalidated only for actual runtime change, original20FAIL evidence kept.
+No member backfill, manual protection reset, or Gate change for document edits.
+Details: `docs/M2_STRICT_GATE_REVIEW_ROOT_CAUSE_20260913.md`. M2accepted:NO.
+
 ## Current deployment — 2026-09-12 13:03 UTC
 
 Exact format-dispatch and authenticated recovered-history policies are deployed as

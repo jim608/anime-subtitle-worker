@@ -1,6 +1,6 @@
 # M2 remaining acceptance — 2026-09-08
 
-## 2026-09-13 — strict Gate review root-cause repair in progress
+## 2026-09-13 — bounded strict Gate review root-cause Goal complete
 
 Old5strict/15reviewFAIL retained. Complete bounded primary-cause classification:
 3TRUE_EXCEPTION,7FALSE_REVIEW,5AUTOMATABLE_GAP; details and per-member evidence:
@@ -8,10 +8,18 @@ Old5strict/15reviewFAIL retained. Complete bounded primary-cause classification:
 First shared classification/dedup fixes deployed70853f3, actual-image388/fresh7
 PASS, ARMED/101holds/UNPROVEN, Gate002210 initialized0/20. Automatic claims proven
 but fix-specific crossing not yet proven. Additional safe QC-fallback bridge
-passes server384+7 artifact+5 transition checks; necessary safe deployment and
-one real task-crossing remain pending. QC/source protection unchanged, no old
-Gate jobs rerun. Current Gate remains until actual runtime change. No M3;
-M2 Production NOT ACCEPTED.
+passes server384+7 artifact+5 transition checks and isolated container restart.
+Deployed b647359 via safe-update20260913T005315Z-3797885, actual-image395/fresh7
+PASS, ARMED/101holds/UNPROVEN, zero new deltas. New Gate005933 initialized0/20;
+Real m2ai_9a10797765ee1b50b2a8 automatically claimed01:00:31Z, rejected badTC QC,
+selected trustedJAaudio and reached actualASR with matching decision/checkpoint
+and heartbeat. Last boundedGate1enrolled/0settled; no further Gate wait.
+Evidence bounded-closeout-1789261455478301553.json under /logs/m2-review-qc-deploy-20260913T0055/.
+QC/source protection unchanged, no old
+Gate jobs rerun. Prior Gates retained; only actual runtime changes invalidate. No M3;
+Root-cause Goal complete; M2 Production NOT ACCEPTED. Three genuine oldASR
+fragment reviews and101source holds remain. Zero additional formal deliveries
+claimed by this Goal; earlier download/extractionTC1 is not recounted.
 
 ## 2026-09-12 20:57 UTC — bounded download/extraction acceptance complete
 

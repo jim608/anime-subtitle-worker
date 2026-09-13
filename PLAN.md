@@ -1,6 +1,6 @@
 # Incremental Delivery Plan
 
-## Active Goal — M2 strict Gate review root causes and necessary shared repair
+## Completed bounded Goal — M2 strict Gate review root causes and necessary shared repair
 
 Sep13: old Gate183251 remains20/20,5strict/15review/FAIL. Bounded original-attempt
 classification:3TRUE_EXCEPTION/7FALSE_REVIEW/5AUTOMATABLE_GAP. Common defects:
@@ -9,7 +9,10 @@ differentbecause serializationorder; unsafe caption rejection skipped existing
 safe alternatives. First fixes deployed70853f3/ARMED/101holds/UNPROVEN with
 actual-image388/fresh7PASS, Gate002210 initialized0/20. Additional QC-evidence
 bridge/v3 source identity/analyzer v2 passes server384+7artifacts+5transitions;
-necessary controlled deploy and real blocker-crossing remain pending. Existing
+deployed b647359 with actual-image395/fresh7PASS, isolated restart PASS, ARMED,
+101holds/UNPROVEN, Gate005933 initialized0/20. Real automatic claim m2ai_9a10797765ee1b50b2a8
+crossed previous hardQC earlyreview into trustedJAASR with validcheckpoint and
+heartbeat. Last boundedGate1enrolled/0settled; noGate/fulltranslation wait. Existing
 hardQC/source safety unchanged; no oldJobs rerun, noM3 or Gate change for docs.
 See docs/M2_STRICT_GATE_REVIEW_ROOT_CAUSE_20260913.md. M2 ProductionNOTACCEPTED.
 

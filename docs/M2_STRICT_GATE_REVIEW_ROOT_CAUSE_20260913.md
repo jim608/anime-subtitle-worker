@@ -127,10 +127,82 @@ was crossed. No new formal output is counted by this Goal.
 
 The additional QC fallback bridge passes server **384 tests**, seven exact
 historical artifact checks and five original selected-caption/trusted-audio
-transition checks. It remains pending safe deployment and real task-crossing
-evidence at this checkpoint; active Gate002210 remains untouched by analysis.
+transition checks. Safe deployment and runtime validation completed as below;
+one real automatic task-crossing is now verified below.
 The five transition checks use old hash-pinned captions and recorded metadata,
 not old Job reprocessing or Production ASR invocation.
+
+## Final shared fix deployment and real crossing — bounded Goal complete
+
+Worker `b6473598830b909cc37f139d8422c1f13697b43e` was safely deployed from
+`70853f3c8f169d411b7ec9ca73e371d01be3389d` by existing safe deployment
+`20260913T005315Z-3797885`. Owned admission drain reached idle naturally on its
+second check; no process termination or another owner's pause release occurred.
+The standard metadata migration check again found zero reports/changes/errors.
+Online backups and both earlier Gate histories remain retained.
+
+Actual image `sha256:b67cc921a6464104993307959b43187bae2424353f72e615b2e9ca0cb3b28aca`
+passed **395 related tests**, fresh breakers **7/7 PASS**, and runtime source
+attestation. WebUI remains `175a02a7bad46e0b6fa2372c59f39e8dd272911e`;
+Decision Schema 1 and configuration are unchanged. Controlled reconciliation
+`m2-recon-review-qc-20260913T0055` retained all 101 holds, zero new unexplained
+deltas, 6722 recoverable and 7323 retained-state identities (not deliveries).
+Receipt SHA-256 `8c1d0feaba91dc790bb976fecdc1593dedb10a5e18e7e696aadbeb8dd54b4278`
+links the previous `3137de51...` receipt. Preservation stays UNPROVEN.
+
+Gate002210 was invalidated only by this actual runtime change, with membership
+preserved. Gate `m2-gate-20260913T005933146136Z-085b1b3991` initialized **0/20** at
+`2026-09-13T00:59:33.146136Z`, baseline
+`m2-guardrail-v1:458b1a8ba2debd873852eb19`. Breaker ARMED; controlled recovery
+resumed claims. First bounded sample01:00:10UTC:0enrolled. Second and final
+sample01:02:28UTC:**1enrolled/0settled, ACTIVE**. No further Gate/Queue observation
+or fullASR/translation wait was performed.
+
+Real anonymous obligation **`m2ai_9a10797765ee1b50b2a8`**, delivery attempt
+`aiatt_5a492ab6d887e9d426448731500b552a7649f03d4c0da171835e8eb1cc8e6962`, was
+automatically claimed at `2026-09-13T01:00:31.153550Z`. No manual dispatch/Retry,
+old member rerun or easy-job selection occurred. Its otherwise-eligible TC
+caption (292cues) remained rejected for `timing_overlap` / `very_long_line`.
+Existing source priority selected eligible JA audio stream2, confidence0.91;
+Worker entered actual `transcription` with a running heartbeat.
+
+Successful SUBTITLE_DETECTION checkpoint binds this exact delivery attempt to
+decision `fe624343264d4cbaaddc41203da03695`, SHA-256
+`72b51b7e0ef3c17e349b5c0d724534eaa24b6fb704ed88420ebd687b198d683c`.
+Source input identity digest:
+`9dd7925f9d650fd1e22702036d356fed0916e2cb29265bf40b2060fe935fab21`.
+The final validator requires a subtitle whose ONLY rejection was hardQC,
+actual ASR start after decision persistence, and heartbeat after stage start.
+An already-ineligible source cannot count as a repaired review transition.
+
+`postfix-qc-observation-1789261348183238138.json` contains the runtime/attempt/
+source/decision/checkpoint/stage/heartbeat evidence. Offline verification
+`bounded-closeout-1789261455478301553.json` validates that saved evidence without
+another Queue read. All101holds, original20FAILmembers and prior Gate membership
+remain intact. Existing server admission/observation owns subsequent dispatches;
+Codex is no longer needed to watch or click Retry.
+
+Bounded root-cause Goal complete; **M2 Production accepted remains NO**.
+The three genuine oldASR cases retain18/22/12 unresolved fragment ranges after
+their original bounded repair. Unsafe captions remain unpublishable;101holds
+remain isolated, preservation UNPROVEN. This Goal verifies zero additional
+formal subtitles, not ASR completion or final QC of the running canary.
+Earlier download/extractionTC1 remains separate, not a frozen Gate replacement.
+
+The two-container restart test independently persisted/reused the same immutable
+QC-fallback decision with zero candidate-loader calls after restart, unchanged
+fixture source and no Production mounts. Evidence:
+`/logs/m2-review-qc-restart-20260913T0056/restart-pass.json`.
+Earlier isolated test-driver mappingproxy serialization failures are retained
+under the `0050` and `0052` test roots; they did not affect Production.
+Focused command: `python -m unittest test_m2_source_hard_qc_fallback test_m2_review_source_regressions -q`.
+Candidate command: `python -B /candidate/work/m2_review_qc_validation.py` inside
+an isolated network-disabled container. Actual-image command and395-test module
+list: `work/m2_review_qc_recover.py`, `actual-image-validation.log`.
+Final verified classification: `classification-1789260583759300014.json`.
+Second deployment, actual-image tests, attestation, fresh fault suite links,
+reconciliation and bounded real observations are all retained under
+`/logs/m2-review-qc-deploy-20260913T0055/`.
 
 ## Full server evidence
 

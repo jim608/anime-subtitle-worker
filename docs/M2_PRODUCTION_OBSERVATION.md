@@ -1,5 +1,28 @@
 # M2 Production Observation
 
+## 2026-09-13 00:59 UTC — shared review fixes safely deployed
+
+Old Gate183251 remains 20/20,5strict/15review/FAIL, all20members and original
+report retained. Bounded classification:3TRUE_EXCEPTION/7FALSE_REVIEW/5AUTOMATABLE_GAP.
+Details: `docs/M2_STRICT_GATE_REVIEW_ROOT_CAUSE_20260913.md`.
+
+Worker885988 ->70853f3 ->b6473598830b909cc37f139d8422c1f13697b43e via two necessary
+result-affecting safe deployments. Prior Gate202742 and Gate002210 histories
+retained; invalidation occurred only on actual runtime change, not analysis/docs.
+Final actual image395tests/fresh7breakers PASS, runtimeARMED and claims resumed.
+All101holds retained,0new deltas at finalhandoff,preservationUNPROVEN.
+
+New frozen Gate `m2-gate-20260913T005933146136Z-085b1b3991` starts
+`2026-09-13T00:59:33.146136Z`, baseline `m2-guardrail-v1:458b1a8ba2debd873852eb19`,
+initial0/20. Final bounded sample01:02:28UTC:1enrolled/0settledACTIVE.
+Real automatic claim m2ai_9a10797765ee1b50b2a8 at01:00:31Z crossed oldhardQC
+earlyreview into trustedJAASR with decisionfe624343.../validcheckpoint/heartbeat.
+Saved evidence validated in bounded-closeout-1789261455478301553.json;
+no further Queue/Gate query or fullASRwait. Bounded root-cause Goal complete,
+not a newformal subtitle claim or GatePASS. No old successful member transfer, replacement/backfill or historical
+download count added. Server owns subsequent claims/observation. No20wait/M3;
+M2 Production accepted:NO. Logs `/logs/m2-review-qc-deploy-20260913T0055/`.
+
 ## 2026-09-12 20:57 UTC — final bounded acceptance, no Gate mutation
 
 Final runtime-closeout-1789246394901631647.json confirms88598848.../ARMED/71holds,

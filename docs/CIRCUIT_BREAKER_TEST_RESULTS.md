@@ -1,5 +1,20 @@
 # M2 Circuit Breaker Test Results
 
+## 2026-09-13 — source review fixes, actual deployed runtime
+
+Worker `b6473598830b909cc37f139d8422c1f13697b43e` actual-image395 related tests PASS.
+Fresh isolated seven-breaker suite **7/7 PASS**, Production resources affected:false.
+Full result `/logs/m2-guardrail-fi-20260913T005926893770Z-8c8192b1/result.json`;
+events.jsonl in the same timestamped directory. Controlled recovery verifies
+runtime identity, retained101source holds/UNPROVEN and immutable old Gate history,
+then reports ARMED and resumes claims. No direct latch/lock/DB edits.
+Source-QC fallback has candidate384tests, seven historical artifact checks,
+five historical decision-transition checks and separate-container restart PASS.
+Real automatic task crosses earlyQC review into trustedJAASR with validcheckpoint
+and heartbeat; no QC, hallucination, source or breaker protection was relaxed.
+Evidence `/logs/m2-review-qc-deploy-20260913T0055/bounded-closeout-1789261455478301553.json`.
+M2 Production accepted:NO; noGate20wait or M3.
+
 ## Actual deployed closeout — 2026-09-12 13:03 UTC
 
 Worker1d5d737 actual image27a04d993a7f653c7392adc057e84a36fb108868c99d02b30f86818d0a9e7b02:
