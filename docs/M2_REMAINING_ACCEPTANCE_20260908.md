@@ -1,6 +1,42 @@
 # M2 remaining acceptance — 2026-09-08
 
-## 2026-09-13 — idle Worker incident (deployment / actual claim pending)
+## 2026-09-13 03:50 UTC — idle Worker incident recovered and real processing verified
+
+Safe-update `20260913T033702Z-984464` and controlled recovery both exited 0.
+Actual Worker `33b709584bd6ba463cc2d809242bd284f0b6d483`, image
+`sha256:6e8ac4f6ab4a0f1d96ee40f1c8b03487baf49da217ae7810a3a5e87a989e318b`;
+WebUI `c79840d4274b421ff25d44cbe094637c4384bb2b`. Actual-image 191 related
+tests PASS, UI 4 plus frontend PASS, copied real incident and actual container
+restart PASS; fresh isolated breakers 7/7 PASS. No full project test sweep.
+
+Reconciliation `m2-recon-owned-publication-20260913T0300`, receipt SHA
+`736d9e7b2214ce2d1853df97de78b8392e6f55c10cd1ca759d01711e8d589cd7`, retains
+101 existing holds plus the exact incident (102 total), with UNPROVEN preserved.
+No other handoff deltas; 6,711 queued identities in eligible recovery scope and
+7,323 other non-held identities retain their prior retry/terminal state, not success.
+Original Gate005933's 11 members are unchanged; only its actual runtime change
+invalidates it. New Gate `m2-gate-20260913T034622309404Z-36adb77a0e`, baseline
+`m2-guardrail-v1:8ae2a226a1007b69fe802bf8`, started `2026-09-13T03:46:22.309404Z`
+at 0/20. Breaker ARMED, own admission pause released; no old member backfill.
+
+Real automatic sequence: first job reached subtitle detection then local SRT parse
+retry; second reached source-selection review with a durable checkpoint; neither
+stopped independent jobs. Third `m2ai_7755ba8c25b1e3f7d8d9` claimed
+`03:49:00.970605Z`, source detection SUCCEEDED, ASR started `03:49:06.536381Z`,
+and transcription/ASR was RUNNING with heartbeat `03:49:59.027952Z` and a verified
+checkpoint hash. Proof `postfix-1789271419381295295.json` under the incident root.
+No manual task retry/requeue, source-hold release, completion wait or new delivery
+claim. Server scheduler continues on its existing cadence. Last bounded gate: three
+enrolled; no Gate PASS or M2 Production acceptance claimed.
+
+All 19 incident source/output/backup/provenance files retain exact size/mtime/hash.
+Existing safe-deploy retention removed 12 older successful-deployment backups;
+the current rollback backup and failed/incomplete backups were retained. Removed
+copies cannot be restored by that retention tool. This is recorded in safe-deploy.log.
+This bounded idle-claim task is complete; individual parse retry, genuine source
+review, 102 holds/UNPROVEN and overall M2 strict acceptance remain unresolved.
+
+### Original diagnosis and repair boundary
 
 One bounded server snapshot found scheduler alive with fresh heartbeat, zero running
 jobs and 6,711 due, non-held queued identities. No operator/deployment hold; the
@@ -20,7 +56,8 @@ strict acceptance predicates are unchanged. Unproven changes remain rejected.
 The existing controlled reconciliation gains only a typed proof for this incident;
 it retains the exact original review/claim/Gate and source hold, and refuses other
 unresolved trips or missing evidence. WebUI displays the existing admission reason.
-Deployment and actual post-recovery processing must be recorded below before closure.
+Deployment and actual post-recovery processing are recorded above; documents alone
+do not change runtime or create another Gate.
 
 ## 2026-09-13 — bounded strict Gate review root-cause Goal complete
 

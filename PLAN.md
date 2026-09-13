@@ -1,6 +1,6 @@
 # Incremental Delivery Plan
 
-## Current bounded task — unblock genuinely idle Production claims
+## Completed bounded task — unblock genuinely idle Production claims
 
 Sep13 incident: live scheduler, 6,711 due non-held queued jobs, zero running;
 TRIPPED incorrect_completion is the actual stop. Fix only the completion identity
@@ -8,8 +8,15 @@ comparison for an authenticated own replacement of a rejected TC output, and exp
 the existing admission reason in WebUI. No QC/source-policy relaxation, Queue rewrite,
 new milestone, history re-audit or M3. Preserve 101 holds and original Gate005933
 11-member evidence. Server evidence `/logs/m2-idle-20260913T0300/`; candidate tests
-and copied real incident pass; safe deployment and actual claim/Stage/checkpoint
-remain pending until the closeout record exists.
+and copied real incident pass. Safe deployment20260913T033702Z-984464 and controlled
+recovery completed with Worker33b7095/WebUIc79840d, actual-image191 and fresh7PASS,
+ARMED,102holds/UNPROVEN. NewGate034622 initialized0/20; old11-member Gate evidence
+preserved and invalidated only for actual runtime change. After one local SRT retry
+and one individual review, m2ai_7755ba8c25b1e3f7d8d9 automatically claimed03:49:00Z,
+source detection succeeded and actualASR/transcription ran with new03:49:59Z
+heartbeat and verified checkpoint hash. Last bounded3enrolled; no completion/Gate
+wait, no new delivery count or M2accepted claim. Full closeout is in remaining
+acceptance and observation documents; follow-up document sync does not redeploy.
 
 ## Completed bounded Goal — M2 strict Gate review root causes and necessary shared repair
 

@@ -1,5 +1,31 @@
 # M2 Production Observation
 
+## 2026-09-13 03:50 UTC — idle-claim recovery deployed and processing observed
+
+Worker `33b709584bd6ba463cc2d809242bd284f0b6d483`; WebUI
+`c79840d4274b421ff25d44cbe094637c4384bb2b`; image
+`sha256:6e8ac4f6ab4a0f1d96ee40f1c8b03487baf49da217ae7810a3a5e87a989e318b`.
+The exact incorrect_completion incident remains review-required and held; 101
+prior holds also remain (102 total), preservation UNPROVEN. Original Gate005933
+11-member evidence remains, status INVALIDATED_BY_RUNTIME_CHANGE only after
+actual safe deployment. Earlier 20/20, 5 strict / 15 review / FAIL is unchanged.
+
+Controlled recovery `m2breakerrec_13575eb681be4a0888b18050eb2af4d8` uses receipt
+`/logs/m2-reconciliation-m2-recon-owned-publication-20260913T0300.json` and returns
+ARMED. New frozen Gate `m2-gate-20260913T034622309404Z-36adb77a0e`, baseline
+`m2-guardrail-v1:8ae2a226a1007b69fe802bf8`, starts at
+`2026-09-13T03:46:22.309404Z`, 0/20. Current-state reconciliation is not a claim of
+historical source continuity. No prior successes/failed members were transferred.
+
+Last bounded snapshot: three enrolled, one settled; the first retrying member is
+not replaced by a later success. Three automatic claims observed: local malformed-SRT retry, individual
+source review with checkpoint, then real task `m2ai_7755ba8c25b1e3f7d8d9` claimed
+03:49:00.970605Z, completed subtitle detection and entered ASR. Latest observed
+transcription/ASR RUNNING heartbeat03:49:59.027952Z; checkpoint hash verified.
+No manual Retry/forced source admission. Scheduler continues independently of Codex.
+Evidence `/logs/m2-idle-20260913T0300/postfix-1789271419381295295.json`.
+No subsequent cohort wait, Gate PASS, new formal-delivery count or M2 acceptance.
+
 ## 2026-09-13 00:59 UTC — shared review fixes safely deployed
 
 Old Gate183251 remains 20/20,5strict/15review/FAIL, all20members and original

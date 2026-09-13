@@ -1,5 +1,26 @@
 # M2 Circuit Breaker Test Results
 
+## 2026-09-13 03:46 UTC — owned-publication completion identity repair
+
+Actual deployed Worker33b709584bd6ba463cc2d809242bd284f0b6d483: 191 targeted
+Worker/reconciliation/queue tests PASS. WebUIc79840d: four scheduler tests and
+frontend tests PASS. Real production incident copied into an isolated container,
+with fixture-only inode/checkpoint rebinding: old code rejects; new code accepts
+the authenticated own publication; original production decision/review unchanged.
+Actual container restart verifies the same persisted checkpoint and no stage rerun.
+Source/selected caption/output journal hashes checked; arbitrary input drift,
+missing/corrupt backup, wrong proof/code and unrelated trips continue to refuse.
+
+Fresh server-isolated breaker tests 7/7 PASS, Production resources affected:false:
+`/logs/m2-guardrail-fi-20260913T034616467739Z-e653d355/result.json` and events.jsonl.
+Full tests/restart/hash-pinned proof: `/logs/m2-idle-20260913T0300/`.
+Existing QC, source selection, publisher and strict acceptance predicates retain
+their original code hashes. Controlled recovery ARMED; 102 source holds retained.
+Real follow-on job reached ASR with fresh heartbeat/checkpoint; no Gate wait or
+M2 Production acceptance. Twelve older successful deployment backups were removed
+by the unchanged safe-deployment retention policy; current rollback and failure
+evidence remain, and no source media/subtitle was modified by that cleanup.
+
 ## 2026-09-13 — source review fixes, actual deployed runtime
 
 Worker `b6473598830b909cc37f139d8422c1f13697b43e` actual-image395 related tests PASS.

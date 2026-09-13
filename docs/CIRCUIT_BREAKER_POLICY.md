@@ -2,6 +2,13 @@
 
 ## 2026-09-13 — exact owned-publication identity incident
 
+Deployed once as Worker33b709584bd6ba463cc2d809242bd284f0b6d483 with WebUIc79840d.
+Controlled recovery completed ARMED after actual-image191, copied-case restart
+and fresh7 breaker tests PASS.102 source holds retained; original incident stays
+review-required. NewGate034622 initialized0/20 only for this actual runtime change.
+Independent follow-on task reached real ASR with new heartbeat/checkpoint; no Gate
+PASS or M2 acceptance claimed. Document-only closeout must not redeploy.
+
 `incorrect_completion` remains fail-closed. A completion-only identity comparison
 may account for one canonical converted TC output replacing an originally rejected,
 non-selected caption only when all other inputs match and the existing strict
@@ -14,7 +21,7 @@ Existing `authorized_reconciliation` accepts the typed
 copied-real-case, restart, fail-closed and unchanged-policy evidence. The original
 attempt must remain review-required and held, the old Gate/receipt must remain
 preserved, and unrelated unresolved breaker events still refuse recovery. No direct
-latch reset or separate recovery mechanism is introduced. Candidate/deployment
+latch reset or separate recovery mechanism is introduced. Exact deployment
 evidence and actual claim status: `/logs/m2-idle-20260913T0300/`.
 
 ## 2026-09-13 — policy unchanged, deployed source review repair
