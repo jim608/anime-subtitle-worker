@@ -1,5 +1,22 @@
 # M2 Circuit Breaker Policy
 
+## 2026-09-13 — exact owned-publication identity incident
+
+`incorrect_completion` remains fail-closed. A completion-only identity comparison
+may account for one canonical converted TC output replacing an originally rejected,
+non-selected caption only when all other inputs match and the existing strict
+manifest, attempt-bound completed publication journal and actual retained backup
+authenticate the change. This never authorizes checkpoint reuse across unknown
+source changes or weakens QC/strict predicates.
+
+Existing `authorized_reconciliation` accepts the typed
+`owned_publication_identity_mismatch` incident only with hash-pinned exact-code,
+copied-real-case, restart, fail-closed and unchanged-policy evidence. The original
+attempt must remain review-required and held, the old Gate/receipt must remain
+preserved, and unrelated unresolved breaker events still refuse recovery. No direct
+latch reset or separate recovery mechanism is introduced. Candidate/deployment
+evidence and actual claim status: `/logs/m2-idle-20260913T0300/`.
+
 ## 2026-09-13 — policy unchanged, deployed source review repair
 
 Worker `b6473598830b909cc37f139d8422c1f13697b43e`, runtimeARMED after safe deployment,

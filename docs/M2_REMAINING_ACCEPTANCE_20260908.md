@@ -1,5 +1,27 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-13 — idle Worker incident (deployment / actual claim pending)
+
+One bounded server snapshot found scheduler alive with fresh heartbeat, zero running
+jobs and 6,711 due, non-held queued identities. No operator/deployment hold; the
+actual admission refusal is TRIPPED `incorrect_completion` at `m2_strict_completion`,
+not cohort capacity or resource admission. Gate005933 was ACTIVE, 11 enrolled/settled.
+101 existing source holds remain. Full evidence: `/logs/m2-idle-20260913T0300/`.
+
+The affected CONVERT_ZH_CN job safely replaced an already hard-QC-rejected canonical
+TC output. Its verified generated output was then correctly removed from candidate
+inventory; strict completion incorrectly required that post-publication inventory
+to match the pre-publication decision. Source video and selected SC did not change.
+The completion-only fix accepts this single removed candidate only with the original
+rejection, unchanged other inputs, strict output manifest, attempt-bound completed
+publication journal and matching retained backup bytes. Checkpoint reuse, QC and
+strict acceptance predicates are unchanged. Unproven changes remain rejected.
+
+The existing controlled reconciliation gains only a typed proof for this incident;
+it retains the exact original review/claim/Gate and source hold, and refuses other
+unresolved trips or missing evidence. WebUI displays the existing admission reason.
+Deployment and actual post-recovery processing must be recorded below before closure.
+
 ## 2026-09-13 — bounded strict Gate review root-cause Goal complete
 
 Old5strict/15reviewFAIL retained. Complete bounded primary-cause classification:

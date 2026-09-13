@@ -1,5 +1,16 @@
 # Incremental Delivery Plan
 
+## Current bounded task — unblock genuinely idle Production claims
+
+Sep13 incident: live scheduler, 6,711 due non-held queued jobs, zero running;
+TRIPPED incorrect_completion is the actual stop. Fix only the completion identity
+comparison for an authenticated own replacement of a rejected TC output, and expose
+the existing admission reason in WebUI. No QC/source-policy relaxation, Queue rewrite,
+new milestone, history re-audit or M3. Preserve 101 holds and original Gate005933
+11-member evidence. Server evidence `/logs/m2-idle-20260913T0300/`; candidate tests
+and copied real incident pass; safe deployment and actual claim/Stage/checkpoint
+remain pending until the closeout record exists.
+
 ## Completed bounded Goal — M2 strict Gate review root causes and necessary shared repair
 
 Sep13: old Gate183251 remains20/20,5strict/15review/FAIL. Bounded original-attempt

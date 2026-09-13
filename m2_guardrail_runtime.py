@@ -1375,6 +1375,7 @@ def prepare_runtime_change(
 _RECONCILIATION_INCIDENT_KINDS = frozenset({
     'asr_postprocess_diagnostics_loss', 'line_repair_evidence_incomplete',
     'source_language_vote_mismatch', 'subtitle_format_dispatch',
+    'owned_publication_identity_mismatch',
 })
 
 
@@ -1406,7 +1407,9 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
     line_repair = root_cause.get('incident_kind') == 'line_repair_evidence_incomplete'
     language_vote = root_cause.get('incident_kind') == 'source_language_vote_mismatch'
     format_dispatch = root_cause.get('incident_kind') == 'subtitle_format_dispatch'
-    contract = ('m2-subtitle-format-regression-v1' if format_dispatch else
+    owned_publication = root_cause.get('incident_kind') == 'owned_publication_identity_mismatch'
+    contract = ('m2-owned-publication-regression-v1' if owned_publication else
+                'm2-subtitle-format-regression-v1' if format_dispatch else
                 'm2-language-vote-regression-v1' if language_vote else
                 'm2-line-repair-regression-v1' if line_repair else 'm2-asr-postprocess-regression-v1')
     if (not isinstance(report, Mapping)
@@ -1438,6 +1441,11 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
     )):
         raise RuntimeContractError('subtitle_format_recovery_regression_unproven')
     logs = report.get('logs')
+    if owned_publication and any(report.get(key) is not True for key in (
+        'input_diff_reproduced', 'owned_journal_verified', 'arbitrary_drift_rejected',
+        'original_incident_preserved', 'unchanged_strict_predicates',
+    )):
+        raise RuntimeContractError('owned_publication_recovery_regression_unproven')
     if not isinstance(logs, list) or len(logs) != 2:
         raise RuntimeContractError('postprocess_recovery_logs_missing')
     for item in logs:
@@ -1446,7 +1454,9 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
             or 'sha256:' + sha256_file(log) != item.get('sha256')):
             raise RuntimeContractError('postprocess_recovery_logs_invalid')
     code = report.get('code_sha256')
-    names = (('worker.py', 'opencc_convert.py', 'ass_utils.py', 'output_manifest.py',
+    names = (('m2_strict_runtime_evidence.py', 'm2_guardrail_runtime.py', 'worker.py',
+              'source_inventory.py', 'source_decision.py', 'm2_production_observation.py') if owned_publication else
+             ('worker.py', 'opencc_convert.py', 'ass_utils.py', 'output_manifest.py',
               'source_decision.py', 'm2_strict_runtime_evidence.py', 'm2_guardrail_runtime.py') if format_dispatch else
              ('main.py', 'language_detector.py', 'scan_state.py',
               'm2_strict_runtime_evidence.py', 'm2_guardrail_runtime.py') if language_vote else
@@ -1732,7 +1742,8 @@ def _planned_change_incident(
                                                root_cause=root_cause, breaker=breaker)
         elif root_cause.get('incident_kind') in _RECONCILIATION_INCIDENT_KINDS:
             _validate_postprocess_recovery_proof(config, evidence, root_cause)
-            incident_key = ('language_vote_incident' if root_cause.get('incident_kind') == 'source_language_vote_mismatch' else
+            incident_key = ('owned_publication_incident' if root_cause.get('incident_kind') == 'owned_publication_identity_mismatch' else
+                            'language_vote_incident' if root_cause.get('incident_kind') == 'source_language_vote_mismatch' else
                             'line_repair_incident' if root_cause.get('incident_kind') == 'line_repair_evidence_incomplete'
                             else 'asr_postprocess_incident')
             incident = request.get(incident_key)
@@ -2746,7 +2757,8 @@ def recover_runtime_local(
             raise RuntimeContractError("planned_change_signature_invalid")
         if root_cause.get('incident_kind') in _RECONCILIATION_INCIDENT_KINDS:
             _validate_postprocess_recovery_proof(config, evidence, root_cause)
-        category = ("SUBTITLE_FORMAT_DISPATCH_REPAIR" if root_cause.get('incident_kind') == 'subtitle_format_dispatch' else
+        category = ("OWNED_PUBLICATION_IDENTITY_REPAIR" if root_cause.get('incident_kind') == 'owned_publication_identity_mismatch' else
+                    "SUBTITLE_FORMAT_DISPATCH_REPAIR" if root_cause.get('incident_kind') == 'subtitle_format_dispatch' else
                     "SOURCE_LANGUAGE_VOTE_REPAIR" if root_cause.get('incident_kind') == 'source_language_vote_mismatch' else
                     "LINE_REPAIR_EVIDENCE_REPAIR" if root_cause.get('incident_kind') == 'line_repair_evidence_incomplete'
                     else "ASR_POSTPROCESS_EVIDENCE_REPAIR" if root_cause.get('incident_kind') else "PLANNED_RUNTIME_CHANGE")

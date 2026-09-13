@@ -575,6 +575,75 @@ def _source_checksum_evidence(
         return False, False
 
 
+def _completion_input_after_owned_publication(
+    video: Path, config: Any, row: Mapping[str, Any],
+    current_identity: Mapping[str, Any], provenance: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Account for one rejected destination replaced by this exact publication.
+
+    This is completion evidence only, never checkpoint-reuse authorization.
+    All other inputs must remain identical. The original rejected bytes must
+    still exist in the existing publisher's verified rollback journal.
+    """
+    try:
+        original = json.loads(str(row['input_identity_json']))
+        decision = json.loads(str(row['decision_json']))
+        if (original == current_identity or decision.get('strategy') != 'CONVERT_ZH_CN'
+            or {k: v for k, v in original.items() if k != 'sidecars'}
+            != {k: v for k, v in current_identity.items() if k != 'sidecars'}):
+            return None
+        before = {x['relative_path']: x for x in original['sidecars']}
+        after = {x['relative_path']: x for x in current_identity['sidecars']}
+        if (len(before) != len(original['sidecars']) or len(after) != len(current_identity['sidecars'])
+            or set(after) - set(before) or any(before[k] != v for k, v in after.items())):
+            return None
+        removed = set(before) - set(after)
+        if len(removed) != 1:
+            return None
+        name = next(iter(removed))
+        if Path(name).name != name or name.casefold() != f'{video.stem}.zh-tw.ass'.casefold():
+            return None
+        selected = decision.get('selected_subtitle_track') or {}
+        if selected.get('source_reference') == name:
+            return None
+        prior = before[name]
+        if not any(x.get('source_reference') == name and x.get('source_sha256') == prior['sha256']
+            and x.get('eligible') is False and 'source_hard_qc_failed' in x.get('rejection_reasons', [])
+            for x in decision.get('candidates', [])):
+            return None
+        from source_inventory import _is_verified_generated_publication_sidecar
+        destination = video.parent / name
+        if not _is_verified_generated_publication_sidecar(video, destination, config=config):
+            return None
+        current_hash, _ = _stable_file_hash(destination)
+        digest = hashlib.sha1(str(video.resolve()).encode('utf-8', errors='replace')).hexdigest()[:16]
+        versions = (Path(config.work_path) / 'ai_output_versions' / digest).resolve()
+        # Only this video's existing, retained output versions; never library scanning.
+        journals = sorted(versions.glob('*/manifest.json'), reverse=True)[:32]
+        for path in journals:
+            if not path.resolve().is_relative_to(versions) or path.stat().st_size > 128 * 1024:
+                continue
+            journal, _ = _stable_json_file(path)
+            if (journal.get('status') != 'completed' or not _same_path(journal.get('video'), video)
+                or not max(float(row['created_at']), float(provenance.get('run_started_at', 0))) <= float(journal.get('created_at', 0))
+                <= float(journal.get('completed_at', 0)) <= float(provenance.get('finished_at', 0))
+                or not any(_same_path(x.get('path'), destination) and x.get('sha256') == current_hash
+                    for x in journal.get('published', []))):
+                continue
+            for entry in journal.get('backups', []):
+                if not _same_path(entry.get('path'), destination) or entry.get('sha256') != prior['sha256']:
+                    continue
+                backup = Path(str(entry.get('backup') or '')).resolve()
+                if not backup.is_relative_to(path.parent.resolve()):
+                    continue
+                previous_hash, signature = _stable_file_hash(backup)
+                if previous_hash == prior['sha256'] and signature[2] == int(prior['size']):
+                    return original
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return None
+    return None
+
+
 def _decision_evidence(
     pipeline: Any,
     job: Mapping[str, Any] | None,
@@ -633,16 +702,33 @@ def _decision_evidence(
                 "thresholds": thresholds.to_dict(),
             }
         )
+        expected_identity = identity.to_dict()
+        expected_candidate = identity.candidate_fingerprint
+        # Publication can replace an already-rejected conventional TC output.
+        # It must not erase the immutable prepublication decision or pretend an
+        # unrelated source change is safe. The normal reuse path is unchanged.
+        bound_rows = _query_rows(
+            getattr(pipeline, '_conn', None),
+            'SELECT * FROM pipeline_source_decisions WHERE decision_id=? AND job_id=?',
+            (str(source_analysis.get('decision_id') or ''), str(job.get('job_id') or '')),
+        )
+        if len(bound_rows) == 1:
+            original_identity = _completion_input_after_owned_publication(
+                video, config, bound_rows[0], expected_identity, provenance,
+            )
+            if original_identity is not None:
+                expected_identity = original_identity
+                expected_candidate = str(bound_rows[0].get('candidate_fingerprint') or '')
         decision, reason = pipeline.reusable_source_decision(
             str(job.get("job_id") or ""),
-            expected_identity=identity.to_dict(),
+            expected_identity=expected_identity,
             expected_media_revision=str(job.get("media_revision") or ""),
             expected_source_fingerprint=str(job.get("media_fingerprint") or ""),
             expected_analyzer_version=ANALYZER_VERSION,
             expected_decision_schema_version=DECISION_SCHEMA_VERSION,
             expected_decision_version=DECISION_VERSION,
             expected_config_fingerprint=config_fingerprint,
-            expected_candidate_fingerprint=identity.candidate_fingerprint,
+            expected_candidate_fingerprint=expected_candidate,
             with_reason=True,
         )
         if (
