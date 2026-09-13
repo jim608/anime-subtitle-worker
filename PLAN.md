@@ -3,13 +3,14 @@
 ## Active Goal — M2 strict Gate review root causes and necessary shared repair
 
 Sep13: old Gate183251 remains20/20,5strict/15review/FAIL. Bounded original-attempt
-classification:8TRUE_EXCEPTION/7FALSE_REVIEW/0AUTOMATABLE_GAP. Common defects:
+classification:3TRUE_EXCEPTION/7FALSE_REVIEW/5AUTOMATABLE_GAP. Common defects:
 JA kanji classifiedasChinese bylegacyadapter; exactsameASS/SRTtimedcues falsely
-differentbecause serializationorder. Minimalcandidatefixes+v2cheapidentity;
-local146/server336PASS+7hash-pinnedartifactchecks. UnderlyinghardQCstillblocks,
-71holds/UNPROVEN preserved; nooldJobsrerun, noM3. Runtime885988/ARMED andcurrentGate
-202742ACTIVE20enrolled18settledatinitialsnapshot unchanged. Deploy/actualpostfixclaim
-stillpending; useexistingcontrolledhandoff, notGatechangeforanalysis/docs.
+differentbecause serializationorder; unsafe caption rejection skipped existing
+safe alternatives. First fixes deployed70853f3/ARMED/101holds/UNPROVEN with
+actual-image388/fresh7PASS, Gate002210 initialized0/20. Additional QC-evidence
+bridge/v3 source identity/analyzer v2 passes server384+7artifacts+5transitions;
+necessary controlled deploy and real blocker-crossing remain pending. Existing
+hardQC/source safety unchanged; no oldJobs rerun, noM3 or Gate change for docs.
 See docs/M2_STRICT_GATE_REVIEW_ROOT_CAUSE_20260913.md. M2 ProductionNOTACCEPTED.
 
 ## Prior bounded Goal — download/extraction acceptance and frozen Gate disposition

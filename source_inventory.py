@@ -15,8 +15,8 @@ from typing import Any
 import uuid
 
 
-SOURCE_INPUT_IDENTITY_VERSION = "source-input-identity-v2"
-SOURCE_INVENTORY_VERSION = "source-inventory-v2"
+SOURCE_INPUT_IDENTITY_VERSION = "source-input-identity-v3"
+SOURCE_INVENTORY_VERSION = "source-inventory-v3"
 MATERIALIZED_SUBTITLE_CACHE_VERSION = "materialized-subtitle-v1"
 SIDECAR_SUBTITLE_EXTENSIONS = frozenset({".ass", ".ssa", ".srt", ".vtt"})
 TEXT_SUBTITLE_CODECS = frozenset({"ass", "ssa", "subrip", "srt", "webvtt", "mov_text"})
@@ -124,6 +124,7 @@ class SubtitleInventoryCandidate:
     source_sha256: str
     source_kind: str
     source_reference: str
+    hard_qc_failures: tuple[str, ...] | None = None
 
     def to_analyzer_dict(self) -> dict[str, Any]:
         return {
@@ -147,6 +148,7 @@ class SubtitleInventoryCandidate:
             "source_sha256": self.source_sha256,
             "source_kind": self.source_kind,
             "source_reference": self.source_reference,
+            "hard_qc_failures": None if self.hard_qc_failures is None else list(self.hard_qc_failures),
         }
 
     def to_dict(self) -> dict[str, Any]:
@@ -340,6 +342,9 @@ def build_source_input_identity(
         "schema_version": SOURCE_INPUT_IDENTITY_VERSION,
         "media_job_identity": normalized_job,
         "sidecars": [item.to_dict() for item in identities],
+        # Bind the resolved hard-QC policy, not unrelated paths/services, and
+        # record only its digest (configured prompts can be private).
+        "source_qc_config_fingerprint": _source_qc_policy_fingerprint(config),
     }
     return SourceInputIdentity(
         media_job_identity=normalized_job,
@@ -421,8 +426,10 @@ def inventory_sources(
     for ordinal, sidecar in enumerate(resolved_sidecars, start=1):
         reference = _relative_sidecar_path(video, sidecar)
         sidecar_identity = sidecar_identity_by_reference[reference]
+        qc_failures = None
         try:
             metrics = _subtitle_metrics(sidecar)
+            qc_failures = _source_hard_qc_failures(sidecar, config)
             error = ""
         except SourceInventoryError as exc:
             metrics = None
@@ -442,6 +449,7 @@ def inventory_sources(
                 source_size=sidecar_identity.size,
                 source_mtime_ns=sidecar_identity.mtime_ns,
                 source_sha256=sidecar_identity.sha256,
+                hard_qc_failures=qc_failures,
             )
         )
 
@@ -467,6 +475,7 @@ def inventory_sources(
                 continue
             codec = str(stream.get("codec_name", "") or "").strip().casefold()
             metrics: _SubtitleMetrics | None = None
+            qc_failures = None
             error = ""
             if codec not in TEXT_SUBTITLE_CODECS:
                 error = f"unsupported_subtitle_codec:{codec or 'unknown'}"
@@ -481,6 +490,7 @@ def inventory_sources(
                         timeout_seconds=extract_timeout_seconds,
                     )
                     metrics = _subtitle_metrics(output)
+                    qc_failures = _source_hard_qc_failures(output, config)
                 except SourceInventoryError as exc:
                     error = _bounded_error("subtitle_extract_failed", exc)
                     subtitle_complete = False
@@ -500,6 +510,7 @@ def inventory_sources(
                     default=_flag(disposition.get("default")),
                     forced=_flag(disposition.get("forced")),
                     hearing_impaired=_hearing_impaired_flag(disposition),
+                    hard_qc_failures=qc_failures,
                 )
             )
 
@@ -966,6 +977,7 @@ def _subtitle_candidate(
     default: bool = False,
     forced: bool = False,
     hearing_impaired: bool | None = None,
+    hard_qc_failures: tuple[str, ...] | None = None,
 ) -> SubtitleInventoryCandidate:
     return SubtitleInventoryCandidate(
         track_index=track_index,
@@ -988,7 +1000,35 @@ def _subtitle_candidate(
         source_sha256=source_sha256,
         source_kind=source_kind,
         source_reference=source_reference,
+        hard_qc_failures=hard_qc_failures,
     )
+
+
+def _source_qc_policy_fingerprint(config: object | None) -> str:
+    # These are the configuration-dependent hard failures for role="unknown"
+    # in the existing quality checker. Warning-only knobs do not admit sources.
+    return _canonical_sha256({
+        "hard_max_primary_chars": int(getattr(config, "subtitle_quality_hard_max_primary_chars", 64)),
+        "fail_cps": float(getattr(config, "subtitle_quality_fail_cps", 25.0)),
+        "hard_min_duration_seconds": float(getattr(config, "subtitle_quality_hard_min_duration_seconds", 0.12)),
+        "max_overlap_seconds": float(getattr(config, "subtitle_quality_max_overlap_seconds", 0.10)),
+        "hallucination_phrases": list(getattr(config, "whisper_hallucination_phrases", []) or []),
+        "whisper_initial_prompt": getattr(config, "whisper_initial_prompt", None),
+        "op_ed_initial_prompt": getattr(config, "op_ed_initial_prompt", None),
+    })
+
+
+def _source_hard_qc_failures(path: Path, config: object | None) -> tuple[str, ...]:
+    """Check source usability with unchanged QC; never repair or mutate it.
+
+    Failed QC is observed evidence, not an extraction/API error. I/O failures
+    propagate to normal retry handling rather than becoming a review decision.
+    Output-language requirements still run at the existing final QC boundary.
+    """
+    from subtitle_quality import analyze_subtitle_file
+
+    report = analyze_subtitle_file(path, config, role="unknown")
+    return tuple(sorted({issue.code for issue in report.issues if issue.severity == "fail"}))
 
 
 def _subtitle_metrics(path: Path) -> _SubtitleMetrics:

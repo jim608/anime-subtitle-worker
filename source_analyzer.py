@@ -8,7 +8,7 @@ import re
 from typing import Any, Iterable, Mapping, Sequence
 
 
-ANALYZER_VERSION = "m2-source-analyzer-v1"
+ANALYZER_VERSION = "m2-source-analyzer-v2"
 DECISION_SCHEMA_VERSION = 1
 DECISION_VERSION = "m2-source-decision-v1"
 
@@ -134,8 +134,15 @@ class SubtitleCandidateInput:
     empty_event_count: int | None = None
     sample_text: str = ""
     extraction_error: str = ""
+    hard_qc_failures: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
+        if self.hard_qc_failures is not None:
+            if not isinstance(self.hard_qc_failures, (tuple, list)) or any(
+                not isinstance(code, str) or not code.strip() for code in self.hard_qc_failures
+            ):
+                raise ValueError("hard_qc_failures must be null or a list of nonempty reason codes")
+            object.__setattr__(self, "hard_qc_failures", tuple(dict.fromkeys(self.hard_qc_failures)))
         if not isinstance(self.source_kind, str) or not isinstance(self.source_reference, str):
             raise TypeError("source_kind and source_reference must be strings")
         for field_name in ("source_size", "source_mtime_ns"):
@@ -179,6 +186,7 @@ class SubtitleCandidateInput:
             empty_event_count=_as_optional_int(value.get("empty_event_count")),
             sample_text=str(value.get("sample_text", "") or ""),
             extraction_error=str(value.get("extraction_error", "") or ""),
+            hard_qc_failures=value.get("hard_qc_failures"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -203,6 +211,7 @@ class SubtitleCandidateInput:
             "empty_event_count": self.empty_event_count,
             "sample_text": self.sample_text,
             "extraction_error": self.extraction_error,
+            "hard_qc_failures": None if self.hard_qc_failures is None else list(self.hard_qc_failures),
         }
 
 
@@ -650,6 +659,13 @@ def analyze_sources(
         return _review_decision(subtitles + audios, final_confidence, "subtitle_selection_ambiguous", evidence)
 
     eligible_audios = [item for item in audios if item.eligible]
+    if eligible_audios and any(item.hard_qc_failures for item in subtitle_inputs) and (
+        not subtitle_inventory_complete or not audio_inventory_complete
+    ):
+        return _review_decision(
+            subtitles + audios, 0.0, "source_inventory_incomplete",
+            {**base_evidence, "source_qc_fallback_refused": "inventory_not_complete"},
+        )
     if eligible_audios:
         selected_audio = eligible_audios[0]
         base_confidence = _audio_decision_confidence(selected_audio)
@@ -800,6 +816,8 @@ def _analyze_subtitle(
     rejection: list[str] = []
     if candidate.extraction_error:
         rejection.append("extraction_error")
+    if candidate.hard_qc_failures:
+        rejection.append("source_hard_qc_failed")
     if codec not in _SUPPORTED_TEXT_SUBTITLE_CODECS:
         rejection.append("unsupported_subtitle_codec")
     if events <= 0:
@@ -847,6 +865,11 @@ def _analyze_subtitle(
             "songs_only_probability": _rounded(songs_probability),
         },
     }
+    if candidate.hard_qc_failures is not None:
+        evidence["hard_qc"] = {
+            "result": "FAIL" if candidate.hard_qc_failures else "PASS",
+            "failure_codes": list(candidate.hard_qc_failures),
+        }
     return SubtitleCandidateAnalysis(
         track_index=candidate.track_index,
         codec=codec,

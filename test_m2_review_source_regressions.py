@@ -105,8 +105,10 @@ class ReviewSourceRegressionTest(unittest.TestCase):
     def test_corrected_language_does_not_bypass_hard_qc(self):
         with tempfile.TemporaryDirectory() as temp:
             video,job,config,decision,before=self._resolve_fixture(Path(temp),JA,unsafe=True)
-            with self.assertRaisesRegex(SourceDecisionReviewError,'structural QC'):
-                resolve_source_decision(video,{'decision':decision},job,config)
+            self.assertEqual('NEEDS_REVIEW',decision['strategy'])
+            resolved=resolve_source_decision(video,{'decision':decision},job,config)
+            self.assertEqual('NEEDS_REVIEW',resolved.strategy)
+            self.assertIsNone(resolved.subtitle)
             self.assertEqual(before,{p:(p.read_bytes(),p.stat().st_mtime_ns) for p in before})
 
 
