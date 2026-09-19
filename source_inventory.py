@@ -1025,9 +1025,16 @@ def _source_hard_qc_failures(path: Path, config: object | None) -> tuple[str, ..
     propagate to normal retry handling rather than becoming a review decision.
     Output-language requirements still run at the existing final QC boundary.
     """
+    from srt_utils import SrtFormatError
     from subtitle_quality import analyze_subtitle_file
 
-    report = analyze_subtitle_file(path, config, role="unknown")
+    try:
+        report = analyze_subtitle_file(path, config, role="unknown")
+    except SrtFormatError:
+        # A fully read but malformed source is unusable evidence, not a shared
+        # Worker failure. Keep its identity and reject it through existing QC
+        # eligibility; I/O errors and unrelated implementation faults propagate.
+        return ("subtitle_parse_failed",)
     return tuple(sorted({issue.code for issue in report.issues if issue.severity == "fail"}))
 
 
