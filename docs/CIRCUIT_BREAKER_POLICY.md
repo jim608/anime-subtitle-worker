@@ -15,6 +15,13 @@ Only after ARMED recovery may the existing exact-failure Queue API resume the th
 verified old-version failures without clearing retry counts, original error evidence,
 repair budgets or source protections. Ordinary source selection runs again.
 
+Applied once in Worker d4155dbd0d74c67ebea971beb3e413b3633bf129, safe deployment
+20260919T150609Z-1980642, formal recovery
+m2breakerrec_7b3ef62a80b0436e944c13d6263e7c5a. All50 prior backups plus this
+deployment are retained (51 total);103 holds unchanged. A later ordinary ASR
+quality review uses the pre-existing bounded repair policy and must not be counted
+as subtitle delivery, a reset of its budget, or proof of sustained continuation.
+
 ## 2026-09-19 — cache admission and transient database contention
 
 M2 must not restore a generated Japanese ASS as trusted ASR input without current

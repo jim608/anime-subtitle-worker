@@ -1,5 +1,48 @@
 # M2 Production Observation
 
+## 2026-09-19 15:09 UTC — exact SRT-parse incident safely deployed and recovered
+
+Worker d4155dbd0d74c67ebea971beb3e413b3633bf129, image
+sha256:c6a356d738b5e5bac9f4e0bb0f31b9bc3a32c6f6a017485835085b82e3002836;
+WebUI f956b762054566412e62f8d88d8f916cf566a8ab/image63e035bc unchanged.
+Single additionally authorized safe deployment20260919T150609Z-1980642; actual73,
+isolated source-parse review/restart/next-claim and fresh7/7 PASS; prior154 reused.
+Recovery m2breakerrec_7b3ef62a80b0436e944c13d6263e7c5a returns ARMED; own pause
+released. Typed recovery binds only the exact three malformed-source exceptions,
+their immutable events/source identities and authenticated prior recovered history.
+
+All103 holds and original receipts preserved; all50 existing backups retained,
+plus this deployment=51. Old Gate m2-gate-20260919T132154375850Z-e85078fcb2 invalidated
+only for actual runtime change, all historical members/results remain. New Gate
+m2-gate-20260919T150907746450Z-c170a7dc20 begins2026-09-19T15:09:07.746450Z at0/20,
+baseline m2-guardrail-v1:1c1cc18981a7060cd91a51da, unchanged configuration fingerprint
+sha256:f71f27e11f68a07b316dd5797cc670ec55359d13de13f7d11665872fa7781aac, Decision Schema1.
+Older-cohort result events remain on their original Gates, never transferred/backfilled.
+
+The three exact failures use the existing version-bound, budget-preserving retry API
+once: attempts2 and force_ai0 retained, old failure revisions retained. No broad retry
+sweep or artificial COMPLETED. Production terminal-to-next-claim acceptance NOT VERIFIED;
+0 newly verified subtitle deliveries. Logs `/logs/m2-srt-recovery-20260919/`.
+
+Real first task `m2ai_07853ae5eb85143c67e5` claimed at15:09:59.671220Z;
+source detection completed with checkpoint
+`4d0f7abf0a5c2ea71ce9f3927d8ec1d3b541d7cfc74f9972dc22a07b08b0d26a`.
+Malformed SRT is rejected as `subtitle_parse_failed`; trusted Japanese audio
+selects existing ASR fallback (confidence0.96). ASR quality safely rejects short
+fragments at15:16:40.872559Z: `review_required`/`deterministic_asr_quality`,
+pipeline NEEDS_REVIEW. No false completion or new breaker trip. The existing
+server recovery mechanism subsequently queues its bounded full-retranscribe
+strategy; attempts advance2->3, not reset. Its resulting force_ai=1 is the existing
+server strategy, not an operator/manual force override. Other two exact failures
+remain queued pending ordinary serialized admission. This is not subtitle delivery.
+Bounded final observation2026-09-19T15:20:24Z: ARMED,103 holds and old Gate/member
+history preserved, new Gate0/20, no second claim. Overall outcome PARTIAL, not
+Goal achieved. Server log at15:17:19.495Z records the existing review-autopilot
+yield after bounded remediation was queued; watch interval300s is unchanged.
+No extra manual cycle, retry, recovery or deployment was triggered. Evidence:
+postverify-1789831224029965581.json and continuation-scheduler-tail.log.
+No Gate completion wait, M2 Production acceptance or M3.
+
 ## 2026-09-19 — recurring admission loss, one safe deployment and controlled recovery
 
 **Closeout: current Breaker TRIPPED, sustained recovery NOT VERIFIED.** ARMED below

@@ -1,6 +1,6 @@
 # M2 remaining acceptance — 2026-09-08
 
-## Authorized second deployment — exact SRT-parse recovery, currently preparing
+## Authorized second deployment — exact SRT-parse recovery deployed
 
 The user explicitly superseded the earlier one-deployment limit for this incident.
 Live check confirms a538e86/f956b762, the same13:24:50Z trip,103 holds,50 backups
@@ -23,7 +23,46 @@ failures may use existing queue_failed_retry_preserving_budget, with exact failu
 revision/code/source identity checks. Their attempts and force_ai flags stay intact;
 this is not ai.retry and does not reset ASR repair budgets. Requeue is not acceptance.
 Full live terminal -> next automatic claim/Stage proof remains required.
-Logs /logs/m2-srt-recovery-20260919/; no second deployment claimed yet.
+Safe deployment `20260919T150609Z-1980642` completed, orchestrator exit0. Actual
+Worker `d4155dbd0d74c67ebea971beb3e413b3633bf129` includes c20444e0 plus only the
+reviewed recovery binding; image
+`sha256:c6a356d738b5e5bac9f4e0bb0f31b9bc3a32c6f6a017485835085b82e3002836`.
+WebUI remains `f956b762054566412e62f8d88d8f916cf566a8ab`, same image63e035bc.
+Actual-image73 tests, real isolated malformed-source review/restart/next-claim and
+fresh7/7 breaker tests PASS. Existing budget-preserving API's three tests PASS.
+The original154 suite was reused, not rerun; source_inventory matches c20444e0.
+
+Controlled recovery `m2breakerrec_7b3ef62a80b0436e944c13d6263e7c5a` returned ARMED.
+Old Gate132154 history retained/INVALIDATED_BY_RUNTIME_CHANGE. New frozen Gate
+`m2-gate-20260919T150907746450Z-c170a7dc20`, baseline
+`m2-guardrail-v1:1c1cc18981a7060cd91a51da`, start2026-09-19T15:09:07.746450Z,
+initial0/20; no historical member transfer. All103 holds unchanged; all50 prior
+backups plus this deployment retained,51 total. No cleanup, QC/model/ASR-budget change.
+
+The three exact failure revisions were resumed once using the existing Queue API:
+each attempts=2, force_ai=0 and prior failure evidence retained. The old generic
+failure backoff is superseded only because this code defect was proven fixed;
+no arbitrary transient backoff or other task was bypassed. queue-resume-intent.json
+and queue-resume-result.json preserve the transition. This is not delivery or
+terminal-to-next-claim acceptance. Bounded closeout is PARTIAL, not Goal achieved.
+Full logs /logs/m2-srt-recovery-20260919/.
+First real incident task claimed15:09:59.671220Z, source detection checkpoint
+validated, safe trusted-JA-audio ASR used instead of the malformed SRT. At
+15:16:40.872559Z existing ASR quality returned review_required/NEEDS_REVIEW
+(`deterministic_asr_quality`, short subtitle fragments), without a breaker trip.
+The server then applies its existing bounded full-retranscribe strategy; attempts
+advance from2 to3, not reset. No operator force/retry request after exact recovery.
+The remaining two exact jobs await normal serialized admission; no new delivery.
+Final bounded snapshot at2026-09-19T15:20:24Z remains ARMED,103 holds unchanged,
+old Gate/member preservation true, new Gate0/20. No second post-recovery claim,
+Stage or heartbeat is present, so sustained recovery remains NOT VERIFIED.
+One bounded server log capture identifies the immediate scheduler handoff:
+15:17:19.495Z `Normal AI queue yielded after review autopilot queued remediation.`
+Existing watch interval300s applies; no operator pause/reconciliation hold or
+new breaker trip is present. Do not force the cycle, reset repair budgets or
+rerun either recovery script. Future evidence must show actual subsequent claim
+and Stage; the first review attempt's automated repair is not a final delivery.
+Evidence: postverify-1789831224029965581.json, continuation-scheduler-tail.log.
 
 ## 2026-09-19 — bounded deployment completed, sustained recovery FAILED verification
 

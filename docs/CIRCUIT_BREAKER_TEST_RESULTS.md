@@ -1,5 +1,24 @@
 # M2 Circuit Breaker Test Results
 
+## 2026-09-19 — exact source-SRT recovery continuation
+
+Actual deployed Worker d4155dbd0d74c67ebea971beb3e413b3633bf129/imagec6a356d7:
+73 related controlled-recovery tests PASS; true isolated Docker restart after
+malformed-source NEEDS_REVIEW -> next claim/SUBTITLE_DETECTION PASS, checkpoint,
+source bytes and replay preserved. Existing budget-preserving Queue API3 tests PASS.
+Fresh seven-breaker suite7/7 PASS. c20444e0 source-parser154-test evidence reused;
+the source parser and earlier ASR-cache/BUSY/QC/strict code hashes are verified.
+Read-only actual three-source analysis and exact durable event/recovered-history
+preflight PASS, including two events retained under an older frozen cohort.
+No old source continuity or failed Gate was relabelled PASS.
+Controlled recovery returned ARMED; three exact failures resumed without budget reset.
+Real Production terminal -> next automatic claim proof remains NOT VERIFIED and
+distinct from the isolated tests. Final bounded snapshot15:20:24Z is ARMED;
+first real attempt safely reviews ASR quality at15:16:40.872559Z, then existing
+server autopilot queues bounded repair. Other two incident jobs are queued;
+no second actual claim/Stage yet. Outcome PARTIAL, formal new subtitles0.
+Logs `/logs/m2-srt-recovery-20260919/`, final postverify-1789831224029965581.json.
+
 ## 2026-09-19 — admission recurrence, candidate and actual deployed-image validation
 
 Server isolated old-image reproduction: 3 expected failures (ASS restore without

@@ -8,8 +8,17 @@ Only new runtime change: bind the exact three SrtFormatError attempts, original
 result-event hashes (including retained older-cohort bindings), source snapshots,
 prior recovered history and actual-image proof to existing controlled recovery.
 73 related recovery tests and isolated review -> Docker restart -> next claim PASS.
-Current predeployment runtime remains a538e86/f956b762, TRIPPED;103 holds/50 existing
-backups retained. No deployment or Production continuation success claimed yet.
+One authorized second deployment completed: actual Worker d4155dbd0d74c67ebea971beb3e413b3633bf129,
+WebUI f956b762 unchanged, actual-image73/restart/fresh7 PASS, controlled recovery
+m2breakerrec_7b3ef62a80b0436e944c13d6263e7c5a ARMED. All103 holds and all50 prior
+backups preserved plus new backup51. Gate150907746450Z-c170a7dc20 starts0/20,
+baseline1c1cc18981a7060cd91a51da; old Gate/runtime evidence retained.
+Three precise old failures resumed once with attempts=2 preserved, force_ai=0;
+Bounded closeout is PARTIAL: at15:20:24Z Breaker remains ARMED, but no next
+Production claim is recorded after the first safe ASR-quality review at15:16:40Z.
+Server review autopilot yielded the normal queue at15:17:19.495Z after scheduling
+bounded remediation; existing watch interval is300s. Do not force another cycle.
+Terminal-to-next-claim remains unverified, not counted as recovery success.
 Use the existing exact-failure budget-preserving Queue API only after successful
 controlled recovery; never reset attempts/force AI or replay unbound failures.
 Logs: /logs/m2-srt-recovery-20260919/. No M3 or full historical/media audit.
