@@ -1,5 +1,24 @@
 # M2 Production Observation
 
+## 2026-09-19 15:28 UTC — real terminal-to-next-claim verified
+
+Exact SRT incident recovery is complete; M2 Production Accepted remains NO.
+Worker d4155dbd0d74c67ebea971beb3e413b3633bf129/WebUI f956b762 unchanged.
+First task m2ai_07853ae5eb85143c67e5 reached safe NEEDS_REVIEW at15:16:40.872559Z;
+next distinct m2ai_d864b77533d69f26b87a auto-claimed15:22:54.899471Z,
+SUBTITLE_DETECTION15:22:54.921957Z, actual ASR15:23:24.897905Z,
+heartbeat15:23:24.896717Z with valid source-decision checkpoint. No human action
+between terminal and next claim. Existing300s scheduler handoff was respected.
+First review's bounded ASR repair and third incident's normal queue remain active;
+neither is counted as delivered. Formal new subtitles0; no false completion.
+
+Final preservation15:27:48Z: ARMED; all3 source videos and8 prior subtitle candidates
+checksum/size/mtime unchanged;103 holds and51 backups retained. Same Gate
+m2-gate-20260919T150907746450Z-c170a7dc20, last0/20; no Gate recreation/backfill,
+no new deployment. Old partial report remains historical, not overwritten.
+Proof: `/logs/m2-srt-recovery-20260919/postverify-1789831517713140343.json`,
+`final-preservation-1789831668071336862.json`, `accepted-closeout.json`.
+
 ## 2026-09-19 15:09 UTC — exact SRT-parse incident safely deployed and recovered
 
 Worker d4155dbd0d74c67ebea971beb3e413b3633bf129, image

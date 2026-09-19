@@ -1,5 +1,18 @@
 # M2 Circuit Breaker Test Results
 
+## 2026-09-19 15:28 UTC — real Production continuation PASS
+
+No changed runtime or rerun suites. Prior154 source-parse, actual-image73 recovery,
+budget API3, actual isolated restart and7/7 breaker results remain applicable.
+Missing live evidence is now present: safe ASR-quality review15:16:40.872559Z ->
+distinct next task auto-claim15:22:54.899471Z -> SUBTITLE_DETECTION and ASR,
+new heartbeat15:23:24.896717Z and valid checkpoint. Breaker remains ARMED.
+Final read-only preservation PASS:3 videos+8 existing subtitle candidates unchanged,
+103 holds retained and all50 prior backups+current retained. No QC relaxation,
+unknown-ASR-cache admission, budget reset or new delivery. M2 acceptance still NO.
+Evidence /logs/m2-srt-recovery-20260919/postverify-1789831517713140343.json and
+final-preservation-1789831668071336862.json. Earlier bounded PARTIAL remains history.
+
 ## 2026-09-19 — exact source-SRT recovery continuation
 
 Actual deployed Worker d4155dbd0d74c67ebea971beb3e413b3633bf129/imagec6a356d7:

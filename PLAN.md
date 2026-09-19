@@ -1,5 +1,22 @@
 # Incremental Delivery Plan
 
+## Exact SRT incident recovery complete — 2026-09-19 15:28 UTC
+
+The missing real continuation is now proven, superseding the earlier bounded
+PARTIAL closeout without rewriting its evidence. Worker d4155db remains deployed;
+no new runtime/config/deployment/Gate change in this continuation. First task
+m2ai_07853ae5eb85143c67e5 safely enters NEEDS_REVIEW at15:16:40.872559Z;
+next distinct task m2ai_d864b77533d69f26b87a automatically claims15:22:54.899471Z,
+starts SUBTITLE_DETECTION15:22:54.921957Z then actual ASR15:23:24.897905Z,
+heartbeat15:23:24.896717Z, valid checkpoint. Breaker remains ARMED.
+All3 source media and8 pre-existing subtitle candidates retain hashes/size/mtime;
+103 holds and all50 prior backups plus current backup51 remain. Third incident
+task remains queued with its verified safe fallback; no claim/delivery is invented.
+Existing bounded ASR repair continues for the first quality review; no budget reset.
+This incident-recovery Goal is complete; formal new subtitles0, M2 NOT ACCEPTED.
+Evidence /logs/m2-srt-recovery-20260919/postverify-1789831517713140343.json and
+final-preservation-1789831668071336862.json. Do not resume monitoring or rerun handoffs.
+
 ## Authorized exact SRT-parse continuation — 2026-09-19
 
 User now authorizes the necessary second safe deployment. c20444e07a4a376484e0a5866ed8d4e1944d6f9a

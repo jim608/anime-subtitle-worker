@@ -1,5 +1,40 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-19 15:28 UTC — exact incident recovery acceptance completed
+
+No further code change or deployment. Actual Worker remains
+`d4155dbd0d74c67ebea971beb3e413b3633bf129` (c20444e0 plus exact typed recovery),
+WebUI `f956b762054566412e62f8d88d8f916cf566a8ab`. Existing154 parse, actual-image73,
+budget API3, isolated restart and fresh7/7 breaker evidence is reused unchanged.
+
+Durable Production sequence (UTC,2026-09-19):
+
+- `m2ai_07853ae5eb85143c67e5`: safe ASR quality review terminal15:16:40.872559,
+  reason deterministic_asr_quality; no malformed-SRT worker_unknown recurrence.
+- Distinct next task `m2ai_d864b77533d69f26b87a`: automatic claim15:22:54.899471,
+  SUBTITLE_DETECTION start15:22:54.921957, ASR start15:23:24.897905,
+  heartbeat15:23:24.896717; source-decision checkpoint
+  `d35869be8f99d31c2d64b0bb1fc5536dd73f136853828256c1054aacc66181c3` valid.
+- Next task again rejects malformed SRT through QC and selects trusted JA audio
+  (ASR_JA_AUDIO, confidence0.96). No manual retry/resume occurred between tasks.
+- Third task `m2ai_14c56855ee59467790dc` remains queued, attempts2 unchanged;
+  verified safe fallback awaits normal scheduling. First review's existing server
+  bounded repair remains queued, attempts3, without a reset or claimed delivery.
+
+Final preservation at15:27:48Z: ARMED, actual runtime baseline unchanged,
+3 source videos and8 existing subtitle candidates retain checksum/size/mtime,
+all50 prior backups and new backup remain (51),103 holds retained, old Gate and
+members preserved. These current checks do not relabel historical UNPROVEN as PASS.
+New Gate150907746450Z-c170a7dc20 remains0/20 in the last bounded snapshot;
+no historical task success is transferred and no Gate completion is awaited.
+
+This incident's recovery acceptance is complete, not M2 Production acceptance.
+New formal subtitles0. Remaining individual ASR quality repair, third queued job
+and103 quarantined/UNPROVEN items stay under existing policies; no global blocker
+observed. Evidence `/logs/m2-srt-recovery-20260919/`:
+`postverify-1789831517713140343.json`, `final-preservation-1789831668071336862.json`,
+`accepted-closeout.json`. Earlier `bounded-closeout.json` remains intact as history.
+
 ## Authorized second deployment — exact SRT-parse recovery deployed
 
 The user explicitly superseded the earlier one-deployment limit for this incident.

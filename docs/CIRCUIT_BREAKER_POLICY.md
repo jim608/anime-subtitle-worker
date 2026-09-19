@@ -1,5 +1,11 @@
 # M2 Circuit Breaker Policy
 
+2026-09-19 exact SRT incident application is now closed: durable safe quality review
+at15:16:40.872559Z is followed by distinct automatic claim15:22:54.899471Z,
+real Stage/heartbeat/checkpoint and final ARMED preservation proof. This closes
+only the incident recovery, not M2 acceptance or the remaining individual reviews.
+No policy/runtime change, extra recovery or Gate recreation in the closeout turn.
+
 ## Exact source-SRT parse recovery continuation — 2026-09-19
 
 Only typed source_srt_parse_classification may recover the proven three-member
