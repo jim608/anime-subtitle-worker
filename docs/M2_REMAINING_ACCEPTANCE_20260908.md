@@ -1,5 +1,30 @@
 # M2 remaining acceptance — 2026-09-08
 
+## Authorized second deployment — exact SRT-parse recovery, currently preparing
+
+The user explicitly superseded the earlier one-deployment limit for this incident.
+Live check confirms a538e86/f956b762, the same13:24:50Z trip,103 holds,50 backups
+(all49 older backups plus the preceding deployment). Database quick_check=ok;
+three media identities still match their recorded attempts. No new global fault.
+Candidate c20444e07a4a376484e0a5866ed8d4e1944d6f9a's154 tests are reused unchanged.
+Read-only actual-source analysis rejects each malformed SRT and finds trusted JA
+audio for existing ASR fallback; this is not processing or subtitle delivery.
+
+Existing controlled recovery gains one narrowly typed source_srt_parse_classification
+incident, authenticating all three attempts/result events, exact parser details,
+current checksums and retained previous receipts. Unrelated exceptions, new faults,
+changed sources, invented Gate/event binding or missing proof fail closed.
+Server-isolated73 related recovery tests PASS; true isolated Docker restart retains
+the review/checkpoint and claims the next SUBTITLE_DETECTION task. Source/QC/ASR
+cache protections remain unchanged. No new Queue, recovery framework or policy.
+
+After safe deployment and formal recovery, only these three proven old-version
+failures may use existing queue_failed_retry_preserving_budget, with exact failure
+revision/code/source identity checks. Their attempts and force_ai flags stay intact;
+this is not ai.retry and does not reset ASR repair budgets. Requeue is not acceptance.
+Full live terminal -> next automatic claim/Stage proof remains required.
+Logs /logs/m2-srt-recovery-20260919/; no second deployment claimed yet.
+
 ## 2026-09-19 — bounded deployment completed, sustained recovery FAILED verification
 
 **Current outcome: TRIPPED; sustained Production recovery is NOT verified.** The

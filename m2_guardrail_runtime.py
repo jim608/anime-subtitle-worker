@@ -1377,6 +1377,7 @@ _RECONCILIATION_INCIDENT_KINDS = frozenset({
     'source_language_vote_mismatch', 'subtitle_format_dispatch',
     'owned_publication_identity_mismatch',
     'asr_cache_acceptance_unproven',
+    'source_srt_parse_classification',
 })
 
 
@@ -1388,6 +1389,8 @@ def _reconciliation_signature(root_cause: Mapping[str, Any]) -> tuple[str, str, 
         and kind in _RECONCILIATION_INCIDENT_KINDS):
         if kind == 'subtitle_format_dispatch':
             return ('repeated_identical_stage_failure', 'opencc', 'opencc_unknown')
+        if kind == 'source_srt_parse_classification':
+            return ('repeated_identical_stage_failure', 'worker', 'worker_unknown')
         return ('incorrect_completion', 'm2_strict_completion', 'incorrect_completion')
     raise RuntimeContractError('unsupported_reconciliation_incident')
 
@@ -1410,7 +1413,9 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
     format_dispatch = root_cause.get('incident_kind') == 'subtitle_format_dispatch'
     owned_publication = root_cause.get('incident_kind') == 'owned_publication_identity_mismatch'
     asr_cache = root_cause.get('incident_kind') == 'asr_cache_acceptance_unproven'
-    contract = ('m2-asr-cache-admission-regression-v1' if asr_cache else
+    source_parse = root_cause.get('incident_kind') == 'source_srt_parse_classification'
+    contract = ('m2-source-srt-parse-regression-v1' if source_parse else
+                'm2-asr-cache-admission-regression-v1' if asr_cache else
                 'm2-owned-publication-regression-v1' if owned_publication else
                 'm2-subtitle-format-regression-v1' if format_dispatch else
                 'm2-language-vote-regression-v1' if language_vote else
@@ -1444,6 +1449,13 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
     )):
         raise RuntimeContractError('subtitle_format_recovery_regression_unproven')
     logs = report.get('logs')
+    if source_parse and any(report.get(key) is not True for key in (
+        'source_parse_reproduced', 'only_format_error_caught', 'safe_fallback_or_review',
+        'valid_output_preserved', 'original_incident_preserved', 'late_hold_refused',
+        'unchanged_strict_validator', 'terminal_next_claim', 'asr_cache_guard_preserved',
+        'busy_retry_preserved',
+    )):
+        raise RuntimeContractError('source_parse_recovery_regression_unproven')
     if asr_cache and any(report.get(key) is not True for key in (
         'legacy_cache_reproduced', 'prepublication_review', 'terminal_next_claim',
         'busy_not_latched', 'corrupt_database_latched', 'settled_gate_continues',
@@ -1463,7 +1475,10 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
             or 'sha256:' + sha256_file(log) != item.get('sha256')):
             raise RuntimeContractError('postprocess_recovery_logs_invalid')
     code = report.get('code_sha256')
-    names = (('worker.py', 'm2_guardrail_runtime.py', 'm2_production_observation.py',
+    names = (('source_inventory.py', 'source_analyzer.py', 'srt_utils.py',
+              'subtitle_quality.py', 'worker.py', 'm2_guardrail_runtime.py',
+              'm2_production_observation.py', 'm2_strict_runtime_evidence.py') if source_parse else
+             ('worker.py', 'm2_guardrail_runtime.py', 'm2_production_observation.py',
               'm2_strict_runtime_evidence.py', 'm2_strict_observation.py') if asr_cache else
              ('m2_strict_runtime_evidence.py', 'm2_guardrail_runtime.py', 'worker.py',
               'source_inventory.py', 'source_decision.py', 'm2_production_observation.py') if owned_publication else
@@ -1597,11 +1612,12 @@ def _validate_subtitle_format_incident(
     connection: sqlite3.Connection, *, config: Any, request: Mapping[str, Any],
     root_cause: Mapping[str, Any], breaker: Mapping[str, Any],
 ) -> None:
-    """Bind only the proven SRT/ASS dispatch incident, not a general OpenCC reset."""
+    """Bind proven source-format incidents, never reset arbitrary Worker faults."""
     from source_integrity import SourceSnapshot, verify_source_snapshot
     from m2_production_recovery import source_hold
 
-    incident = request.get('subtitle_format_incident')
+    source_parse = root_cause.get('incident_kind') == 'source_srt_parse_classification'
+    incident = request.get('source_parse_incident' if source_parse else 'subtitle_format_incident')
     if not isinstance(incident, Mapping) or incident != root_cause.get('incident'):
         raise RuntimeContractError('subtitle_format_incident_changed')
     trip = incident.get('trip')
@@ -1615,9 +1631,10 @@ def _validate_subtitle_format_incident(
         or not isinstance(trip.get('observed_at'), (int, float))
         or not math.isfinite(trip['observed_at']) or trip['observed_at'] <= 0
         or not isinstance(detail, Mapping)
-        or detail.get('normalized_failure_signature') != 'opencc:opencc_unknown'
-        or detail.get('stage') != 'opencc'
-        or detail.get('error_code') != 'opencc_unknown'
+        or detail.get('normalized_failure_signature') != (
+            'worker:worker_unknown:e3b0c44298fc1c14' if source_parse else 'opencc:opencc_unknown')
+        or detail.get('stage') != ('worker' if source_parse else 'opencc')
+        or detail.get('error_code') != ('worker_unknown' if source_parse else 'opencc_unknown')
         or detail.get('gate_id') != request.get('old_gate_id')
         or not isinstance(keys, list) or len(keys) < threshold or len(keys) > 20
         or any(not isinstance(key, str) for key in keys) or len(set(keys)) != len(keys)
@@ -1637,7 +1654,8 @@ def _validate_subtitle_format_incident(
         ):
             raise RuntimeContractError('subtitle_format_unresolved_breaker')
     seen = set()
-    for member in members:
+    previous_event_at = float(request['old_gate']['gate_start_epoch'])
+    for member_index, member in enumerate(members, 1):
         if not isinstance(member, Mapping):
             raise RuntimeContractError('subtitle_format_member_invalid')
         obligation = str(member.get('obligation_id') or '')
@@ -1650,22 +1668,60 @@ def _validate_subtitle_format_incident(
             hashlib.sha256(attempt.encode()).hexdigest() != detail.get('claim_identity_hash')):
             raise RuntimeContractError('subtitle_format_trip_claim_unproven')
         row = connection.execute(
-            'SELECT a.status,a.error_code,a.stage,a.detail,a.finished_at,o.canonical_path '
+            'SELECT a.status,a.error_code,a.stage,a.detail,a.finished_at,o.canonical_path,a.started_at '
             'FROM ai_delivery_attempts a JOIN ai_delivery_obligations o ON o.obligation_id=a.obligation_id '
             'WHERE a.attempt_id=? AND a.obligation_id=?', (attempt, obligation),
         ).fetchone()
         path = str(member.get('canonical_path') or '')
-        if (not row or tuple(row[:4]) != ('retryable_failure', 'opencc_unknown', 'opencc',
-                                         'ASS source contains no Dialogue events')
+        expected_detail = (member.get('original_detail') if source_parse else
+                           'ASS source contains no Dialogue events')
+        if source_parse and (not isinstance(expected_detail, str) or not expected_detail.startswith(
+                'Invalid SRT block, expected at least 3 lines: ')):
+            raise RuntimeContractError('source_parse_detail_not_proven')
+        if (not row or tuple(row[:4]) != ('retryable_failure',
+                'worker_unknown' if source_parse else 'opencc_unknown',
+                'worker' if source_parse else 'opencc', expected_detail)
             or not isinstance(row[4], (int, float)) or not 0 < row[4] <= trip['observed_at']
             or not path or row[5] != path):
             raise RuntimeContractError('subtitle_format_attempt_not_preserved')
-        cohort = connection.execute(
-            'SELECT claim_identity_hash FROM m2_observation_gate_jobs WHERE gate_id=? AND job_id=?',
-            (request['old_gate_id'], job_hash),
-        ).fetchone()
-        if not cohort or cohort[0] != hashlib.sha256(attempt.encode()).hexdigest():
-            raise RuntimeContractError('subtitle_format_frozen_claim_unproven')
+        claim_hash = hashlib.sha256(attempt.encode()).hexdigest()
+        if source_parse:
+            event = connection.execute(
+                'SELECT gate_id,job_id,event_payload_json,event_sha256,created_at '
+                'FROM m2_observation_result_events WHERE claim_identity_hash=?', (claim_hash,),
+            ).fetchone()
+            if (not event or event[0] != member.get('result_gate_id') or event[1] != job_hash
+                or event[3] != member.get('event_sha256')
+                or hashlib.sha256(event[2].encode()).hexdigest() != event[3]
+                or not 0 <= float(event[4]) - float(row[4]) <= 30
+                or not previous_event_at < float(event[4]) <= trip['observed_at']
+                or not float(request['old_gate']['gate_start_epoch']) <= float(row[6]) <= float(row[4])):
+                raise RuntimeContractError('source_parse_result_event_unproven')
+            # A retry of an older frozen member keeps that original Gate's
+            # history. It must not be moved into the current cohort for recovery.
+            if event[0] != request['old_gate_id'] and not connection.execute(
+                'SELECT 1 FROM m2_observation_gate_jobs WHERE gate_id=? AND job_id=?',
+                (event[0], job_hash),
+            ).fetchone():
+                raise RuntimeContractError('source_parse_result_event_unproven')
+            payload = json.loads(event[2]);outcome = payload.get('outcome', {})
+            event_breaker = payload.get('breaker', {})
+            if (outcome.get('stage') != 'worker' or outcome.get('error_code') != 'worker_unknown'
+                or outcome.get('failed') is not True
+                or event_breaker.get('identical_failure_job_ids') != keys[:member_index]
+                or event_breaker.get('identical_failure_streak') != member_index
+                or event_breaker.get('normalized_failure_signature') != detail['normalized_failure_signature']
+                or event_breaker.get('oom_streak') != 0
+                or event_breaker.get('tripped') is not (member_index == len(members))):
+                raise RuntimeContractError('source_parse_result_event_unproven')
+            previous_event_at = float(event[4])
+        else:
+            cohort = connection.execute(
+                'SELECT claim_identity_hash FROM m2_observation_gate_jobs WHERE gate_id=? AND job_id=?',
+                (request['old_gate_id'], job_hash),
+            ).fetchone()
+            if not cohort or cohort[0] != claim_hash:
+                raise RuntimeContractError('subtitle_format_frozen_claim_unproven')
         if source_hold(connection, path):
             if member.get('disposition') != 'HELD_UNKNOWN_CONTINUITY':
                 raise RuntimeContractError('subtitle_format_held_member_not_classified')
@@ -1683,6 +1739,15 @@ def _validate_subtitle_format_incident(
                 raise ValueError('source selection identity is not bound to the video')
             verify_source_snapshot(media)
             verify_source_snapshot(source)
+            if source_parse:
+                from srt_utils import read_srt, SrtFormatError
+                try:
+                    read_srt(subtitle)
+                except SrtFormatError as exc:
+                    if str(exc) != expected_detail:
+                        raise ValueError('source parser evidence changed') from exc
+                else:
+                    raise ValueError('source parser defect not reproduced')
         except (KeyError, TypeError, ValueError, OSError, RuntimeError) as exc:
             raise RuntimeContractError('subtitle_format_current_source_unproven') from exc
     if detail.get('job_key') not in keys or {value[:16] for value in seen} != set(keys):
@@ -1800,7 +1865,7 @@ def _planned_change_incident(
             raise RuntimeContractError('reconciliation_frozen_policy_changed')
         if breaker != request.get('breaker'):
             raise RuntimeContractError('reconciliation_breaker_evidence_changed')
-        if root_cause.get('incident_kind') == 'subtitle_format_dispatch':
+        if root_cause.get('incident_kind') in {'subtitle_format_dispatch', 'source_srt_parse_classification'}:
             _validate_postprocess_recovery_proof(config, evidence, root_cause)
             _validate_subtitle_format_incident(connection, config=config, request=request,
                                                root_cause=root_cause, breaker=breaker)
@@ -2824,7 +2889,8 @@ def recover_runtime_local(
             raise RuntimeContractError("planned_change_signature_invalid")
         if root_cause.get('incident_kind') in _RECONCILIATION_INCIDENT_KINDS:
             _validate_postprocess_recovery_proof(config, evidence, root_cause)
-        category = ("OWNED_PUBLICATION_IDENTITY_REPAIR" if root_cause.get('incident_kind') == 'owned_publication_identity_mismatch' else
+        category = ("SOURCE_SRT_PARSE_CLASSIFICATION_REPAIR" if root_cause.get('incident_kind') == 'source_srt_parse_classification' else
+                    "OWNED_PUBLICATION_IDENTITY_REPAIR" if root_cause.get('incident_kind') == 'owned_publication_identity_mismatch' else
                     "SUBTITLE_FORMAT_DISPATCH_REPAIR" if root_cause.get('incident_kind') == 'subtitle_format_dispatch' else
                     "SOURCE_LANGUAGE_VOTE_REPAIR" if root_cause.get('incident_kind') == 'source_language_vote_mismatch' else
                     "LINE_REPAIR_EVIDENCE_REPAIR" if root_cause.get('incident_kind') == 'line_repair_evidence_incomplete'

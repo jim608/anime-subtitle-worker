@@ -1,5 +1,19 @@
 # Incremental Delivery Plan
 
+## Authorized exact SRT-parse continuation — 2026-09-19
+
+User now authorizes the necessary second safe deployment. c20444e07a4a376484e0a5866ed8d4e1944d6f9a
+inherits deployed a538e86 ASR-cache rejection/SQLite retry; its154 tests are reused.
+Only new runtime change: bind the exact three SrtFormatError attempts, original
+result-event hashes (including retained older-cohort bindings), source snapshots,
+prior recovered history and actual-image proof to existing controlled recovery.
+73 related recovery tests and isolated review -> Docker restart -> next claim PASS.
+Current predeployment runtime remains a538e86/f956b762, TRIPPED;103 holds/50 existing
+backups retained. No deployment or Production continuation success claimed yet.
+Use the existing exact-failure budget-preserving Queue API only after successful
+controlled recovery; never reset attempts/force AI or replay unbound failures.
+Logs: /logs/m2-srt-recovery-20260919/. No M3 or full historical/media audit.
+
 ## Active bounded correction — recurring admission loss (2026-09-19)
 
 **Still incomplete: current Breaker TRIPPED, sustained recovery NOT VERIFIED.**

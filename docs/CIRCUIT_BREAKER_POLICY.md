@@ -1,5 +1,20 @@
 # M2 Circuit Breaker Policy
 
+## Exact source-SRT parse recovery continuation — 2026-09-19
+
+Only typed source_srt_parse_classification may recover the proven three-member
+worker_unknown incident: original SrtFormatError detail, immutable result-event hash,
+distinct-member streak sequence, current verified source snapshots and recovered
+ancestor history must all match. Older frozen-member event bindings remain on their
+original Gates; they are not copied into a new cohort. Require exact-image regression
+and restart evidence, unchanged QC/strict/ASR-cache/BUSY semantics and safe deployment.
+Genuine shared faults and unknown later trips still refuse recovery.
+The user authorized a necessary second deployment, not repeated unbounded rearming.
+All103 holds/UNPROVEN and all50 predeployment backup directories must remain.
+Only after ARMED recovery may the existing exact-failure Queue API resume the three
+verified old-version failures without clearing retry counts, original error evidence,
+repair budgets or source protections. Ordinary source selection runs again.
+
 ## 2026-09-19 — cache admission and transient database contention
 
 M2 must not restore a generated Japanese ASS as trusted ASR input without current
