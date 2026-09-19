@@ -1,5 +1,16 @@
 # Incremental Delivery Plan
 
+## Active full-flow reliability Goal — 2026-09-20
+
+The new Goal supersedes the previous bounded recovery completion conditions.
+Current recurrence incorrect_completion atSep20 01:29:10 Taipei is a NEW incident;
+preserve its evidence and old Gate/receipts, do not reuse the old SRT recovery.
+Work checklist: docs/RELIABILITY_ACCEPTANCE_20260920.md. Includes exact temporary
+container archival/cleanup and existing launcher lifecycle fixes, not a new framework.
+Require relevant server-isolated regression, safe deployed repair,24-hour autonomous
+observation, fixed20 complete results, multiple continuations and2 new strict outputs.
+No Goal complete from ARMED/queued/tests/one heartbeat. Current INVESTIGATING.
+
 ## Exact SRT incident recovery complete — 2026-09-19 15:28 UTC
 
 The missing real continuation is now proven, superseding the earlier bounded

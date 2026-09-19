@@ -15,7 +15,7 @@ configure_isolated_test_tempdir()
 
 from m2_guardrail_runtime import configuration_fingerprint
 from m2_strict_observation import STRICT_EVIDENCE_KEYS
-from m2_strict_runtime_evidence import build_m2_strict_runtime_evidence
+from m2_strict_runtime_evidence import build_m2_strict_runtime_evidence, _hallucination_evidence
 from output_manifest import output_manifest_path
 from pipeline_state import PipelineJobStore
 from processing_provenance import (
@@ -670,6 +670,49 @@ class M2StrictRuntimeEvidenceTests(unittest.TestCase):
         self.assertFalse(result["evidence"]["hallucination_validation_pass"])
         self.assertTrue(result["outcome"]["hallucination_blocked"])
         self.assertTrue(result["outcome"]["incorrect_completion"])
+
+    def test_detected_source_language_uses_bound_actual_transcript_not_ja_name(self) -> None:
+        from subtitle_paths import source_transcript_paths_for_video
+        from transcriber import asr_transcription_hold_path
+
+        for language in ("zh", "ko", "en"):
+            with self.subTest(language=language):
+                source = source_transcript_paths_for_video(self.video, self.config, language).srt
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text("1\n00:00:01,000 --> 00:00:03,000\n今天一起去學校。\n\n", encoding="utf-8")
+                stat = source.stat()
+                transcript = {
+                    "contract": "ai-source-transcription-v1", "language": language,
+                    "path": str(source), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns,
+                    "sha256": sha256_file(source), "asr_used": True,
+                }
+                diagnostic = asr_diagnostics_path(source, self.config)
+                diagnostic.parent.mkdir(parents=True, exist_ok=True)
+                diagnostic.write_text(json.dumps({"status": "accepted", "srt_sha256": sha256_file(source)}))
+                manifest = {"valid": True, "source_transcription": transcript}
+
+                def verify(value=manifest):
+                    return _hallucination_evidence(self.video, self.config,
+                        decision_ok=True, strategy="ASR_JA_AUDIO", manifest=value)
+
+                self.assertTrue(verify())
+                self.assertFalse(verify({**manifest, "valid": False}))
+                for field, bad in (("sha256", "0" * 64), ("path", str(self.ja_srt)),
+                                   ("size", 0), ("mtime_ns", 0), ("asr_used", "true")):
+                    with self.subTest(invalid_field=field):
+                        self.assertFalse(verify({**manifest, "source_transcription": {**transcript, field: bad}}))
+                with mock.patch("transcriber._is_hallucination_text", return_value=True):
+                    self.assertFalse(verify())
+                hold = asr_transcription_hold_path(source, self.config)
+                hold.parent.mkdir(parents=True, exist_ok=True)
+                hold.write_text("{}")
+                self.assertFalse(verify())
+                hold.unlink()
+                diagnostic.write_text(json.dumps({"status": "unverified", "srt_sha256": sha256_file(source)}))
+                self.assertFalse(verify())
+                diagnostic.unlink()
+                self.assertFalse(verify())
+                self.assertFalse(verify({**manifest, "source_transcription": {**transcript, "asr_used": False}, "valid": False}))
 
     def test_runtime_pre_gate_attempt_never_matches_baseline(self) -> None:
         self.runtime["state"]["gate_start_epoch"] = 250.0

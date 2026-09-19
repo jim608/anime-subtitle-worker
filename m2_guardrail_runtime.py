@@ -1378,6 +1378,7 @@ _RECONCILIATION_INCIDENT_KINDS = frozenset({
     'owned_publication_identity_mismatch',
     'asr_cache_acceptance_unproven',
     'source_srt_parse_classification',
+    'source_transcript_evidence_bridge',
 })
 
 
@@ -1414,7 +1415,9 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
     owned_publication = root_cause.get('incident_kind') == 'owned_publication_identity_mismatch'
     asr_cache = root_cause.get('incident_kind') == 'asr_cache_acceptance_unproven'
     source_parse = root_cause.get('incident_kind') == 'source_srt_parse_classification'
-    contract = ('m2-source-srt-parse-regression-v1' if source_parse else
+    source_transcript = root_cause.get('incident_kind') == 'source_transcript_evidence_bridge'
+    contract = ('m2-source-transcript-evidence-regression-v1' if source_transcript else
+                'm2-source-srt-parse-regression-v1' if source_parse else
                 'm2-asr-cache-admission-regression-v1' if asr_cache else
                 'm2-owned-publication-regression-v1' if owned_publication else
                 'm2-subtitle-format-regression-v1' if format_dispatch else
@@ -1449,6 +1452,12 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
     )):
         raise RuntimeContractError('subtitle_format_recovery_regression_unproven')
     logs = report.get('logs')
+    if source_transcript and any(report.get(key) is not True for key in (
+        'actual_transcript_mismatch_reproduced', 'bound_manifest_transcript_verified',
+        'unaccepted_cache_rejected', 'full_hallucination_scan', 'terminal_next_claim',
+        'original_incident_preserved', 'unchanged_strict_predicates',
+    )):
+        raise RuntimeContractError('source_transcript_recovery_regression_unproven')
     if source_parse and any(report.get(key) is not True for key in (
         'source_parse_reproduced', 'only_format_error_caught', 'safe_fallback_or_review',
         'valid_output_preserved', 'original_incident_preserved', 'late_hold_refused',
@@ -1475,7 +1484,9 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
             or 'sha256:' + sha256_file(log) != item.get('sha256')):
             raise RuntimeContractError('postprocess_recovery_logs_invalid')
     code = report.get('code_sha256')
-    names = (('source_inventory.py', 'source_analyzer.py', 'srt_utils.py',
+    names = (('m2_strict_runtime_evidence.py', 'm2_strict_observation.py', 'output_manifest.py',
+              'm2_guardrail_runtime.py', 'main.py', 'worker.py') if source_transcript else
+             ('source_inventory.py', 'source_analyzer.py', 'srt_utils.py',
               'subtitle_quality.py', 'worker.py', 'm2_guardrail_runtime.py',
               'm2_production_observation.py', 'm2_strict_runtime_evidence.py') if source_parse else
              ('worker.py', 'm2_guardrail_runtime.py', 'm2_production_observation.py',
@@ -1790,6 +1801,55 @@ def _planned_change_receipt(config: Any, root_cause: Mapping[str, Any]) -> dict[
     return receipt
 
 
+def _source_transcript_incident_bound(connection: sqlite3.Connection,
+                                     request: Mapping[str, Any],
+                                     incident: Mapping[str, Any],
+                                     breaker: Mapping[str, Any]) -> bool:
+    """A retried historical cohort member keeps its original immutable Gate.
+
+    Bind this exact review attempt and failed result, not the currently active
+    cohort and never a synthetic claim. No prior recovery receipt authorizes it.
+    """
+    try:
+        attempt = str(incident['attempt_id'])
+        claim_hash = hashlib.sha256(attempt.encode()).hexdigest()
+        job_hash = hashlib.sha256(str(incident['obligation_id']).encode()).hexdigest()
+        row = connection.execute(
+            'SELECT gate_id,job_id,observed_state,event_sha256,event_payload_json,created_at '
+            'FROM m2_observation_result_events WHERE claim_identity_hash=?', (claim_hash,),
+        ).fetchone()
+        timing = connection.execute(
+            'SELECT started_at,finished_at,detail FROM ai_delivery_attempts WHERE attempt_id=?',
+            (attempt,),
+        ).fetchone()
+        trip_at = float(incident['trip']['observed_at'])
+        if (not row or not timing or row[0] != incident.get('result_gate_id')
+            or row[1] != job_hash or row[2] != 'NEEDS_REVIEW'
+            or row[3] != incident.get('event_sha256')
+            or hashlib.sha256(row[4].encode()).hexdigest() != row[3]
+            or not 0 < float(timing[0]) <= float(timing[1]) <= float(row[5]) <= trip_at
+            or trip_at - float(timing[1]) > 30
+            or 'hallucination_validation_pass' not in str(timing[2])):
+            return False
+        if not connection.execute(
+            'SELECT 1 FROM m2_observation_gate_jobs WHERE gate_id=? AND job_id=?',
+            (row[0], job_hash),
+        ).fetchone():
+            return False
+        outcome = json.loads(row[4]).get('outcome', {})
+        if (outcome.get('stage') != 'm2_strict_completion'
+            or outcome.get('error_code') != 'incorrect_completion'
+            or outcome.get('terminal_status') != 'NEEDS_REVIEW'):
+            return False
+        return any(event.get('reason_code') == 'incorrect_completion'
+            and event.get('evidence', {}).get('gate_id') == row[0]
+            and event.get('evidence', {}).get('claim_identity_hash') == claim_hash
+            and float(row[5]) <= float(event.get('observed_at', 0)) <= trip_at
+            for event in breaker.get('reasons', []))
+    except (KeyError, TypeError, ValueError, sqlite3.Error):
+        return False
+
+
 def _line_repair_noncohort_claim_bound(
     connection: sqlite3.Connection, config: Any, incident: Mapping[str, Any],
 ) -> bool:
@@ -1871,7 +1931,8 @@ def _planned_change_incident(
                                                root_cause=root_cause, breaker=breaker)
         elif root_cause.get('incident_kind') in _RECONCILIATION_INCIDENT_KINDS:
             _validate_postprocess_recovery_proof(config, evidence, root_cause)
-            incident_key = ('asr_cache_incident' if root_cause.get('incident_kind') == 'asr_cache_acceptance_unproven' else
+            incident_key = ('source_transcript_incident' if root_cause.get('incident_kind') == 'source_transcript_evidence_bridge' else
+                            'asr_cache_incident' if root_cause.get('incident_kind') == 'asr_cache_acceptance_unproven' else
                             'owned_publication_incident' if root_cause.get('incident_kind') == 'owned_publication_identity_mismatch' else
                             'language_vote_incident' if root_cause.get('incident_kind') == 'source_language_vote_mismatch' else
                             'line_repair_incident' if root_cause.get('incident_kind') == 'line_repair_evidence_incomplete'
@@ -1902,6 +1963,8 @@ def _planned_change_incident(
                        and item.get('evidence', {}).get('gate_id') == request['old_gate_id']
                        and item.get('evidence', {}).get('claim_identity_hash') == claim_hash
                        for item in breaker.get('reasons', []))
+            if root_cause.get('incident_kind') == 'source_transcript_evidence_bridge':
+                gate_claim_bound = _source_transcript_incident_bound(connection, request, incident, breaker)
             if not gate_claim_bound and not (
                 root_cause.get('incident_kind') == 'line_repair_evidence_incomplete'
                 and _line_repair_noncohort_claim_bound(connection, config, incident)

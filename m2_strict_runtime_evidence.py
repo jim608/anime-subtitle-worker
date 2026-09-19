@@ -118,6 +118,7 @@ def build_m2_strict_runtime_evidence(
         config,
         decision_ok=decision_ok,
         strategy=strategy,
+        manifest=manifest,
     )
     runtime_ok, claimed_after_gate_start = _runtime_evidence(
         config,
@@ -511,6 +512,13 @@ def _manifest_evidence(
                 "manifest_path": manifest_path,
                 "manifest_sha256": manifest_sha256,
                 "output_paths": tuple(output_paths),
+                # validate_output_manifest above already binds this transcript
+                # to the exact media, policy, source provenance and diagnostics.
+                # The initial source decision can predate real audio-language
+                # detection; never infer the final ASR artifact from its label.
+                "source_transcription": (payload.get("provenance") or {}).get(
+                    "source_transcription"
+                ),
             }
         )
     except Exception:
@@ -845,6 +853,7 @@ def _hallucination_evidence(
     *,
     decision_ok: bool,
     strategy: str,
+    manifest: Mapping[str, Any] | None = None,
 ) -> bool:
     if not decision_ok:
         return False
@@ -854,8 +863,9 @@ def _hallucination_evidence(
         return False
     try:
         from safe_files import sha256_file
+        from output_manifest import SOURCE_TRANSCRIPTION_PROVENANCE_CONTRACT
         from srt_utils import read_srt
-        from subtitle_paths import paths_for_video
+        from subtitle_paths import paths_for_video, source_transcript_paths_for_video
         from transcriber import (
             _is_hallucination_text,
             asr_diagnostics_path,
@@ -864,19 +874,44 @@ def _hallucination_evidence(
         )
 
         source = paths_for_video(video, config).ja_srt
+        transcript = (manifest or {}).get("source_transcription")
+        asr_used = True
+        if transcript is not None:
+            if (
+                (manifest or {}).get("valid") is not True
+                or not isinstance(transcript, Mapping)
+                or transcript.get("contract") != SOURCE_TRANSCRIPTION_PROVENANCE_CONTRACT
+                or type(transcript.get("asr_used")) is not bool
+            ):
+                return False
+            source = source_transcript_paths_for_video(
+                video, config, str(transcript.get("language") or "")
+            ).srt
+            if not _same_path(transcript.get("path"), source):
+                return False
+            stat = source.stat()
+            if (
+                _strict_int(transcript.get("size")) != stat.st_size
+                or _strict_int(transcript.get("mtime_ns")) != stat.st_mtime_ns
+            ):
+                return False
+            asr_used = transcript["asr_used"]
         diagnostic_path = asr_diagnostics_path(source, config)
         if (
             not source.is_file()
-            or not diagnostic_path.is_file()
             or asr_transcription_hold_path(source, config).exists()
+            or (asr_used and not diagnostic_path.is_file())
+            or (not asr_used and diagnostic_path.exists())
         ):
             return False
-        diagnostic = read_asr_diagnostics(source, config)
         source_sha = sha256_file(source)
+        if transcript is not None and transcript.get("sha256") != source_sha:
+            return False
+        diagnostic = read_asr_diagnostics(source, config) if asr_used else {}
         if (
-            str(diagnostic.get("status") or "")
+            asr_used and (str(diagnostic.get("status") or "")
             not in {"accepted", "accepted_after_selective_retry"}
-            or str(diagnostic.get("srt_sha256") or "").casefold() != source_sha
+            or str(diagnostic.get("srt_sha256") or "").casefold() != source_sha)
         ):
             return False
         blocks = read_srt(source)
