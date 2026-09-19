@@ -14,6 +14,23 @@ Existing reconciliation can recover only the exact held cache incident plus expl
 evidenced subsequent busy/provider events; unknown later faults remain blocking.
 All backups are retained and sidecar migration disabled for this authorized deployment.
 
+Deployed Worker a538e86a127cb944b24d1f4e16c15941b51c00f1 / WebUI
+f956b762054566412e62f8d88d8f916cf566a8ab through one safe-update. Recovery
+`m2breakerrec_34e692462df743378a008b3d761e75d8` returns ARMED after actual-image
+tests/restart and fresh7/7 fault injection. All49 original backups, old Gate/all20
+members and 102 existing holds retained; exact incident stays review-required with
+one additional hold. Provider observation gap remains historical UNPROVEN, not PASS.
+New runtime Gate132154375850Z-e85078fcb2 begins0/20; no Gate-success claim.
+
+Bounded live closeout supersedes the initial ARMED status: at13:24:50.239262Z three
+source SrtFormatError exceptions, mislabeled worker_unknown, caused a new
+repeated_identical_stage_failure trip. Keep that protection/evidence; do not reuse
+the prior cache-incident receipt. Candidate c20444e (154 server-isolated PASS,
+NOT DEPLOYED) records malformed source as subtitle_parse_failed QC rejection and
+uses only existing safe alternatives/review, without hiding I/O/shared faults.
+No second deployment, latch clearing or Gate change was performed; real sustained
+recovery remains unverified. One successful ARMED initialization is not closeout.
+
 
 ## 2026-09-13 — exact owned-publication identity incident
 

@@ -2,6 +2,14 @@
 
 ## Active bounded correction — recurring admission loss (2026-09-19)
 
+**Still incomplete: current Breaker TRIPPED, sustained recovery NOT VERIFIED.**
+One safe deployment fixed the originally evidenced ASR cache/BUSY defects, but
+three real subsequent source-SRT parse failures exposed a further classification
+defect. Candidate c20444e07a4a376484e0a5866ed8d4e1944d6f9a is pushed, server-isolated
+154 related tests PASS, NOT DEPLOYED. No second deployment under this turn's limit.
+Next: exact new-incident controlled handoff, safe deployment and real terminal ->
+next automatic claim/Stage. Do not replay the already-completed Sep19 deploy script.
+
 Do not treat Sep13 first-claim recovery as sustained recovery. Actual unchanged
 Worker33b7095 stopped at 2026-09-13T14:02:37.856888Z: legacy AI ASS restored a
 Japanese SRT without accepted ASR diagnostics, later rejected as incorrect_completion.
@@ -9,8 +17,17 @@ Subsequent SQLite BUSY and provider evidence expiry are separately retained.
 Fix only pre-publication cache refusal, transient admission handling, exact existing
 controlled-recovery proof and original reason/time display. No M3, Gate replacement
 for queries, QC relaxation, full-media audit, old backup deletion or extra cleanup.
-Candidate related tests and isolated container restart pass; deployment and real
-terminal-to-next-claim evidence remain pending. Logs: /logs/m2-admission-20260919/.
+Deployed once as Worker a538e86a127cb944b24d1f4e16c15941b51c00f1 / WebUI
+f956b762054566412e62f8d88d8f916cf566a8ab. Actual-image206, cache20, deployment10,
+UI5/frontend, real isolated Docker restart/terminal-to-next-claim and fresh7/7 PASS.
+Controlled recovery initially ARMED; all49 original backups and all102 prior holds retained,
+exact cache incident adds hold103. OldGate034622/all20 members unchanged; only the
+actual runtime change creates newGate132154375850Z-e85078fcb2 at0/20, baseline
+82a59f4b66785382d0762b06. Three automatic SUBTITLE_DETECTION claims at13:22:53,
+13:23:48 and13:24:44Z ended RETRYING; SrtFormatError -> worker_unknown produced
+repeated_identical_stage_failure at13:24:50.239262Z. Current Gate ACTIVE0/20 retained,
+no terminal-to-next-claim acceptance, no new subtitles and no M2 acceptance claim.
+Logs: /logs/m2-admission-20260919/. Document closeout does not redeploy/rebuild Gate.
 
 
 ## Completed bounded task — unblock genuinely idle Production claims

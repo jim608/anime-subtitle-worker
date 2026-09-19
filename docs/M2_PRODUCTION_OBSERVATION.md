@@ -1,5 +1,59 @@
 # M2 Production Observation
 
+## 2026-09-19 — recurring admission loss, one safe deployment and controlled recovery
+
+**Closeout: current Breaker TRIPPED, sustained recovery NOT VERIFIED.** ARMED below
+is the historical recovery result, superseded by a real new trip at13:24:50.239262Z.
+
+Original ARMED -> TRIPPED at `2026-09-13T14:02:37.856888Z`, anonymous job
+`m2ai_07ec13c4c00c0288b2ce`: generated JA ASS cache was restored without accepted
+ASR diagnostics, skipped transcription and reached publication before strict
+completion correctly refused hallucination evidence (`incorrect_completion`).
+No Gate settlement, strict FAIL or same-version restart caused this transition.
+Sep18 SQLite BUSY was a separate incorrectly latched admission fault; later provider
+evidence expiry remains a genuine continuity gap, not retrospectively repaired.
+
+Worker runtime `a538e86a127cb944b24d1f4e16c15941b51c00f1`, image
+`sha256:345ce241b024b227520ef663f447038bcc9cd2900619f2d32fd1d43c7a556c3a`;
+WebUI runtime `f956b762054566412e62f8d88d8f916cf566a8ab`, image
+`sha256:63e035bc7d0cac764247a7eb83c7197597a026088e53f335c42e3848fdd46e5b`.
+Single safe deployment `20260919T130151Z-990693`, actual-image206 related tests,
+actual isolated restart/terminal-to-next-claim and fresh7/7 breakers PASS.
+Unproven ASR caches now stop at individual source review before publication;
+BUSY/LOCKED refuses one claim and retries, while real DB faults still trip.
+Strict/source/QC validators are unchanged. UI shows original and latest reason/time.
+
+Reconciliation `m2-recon-asr-cache-20260919`, recovery
+`m2breakerrec_34e692462df743378a008b3d761e75d8`, ARMED, own pause released.
+103 holds = all102 existing plus exact original incident; UNPROVEN remains.
+Old Gate `m2-gate-20260913T034622309404Z-36adb77a0e` and all20 members are unchanged,
+20 enrolled/16 settled, INVALIDATED_BY_RUNTIME_CHANGE. All49 existing deployment
+backups retained; no cleanup or full-media migration. Current verified recovery scope
+6,718 identities, not successes or new subtitle deliveries.
+
+New frozen Gate `m2-gate-20260919T132154375850Z-e85078fcb2`, start
+`2026-09-19T13:21:54.375850Z`, baseline `m2-guardrail-v1:82a59f4b66785382d0762b06`,
+configuration `sha256:f71f27e11f68a07b316dd5797cc670ec55359d13de13f7d11665872fa7781aac`,
+Decision Schema1, first20 policy `m2-frozen-first-20-v1`, initialized0/20.
+No historical member transfer or replacement. Production automatically claimed
+three jobs at13:22:53.727Z /13:23:48.523Z /13:24:44.609Z, all SUBTITLE_DETECTION
+with fresh heartbeat, all RETRYING due to malformed source SRT blocks. Therefore
+there is NO normal-terminal -> next-claim proof or valid new checkpoint.
+source_inventory's unhandled SrtFormatError became worker_unknown and tripped
+repeated_identical_stage_failure after the third distinct job at13:24:50.239262Z.
+Latest bounded Gate ACTIVE0/20,103 holds, old Gate/all20 members unchanged.
+
+Follow-up candidate c20444e07a4a376484e0a5866ed8d4e1944d6f9a rejects malformed
+sources through unchanged QC/fallback eligibility instead of crashing inventory;
+server-isolated154 PASS, deployed-image defect reproduced. It is pushed but NOT
+DEPLOYED: no second deployment/recovery under this turn's one-deployment limit.
+Current runtime remains a538e86/f956b76, current trip/backup/old receipt retained.
+New precise handoff and Production terminal-to-next-claim proof remain required.
+Evidence postverify-1789824359008613445.json and
+followup-trip-1789824417322683673.json; no new accepted subtitle, Gate PASS,
+M2 Production acceptance or M3 claim.
+Full logs `/logs/m2-admission-20260919/`; docs-only closeout does not deploy again.
+
 ## 2026-09-13 03:50 UTC — idle-claim recovery deployed and processing observed
 
 Worker `33b709584bd6ba463cc2d809242bd284f0b6d483`; WebUI

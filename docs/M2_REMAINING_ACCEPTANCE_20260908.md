@@ -1,9 +1,14 @@
 # M2 remaining acceptance — 2026-09-08
 
-## 2026-09-19 — recurring admission incident, deployment pending
+## 2026-09-19 — bounded deployment completed, sustained recovery FAILED verification
 
-Live Worker33b709584bd6ba463cc2d809242bd284f0b6d483 and WebUIc79840d4274b421ff25d44cbe094637c4384bb2b
-have not restarted since Sep13. Original ARMED-to-TRIPPED: 2026-09-13T14:02:37.856888Z,
+**Current outcome: TRIPPED; sustained Production recovery is NOT verified.** The
+initial controlled recovery below was ARMED at13:21:54Z, but real follow-on work
+exposed a second defect at13:24:50.239262Z. Do not reuse its successful recovery
+receipt to clear this new incident or describe the current runtime as ARMED.
+
+At diagnosis Worker33b709584bd6ba463cc2d809242bd284f0b6d483 and WebUIc79840d4274b421ff25d44cbe094637c4384bb2b
+had not restarted since Sep13. Original ARMED-to-TRIPPED: 2026-09-13T14:02:37.856888Z,
 task m2ai_07ec13c4c00c0288b2ce, incorrect_completion/m2_strict_completion.
 ASR_JA_AUDIO restored an old generated ASS into SRT and skipped Whisper without
 accepted, hash-bound ASR evidence. Strict completion correctly refused; its prior
@@ -13,13 +18,60 @@ provider observation subsequently expired and invalidated the old Gate. Do not e
 the provider continuity gap or relabel preservation UNPROVEN.
 
 Old Gate034622 retains 20 enrolled / 16 settled, INVALIDATED_BY_RUNTIME_CHANGE.
-102 source holds remain. Candidate correction: refuse unproven cache before publication,
+All 102 prior source holds remain. Deployed correction: refuse unproven cache before publication,
 preserve all media/output/evidence, let only SQLITE_BUSY/LOCKED retry admission without
 a new latch; corruption, false completion and unknown runtime changes still stop claims.
 Related candidate206 + cache20 + deployment10 tests PASS; final UI5/frontend PASS.
 Old runtime reproduces three failures. Real isolated container restart retains the
-first review/checkpoint and claims a second task in SUBTITLE_DETECTION. Production
-sustained recovery is NOT yet verified; no M2 acceptance claim.
+first review/checkpoint and claims a second task in SUBTITLE_DETECTION.
+
+One safe deployment `20260919T130151Z-990693`, exit0, followed by exact typed
+controlled recovery `m2breakerrec_34e692462df743378a008b3d761e75d8`, exit0.
+Actual Worker `a538e86a127cb944b24d1f4e16c15941b51c00f1`, image
+`sha256:345ce241b024b227520ef663f447038bcc9cd2900619f2d32fd1d43c7a556c3a`;
+WebUI `f956b762054566412e62f8d88d8f916cf566a8ab`. Actual new image206 tests,
+actual isolated Docker restart/terminal-to-next-claim and fresh7/7 breakers PASS.
+UI exposes original stop reason/time as well as the latest admission reason.
+
+Receipt `/logs/m2-reconciliation-m2-recon-asr-cache-20260919.json`, SHA256
+`e88f68f7a906c4a9cd167b95aea3c188c641fc263999c95288b08cfb91d61263`, binds
+the retained exact incident, SQLite traceback and provider continuity gap.
+Current-state verified recovery scope: 6,718 identities, not completed deliveries.
+Exact incident adds one hold: **103 total**, preservation UNPROVEN unchanged.
+Original Gate034622 and all20 members are unchanged. All49 pre-existing backup
+directories retained; no pruning, extra cleanup or media-wide sidecar migration.
+
+New frozen Gate `m2-gate-20260919T132154375850Z-e85078fcb2`, baseline
+`m2-guardrail-v1:82a59f4b66785382d0762b06`, started
+`2026-09-19T13:21:54.375850Z`, initially0/20. Runtime ARMED, own pause released.
+No old member/result transfer, source-hold release, QC relaxation or M3.
+Bounded real sequence: m2ai_07853ae5eb85143c67e5 claimed13:22:53.727Z;
+m2ai_d864b77533d69f26b87a claimed13:23:48.523Z;
+m2ai_14c56855ee59467790dc claimed13:24:44.609Z. All entered SUBTITLE_DETECTION
+with fresh heartbeats, but malformed source SRT blocks caused RETRYING, not safe
+review/COMPLETED. No valid checkpoint or required terminal-to-next-claim proof.
+The third failure triggered repeated_identical_stage_failure at13:24:50.239262Z:
+source_inventory._source_hard_qc_failures let SrtFormatError escape, which became
+three identical worker_unknown failures instead of rejecting individual bad sources.
+This is not a Gate settlement/strict FAIL and no latch has been cleared again.
+
+Minimal follow-up candidate **c20444e07a4a376484e0a5866ed8d4e1944d6f9a** is pushed
+but **NOT DEPLOYED**. Catch only SrtFormatError at source hard-QC, retain identity
+and subtitle_parse_failed evidence, reject that candidate, then apply unchanged
+existing valid-CN/JA/trusted-JA-audio/review rules. I/O and unrelated faults still
+propagate. Actual deployed-image reproduction: five expected errors across the
+malformed-source subcases. Candidate server-isolated related suite154 PASS, source
+bytes/mtime and replay stable; unknown audio remains review. This is not Production
+or actual-new-image cycle proof. Respecting the requested one-deployment boundary,
+there was no second deployment, Gate recreation, cleanup or recovery invocation.
+
+Latest Gate132154 remains ACTIVE0/20, breaker TRIPPED; 103 holds and all old evidence
+remain. Required next work: safe deployment of the follow-up, exact new-incident
+evidence-bound controlled recovery, then real terminal -> next claim/Stage proof.
+Do not rerun deploy-once.sh or reuse the old incident proof for these three tasks.
+Evidence: postverify-1789824359008613445.json,
+followup-trip-1789824417322683673.json, followup-log-1789824417322683673.log,
+parse-deployed-reproduction.log, parse-candidate-regression.log.
 Full server evidence: /logs/m2-admission-20260919/.
 
 

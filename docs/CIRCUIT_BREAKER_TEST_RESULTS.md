@@ -1,6 +1,6 @@
 # M2 Circuit Breaker Test Results
 
-## 2026-09-19 — admission recurrence candidate validation
+## 2026-09-19 — admission recurrence, candidate and actual deployed-image validation
 
 Server isolated old-image reproduction: 3 expected failures (ASS restore without
 acceptance, SRT missing diagnostic, SQLite BUSY globally latched). Candidate6/6 PASS.
@@ -9,8 +9,27 @@ safe-deploy10 PASS; WebUI scheduler5/frontend PASS. Candidate actual-container
 restart: safe review terminal -> new claim -> SUBTITLE_DETECTION, persisted checkpoint
 and source hashes unchanged. Settled mixed PASS/review cohort remains frozen and
 continues admission; corrupt DB still trips; unproven source/evidence still rejected.
-Full logs: /logs/m2-admission-20260919/. Actual deployed-image verification, fresh
-breaker attestation and Production terminal-to-next-claim proof are pending.
+Actual deployed Worker a538e86a127cb944b24d1f4e16c15941b51c00f1 image345ce241:
+206 related tests PASS (`actual-image-tests.log`), actual isolated container restart
+PASS (`actual-image-cycle/result.json`). First safe-review terminal1789824066.617408,
+next claim1789824072.608876, SUBTITLE_DETECTION with preserved checkpoint/source.
+Hash-pinned proof: `actual-image-proof.json`. Fresh breakers7/7 PASS:
+`/logs/m2-guardrail-fi-20260919T132131726715Z-3ded012c/result.json`.
+Controlled recovery and runtime attestation initially ARMED; isolated proof is not
+Production sustained continuation. Bounded live verification FAILED: three real
+SUBTITLE_DETECTION attempts reached RETRYING on malformed source SRT; unhandled
+SrtFormatError -> worker_unknown caused repeated_identical_stage_failure at
+2026-09-19T13:24:50.239262Z. Current runtime TRIPPED, not ARMED; no terminal-to-next
+claim proof. Full exact traceback retained in followup-log-1789824417322683673.log.
+
+Follow-up source-inventory candidate c20444e (NOT DEPLOYED): deployed-image10-test
+reproduction gives five expected errors from malformed-source cases; candidate154
+related tests PASS. Includes valid CN/JA/trusted JA audio alternatives, unknown
+audio review, malformed candidate rejection, replay/source preservation, temporary
+I/O propagation and unrelated implementation-fault propagation, plus existing
+Gate/restart/admission regressions. Logs parse-deployed-reproduction.log and
+parse-candidate-regression.log. No second deployment or new actual-image proof.
+Full logs: /logs/m2-admission-20260919/.
 
 
 ## 2026-09-13 03:46 UTC — owned-publication completion identity repair
