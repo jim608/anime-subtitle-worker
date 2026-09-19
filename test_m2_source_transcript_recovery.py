@@ -80,3 +80,12 @@ class SourceTranscriptRecoveryTests(parent.PostprocessRecoveryTests):
         self.assertTrue(runtime._source_transcript_incident_bound(self.connection, request, self.incident, self.f.request['breaker']))
         self.incident['result_gate_id'] = 'different-current-gate'
         self.assertFalse(runtime._source_transcript_incident_bound(self.connection, request, self.incident, self.f.request['breaker']))
+
+    def test_later_system_fault_cannot_hide_behind_deployment_trip(self):
+        breaker = dict(self.f.request['breaker'])
+        breaker['reasons'] = [*breaker['reasons'],
+            {'reason_code': 'source_mutation', 'observed_at': self.f.now + 5.1},
+            {'reason_code': 'runtime_change', 'observed_at': self.f.now + 5.2,
+             'evidence': {'stage': 'runtime_validation', 'error_code': 'live_worker_container_identity_mismatch'}}]
+        with self.assertRaisesRegex(runtime.RuntimeContractError, 'unresolved_breaker'):
+            runtime._source_transcript_incident_bound(self.connection, self.f.request, self.incident, breaker)

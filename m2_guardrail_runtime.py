@@ -1823,6 +1823,13 @@ def _source_transcript_incident_bound(connection: sqlite3.Connection,
             (attempt,),
         ).fetchone()
         trip_at = float(incident['trip']['observed_at'])
+        for later in breaker.get('reasons', []):
+            if float(later.get('observed_at', 0)) <= trip_at:
+                continue
+            if (later.get('reason_code') != 'runtime_change' or later.get('evidence') != {
+                'stage': 'runtime_validation', 'error_code': 'live_worker_container_identity_mismatch',
+            }):
+                raise RuntimeContractError('source_transcript_unresolved_breaker')
         if (not row or not timing or row[0] != incident.get('result_gate_id')
             or row[1] != job_hash or row[2] != 'NEEDS_REVIEW'
             or row[3] != incident.get('event_sha256')
