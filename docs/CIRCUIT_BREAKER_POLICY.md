@@ -1,5 +1,20 @@
 # M2 Circuit Breaker Policy
 
+## 2026-09-19 — cache admission and transient database contention
+
+M2 must not restore a generated Japanese ASS as trusted ASR input without current
+acceptance evidence. Unproven ASS/SRT caches stop the individual job at source review
+before translation/publication; preserve existing source, outputs and diagnostics.
+Real incorrect_completion still trips. SQLite BUSY/LOCKED refuses that claim and
+uses the existing scheduler retry; malformed/I/O/database faults still fail closed.
+Settled/strict-FAIL Gate statistics do not alone stop safe work (existing behavior,
+regression-tested; no threshold changes). Runtime/provider evidence gaps still stop
+admission, preserve the invalidated Gate and require fresh controlled attestation.
+Existing reconciliation can recover only the exact held cache incident plus explicitly
+evidenced subsequent busy/provider events; unknown later faults remain blocking.
+All backups are retained and sidecar migration disabled for this authorized deployment.
+
+
 ## 2026-09-13 — exact owned-publication identity incident
 
 Deployed once as Worker33b709584bd6ba463cc2d809242bd284f0b6d483 with WebUIc79840d.

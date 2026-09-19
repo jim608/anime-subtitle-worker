@@ -3364,6 +3364,10 @@ class VideoWorker:
     def _restore_japanese_srt_cache_from_ass(self, paths: SubtitlePaths) -> bool:
         if paths.ja_srt.exists() or not paths.ai_ja_ass.is_file():
             return False
+        if bool(getattr(self.config, "m2_server_canary_observer_enabled", False)):
+            # An ASS quality report is not hash-bound ASR acceptance evidence.
+            # Refuse before creating a cache or removing any existing evidence.
+            raise SourceSelectionReviewError("asr_ass_cache_acceptance_unproven")
         asr_diagnostics_path(paths.ja_srt, self.config).unlink(missing_ok=True)
         asr_transcription_hold_path(paths.ja_srt, self.config).unlink(
             missing_ok=True
@@ -3412,6 +3416,10 @@ class VideoWorker:
             return audio_ready
         diagnostics_path = asr_diagnostics_path(paths.ja_srt, self.config)
         if not diagnostics_path.is_file():
+            if bool(getattr(self.config, "m2_server_canary_observer_enabled", False)):
+                # Keep this individual legacy cache for review. The source-review
+                # path preserves formal outputs, unlike ASR re-generation cleanup.
+                raise SourceSelectionReviewError("asr_cache_acceptance_unproven")
             return audio_ready
         diagnostics = read_asr_diagnostics(paths.ja_srt, self.config)
         diagnostic_status = str(diagnostics.get("status") or "")

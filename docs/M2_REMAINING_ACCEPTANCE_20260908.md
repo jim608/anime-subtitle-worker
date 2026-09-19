@@ -1,5 +1,28 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-19 — recurring admission incident, deployment pending
+
+Live Worker33b709584bd6ba463cc2d809242bd284f0b6d483 and WebUIc79840d4274b421ff25d44cbe094637c4384bb2b
+have not restarted since Sep13. Original ARMED-to-TRIPPED: 2026-09-13T14:02:37.856888Z,
+task m2ai_07ec13c4c00c0288b2ce, incorrect_completion/m2_strict_completion.
+ASR_JA_AUDIO restored an old generated ASS into SRT and skipped Whisper without
+accepted, hash-bound ASR evidence. Strict completion correctly refused; its prior
+publication is not a new accepted delivery. Preserve that review and existing output.
+Later SQLite database-is-locked was incorrectly latched as observation_state_degraded;
+provider observation subsequently expired and invalidated the old Gate. Do not erase
+the provider continuity gap or relabel preservation UNPROVEN.
+
+Old Gate034622 retains 20 enrolled / 16 settled, INVALIDATED_BY_RUNTIME_CHANGE.
+102 source holds remain. Candidate correction: refuse unproven cache before publication,
+preserve all media/output/evidence, let only SQLITE_BUSY/LOCKED retry admission without
+a new latch; corruption, false completion and unknown runtime changes still stop claims.
+Related candidate206 + cache20 + deployment10 tests PASS; final UI5/frontend PASS.
+Old runtime reproduces three failures. Real isolated container restart retains the
+first review/checkpoint and claims a second task in SUBTITLE_DETECTION. Production
+sustained recovery is NOT yet verified; no M2 acceptance claim.
+Full server evidence: /logs/m2-admission-20260919/.
+
+
 ## 2026-09-13 03:50 UTC — idle Worker incident recovered and real processing verified
 
 Safe-update `20260913T033702Z-984464` and controlled recovery both exited 0.

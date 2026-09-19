@@ -1376,6 +1376,7 @@ _RECONCILIATION_INCIDENT_KINDS = frozenset({
     'asr_postprocess_diagnostics_loss', 'line_repair_evidence_incomplete',
     'source_language_vote_mismatch', 'subtitle_format_dispatch',
     'owned_publication_identity_mismatch',
+    'asr_cache_acceptance_unproven',
 })
 
 
@@ -1408,7 +1409,9 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
     language_vote = root_cause.get('incident_kind') == 'source_language_vote_mismatch'
     format_dispatch = root_cause.get('incident_kind') == 'subtitle_format_dispatch'
     owned_publication = root_cause.get('incident_kind') == 'owned_publication_identity_mismatch'
-    contract = ('m2-owned-publication-regression-v1' if owned_publication else
+    asr_cache = root_cause.get('incident_kind') == 'asr_cache_acceptance_unproven'
+    contract = ('m2-asr-cache-admission-regression-v1' if asr_cache else
+                'm2-owned-publication-regression-v1' if owned_publication else
                 'm2-subtitle-format-regression-v1' if format_dispatch else
                 'm2-language-vote-regression-v1' if language_vote else
                 'm2-line-repair-regression-v1' if line_repair else 'm2-asr-postprocess-regression-v1')
@@ -1441,6 +1444,12 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
     )):
         raise RuntimeContractError('subtitle_format_recovery_regression_unproven')
     logs = report.get('logs')
+    if asr_cache and any(report.get(key) is not True for key in (
+        'legacy_cache_reproduced', 'prepublication_review', 'terminal_next_claim',
+        'busy_not_latched', 'corrupt_database_latched', 'settled_gate_continues',
+        'original_incident_preserved', 'unchanged_strict_validator',
+    )):
+        raise RuntimeContractError('asr_cache_recovery_regression_unproven')
     if owned_publication and any(report.get(key) is not True for key in (
         'input_diff_reproduced', 'owned_journal_verified', 'arbitrary_drift_rejected',
         'original_incident_preserved', 'unchanged_strict_predicates',
@@ -1454,7 +1463,9 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
             or 'sha256:' + sha256_file(log) != item.get('sha256')):
             raise RuntimeContractError('postprocess_recovery_logs_invalid')
     code = report.get('code_sha256')
-    names = (('m2_strict_runtime_evidence.py', 'm2_guardrail_runtime.py', 'worker.py',
+    names = (('worker.py', 'm2_guardrail_runtime.py', 'm2_production_observation.py',
+              'm2_strict_runtime_evidence.py', 'm2_strict_observation.py') if asr_cache else
+             ('m2_strict_runtime_evidence.py', 'm2_guardrail_runtime.py', 'worker.py',
               'source_inventory.py', 'source_decision.py', 'm2_production_observation.py') if owned_publication else
              ('worker.py', 'opencc_convert.py', 'ass_utils.py', 'output_manifest.py',
               'source_decision.py', 'm2_strict_runtime_evidence.py', 'm2_guardrail_runtime.py') if format_dispatch else
@@ -1467,6 +1478,59 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
         for name in names
     ):
         raise RuntimeContractError('postprocess_recovery_code_not_tested')
+
+
+def _validate_asr_cache_followups(connection: sqlite3.Connection, config: Any,
+                                 request: Mapping[str, Any], trip: Mapping[str, Any],
+                                 breaker: Mapping[str, Any]) -> None:
+    """Account for exact subsequent faults; never clear an unknown later trip.
+
+    A fresh runtime handoff does not prove continuity across a provider evidence
+    gap. Its old Gate remains invalidated. A busy incident additionally requires
+    the retained original traceback and a current healthy database.
+    """
+    incident = request['asr_cache_incident']
+    dispositions = incident.get('followup_dispositions', [])
+    later = [event for event in breaker.get('reasons', [])
+             if event.get('observed_at', 0) > trip['observed_at']]
+    declared = [item.get('trip') for item in dispositions if isinstance(item, Mapping)]
+    deployment = lambda event: (event.get('reason_code') == 'runtime_change'
+        and event.get('evidence') == {'stage':'runtime_validation',
+                                     'error_code':'live_worker_container_identity_mismatch'})
+    if any(event not in declared and not deployment(event) for event in later):
+        raise RuntimeContractError('asr_cache_unresolved_breaker')
+    for item in dispositions:
+        event = item.get('trip') or {}
+        if event not in later:
+            raise RuntimeContractError('asr_cache_followup_not_in_history')
+        detail = event.get('evidence') or {}
+        if (item.get('disposition') == 'TRANSIENT_SQLITE_BUSY_RESOLVED'
+            and event.get('reason_code') == 'observation_state_degraded'
+            and detail == {'stage':'admission', 'error_code':'state_recovery_failed'}):
+            reference = item.get('original_traceback') or {}
+            path = Path(str(reference.get('path') or '')).resolve()
+            root = Path(config.log_path).resolve()
+            if (not path.is_relative_to(root) or not path.is_file()
+                or not 0 < path.stat().st_size <= 65536
+                or 'sha256:' + sha256_file(path) != reference.get('sha256')):
+                raise RuntimeContractError('asr_cache_busy_evidence_unproven')
+            text = path.read_text(encoding='utf-8')
+            stamp = datetime.fromtimestamp(event['observed_at'], tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+            if (stamp not in text or 'M2 observation admission validation failed: database is locked' not in text
+                or 'sqlite3.OperationalError: database is locked' not in text
+                or [row[0] for row in connection.execute('PRAGMA quick_check')] != ['ok']):
+                raise RuntimeContractError('asr_cache_database_health_unproven')
+        elif (item.get('disposition') == 'PROVIDER_GAP_RETAINED_NEW_BASELINE_REQUIRED'
+              and event.get('reason_code') == 'runtime_change'
+              and detail == {'stage':'runtime_validation',
+                             'error_code':'provider_observation_expired_or_clock_invalid'}):
+            # The existing host recovery must still supply a freshly inspected
+            # provider binding. Do not erase/relabel the expired observation.
+            if (request['old_gate'].get('status') != 'INVALIDATED_BY_RUNTIME_CHANGE'
+                or not request['runtime_identity'].get('model_provider_endpoint')):
+                raise RuntimeContractError('asr_cache_provider_gap_not_preserved')
+        else:
+            raise RuntimeContractError('asr_cache_followup_disposition_invalid')
 
 
 def _proven_recovered_breaker_history(
@@ -1742,7 +1806,8 @@ def _planned_change_incident(
                                                root_cause=root_cause, breaker=breaker)
         elif root_cause.get('incident_kind') in _RECONCILIATION_INCIDENT_KINDS:
             _validate_postprocess_recovery_proof(config, evidence, root_cause)
-            incident_key = ('owned_publication_incident' if root_cause.get('incident_kind') == 'owned_publication_identity_mismatch' else
+            incident_key = ('asr_cache_incident' if root_cause.get('incident_kind') == 'asr_cache_acceptance_unproven' else
+                            'owned_publication_incident' if root_cause.get('incident_kind') == 'owned_publication_identity_mismatch' else
                             'language_vote_incident' if root_cause.get('incident_kind') == 'source_language_vote_mismatch' else
                             'line_repair_incident' if root_cause.get('incident_kind') == 'line_repair_evidence_incomplete'
                             else 'asr_postprocess_incident')
@@ -1778,10 +1843,12 @@ def _planned_change_incident(
             ):
                 raise RuntimeContractError('postprocess_recovery_claim_binding_unproven')
             latest = breaker.get('latest_trip', {})
-            if latest != trip and (latest.get('reason_code') != 'runtime_change'
+            if root_cause.get('incident_kind') == 'asr_cache_acceptance_unproven':
+                _validate_asr_cache_followups(connection, config, request, trip, breaker)
+            elif latest != trip and (latest.get('reason_code') != 'runtime_change'
                 or latest.get('evidence', {}).get('error_code') != 'live_worker_container_identity_mismatch'):
                 raise RuntimeContractError('postprocess_recovery_unresolved_breaker')
-            if any(item.get('observed_at', 0) > trip['observed_at']
+            if root_cause.get('incident_kind') != 'asr_cache_acceptance_unproven' and any(item.get('observed_at', 0) > trip['observed_at']
                    and item.get('reason_code') != 'runtime_change' for item in breaker.get('reasons', [])):
                 raise RuntimeContractError('postprocess_recovery_unresolved_breaker')
         gate = gate_by_id(connection, request['old_gate_id'])

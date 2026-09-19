@@ -7,6 +7,7 @@ import math
 from pathlib import Path
 import re
 import shutil
+import sqlite3
 import threading
 import time
 from typing import Any, Mapping
@@ -213,6 +214,16 @@ def admit_new_job(config: Any, *, logger: Any | None = None) -> bool:
             connection.close()
         publish_pending_summaries(config)
     except Exception as exc:  # noqa: BLE001 - reload-safe reason contract.
+        # Busy/locked is a bounded admission refusal, not proof of damaged
+        # observation state. The scheduler retries; the queue and latch stay put.
+        # Extended SQLite result codes share the primary low byte.
+        if isinstance(exc, sqlite3.OperationalError) and (
+            (getattr(exc, "sqlite_errorcode", 0) & 0xFF)
+            in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+        ):
+            if logger is not None:
+                logger.warning("M2 admission deferred: observation_database_busy; no claim made")
+            return False
         reason_code = str(getattr(exc, "reason_code", "") or "")
         if not reason_code:
             if logger is not None:

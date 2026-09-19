@@ -1,5 +1,18 @@
 # M2 Circuit Breaker Test Results
 
+## 2026-09-19 — admission recurrence candidate validation
+
+Server isolated old-image reproduction: 3 expected failures (ASS restore without
+acceptance, SRT missing diagnostic, SQLite BUSY globally latched). Candidate6/6 PASS.
+Relevant observation/strict/reconciliation/queue206 PASS; cached-ASR20 PASS;
+safe-deploy10 PASS; WebUI scheduler5/frontend PASS. Candidate actual-container
+restart: safe review terminal -> new claim -> SUBTITLE_DETECTION, persisted checkpoint
+and source hashes unchanged. Settled mixed PASS/review cohort remains frozen and
+continues admission; corrupt DB still trips; unproven source/evidence still rejected.
+Full logs: /logs/m2-admission-20260919/. Actual deployed-image verification, fresh
+breaker attestation and Production terminal-to-next-claim proof are pending.
+
+
 ## 2026-09-13 03:46 UTC — owned-publication completion identity repair
 
 Actual deployed Worker33b709584bd6ba463cc2d809242bd284f0b6d483: 191 targeted

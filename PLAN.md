@@ -1,5 +1,18 @@
 # Incremental Delivery Plan
 
+## Active bounded correction — recurring admission loss (2026-09-19)
+
+Do not treat Sep13 first-claim recovery as sustained recovery. Actual unchanged
+Worker33b7095 stopped at 2026-09-13T14:02:37.856888Z: legacy AI ASS restored a
+Japanese SRT without accepted ASR diagnostics, later rejected as incorrect_completion.
+Subsequent SQLite BUSY and provider evidence expiry are separately retained.
+Fix only pre-publication cache refusal, transient admission handling, exact existing
+controlled-recovery proof and original reason/time display. No M3, Gate replacement
+for queries, QC relaxation, full-media audit, old backup deletion or extra cleanup.
+Candidate related tests and isolated container restart pass; deployment and real
+terminal-to-next-claim evidence remain pending. Logs: /logs/m2-admission-20260919/.
+
+
 ## Completed bounded task — unblock genuinely idle Production claims
 
 Sep13 incident: live scheduler, 6,711 due non-held queued jobs, zero running;
