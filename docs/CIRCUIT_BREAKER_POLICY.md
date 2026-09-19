@@ -1,5 +1,20 @@
 # M2 Circuit Breaker Policy
 
+## 2026-09-20 exact source-transcript evidence bridge
+
+The newly reproduced incorrect_completion incident was not the old malformed-SRT
+incident. A validated non-Japanese source transcript was omitted by the JA-only
+strict verifier. Runtime now follows only the already validated ledger-bound
+manifest transcript, retaining canonical path/identity/hash, accepted diagnostics,
+hold checks and full hallucination scan. QC and ASR repair budgets are unchanged.
+Existing controlled reconciliation accepts the narrow
+`m2-source-transcript-evidence-regression-v1` proof for this exact immutable
+result/claim/cohort; later safety faults still refuse even after a deployment trip.
+The original incident stays preserved/held, not relabelled success. It does not
+authorize periodic latch clearing or generic system-exception suppression.
+Temporary-container cleanup warnings are separate operational evidence, not a
+Production breaker incident; no service/volume/backup cleanup is permitted.
+
 2026-09-19 exact SRT incident application is now closed: durable safe quality review
 at15:16:40.872559Z is followed by distinct automatic claim15:22:54.899471Z,
 real Stage/heartbeat/checkpoint and final ARMED preservation proof. This closes

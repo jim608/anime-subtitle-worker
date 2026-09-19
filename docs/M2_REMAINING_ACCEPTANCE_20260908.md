@@ -1,5 +1,18 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-20 — current full-flow reliability Goal remains incomplete
+
+The later source-transcript strict-evidence incident supersedes the narrow
+Sep19 recovery closeout below. Worker2a44df9 is safely deployed; new-incident
+controlled recovery returned ARMED. All103 prior holds plus the exact incident
+hold and all51 prior backups plus the new backup remain (104 /52).
+New fixed Gate233351 starts2026-09-19T23:33:51.350781Z; old Gate evidence retained.
+One real safe review -> automatic next source-ASR claim is proven, not24h acceptance.
+See `docs/RELIABILITY_ACCEPTANCE_20260920.md` for actual-image425/fresh7 tests,
+real restart/cleanup proof,5 actual obsolete-container removals, immutable evidence,
+and outstanding fixed20/multiple-continuation/2-new-output/24-hour requirements.
+Do not redeploy or recreate a Gate for these document-only updates. No M3.
+
 ## 2026-09-19 15:28 UTC — exact incident recovery acceptance completed
 
 No further code change or deployment. Actual Worker remains

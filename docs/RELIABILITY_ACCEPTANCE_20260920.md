@@ -56,9 +56,9 @@ Existing `verify_m1_docker_restart.py` now uses durable bind evidence, labels,
 owner flock, non-force finalization and bounded next-entry cleanup; pending
 restart/active leases are retained. Existing provider restart script has labels,
 full evidence/traps and bounded orphan handling. Deployment helper one-shots
-remain --rm and now carry the same label vocabulary. Lifecycle regression is
-still in progress; its first failure was a test-driver checkpoint inspection
-through `docker exec` after fixture exit, fixed to read its persisted bind file.
+remain --rm and now carry the same label vocabulary. Lifecycle regression passed;
+its first failure was a test-driver checkpoint inspection through `docker exec`
+after fixture exit, fixed to read its persisted bind file. The failed attempt remains.
 Do not replay timestamped historical launch scripts; they are immutable evidence,
 not supported ongoing verification entrypoints.
 
@@ -94,23 +94,106 @@ checks, and rejects another trip or old SRT incident proof. No latch/state delet
 | WebUI waiting reason | Shows generic admission guard in scheduler | Expose authoritative underlying reason/time/recovery condition only |
 | Temporary Docker lifecycle | Discovery requires labels/mounts/run evidence, not names alone | Export evidence, exact non-force removal, repair existing launch/teardown paths |
 
+## Deployed repair and controlled recovery
+
+Safe deployment `20260919T232213Z-2029080` exited0. Actual Worker
+`2a44df9cdc064fca62ad43aaa43d3714e955698f`, image
+`sha256:18ce80362fd1d0f863c915574a927106a2a09f27bd791aec7b1787f1d62e10bb`;
+WebUI attested repository version `69f2352d0d5d371ca58eaf5a4c62d97f79529e69`.
+WebUI application source/image are unchanged (`sha256:63e035bc7d0cac764247a7eb83c7197597a026088e53f335c42e3848fdd46e5b`);
+only its host deployment script gained temporary-container labels. No UI redesign.
+
+Actual deployed-image425 tests PASS in `actual-image-tests-with-host-adapter.log`.
+The first actual-image attempt had6 missing host-adapter failures (Dockerfile
+does not package the host Bash adapter). That failed log is retained; binding the
+exact existing script read-only fixed the test environment, with no redeployment.
+`actual-image-restart.log` and `actual-image-cycle/restart-fyu_uoqu/state/result.json`
+prove an actual container restart, checkpoint restore, idempotency, source
+preservation, safe review and next claim; fixture evidence exported and container
+removed. The preserved Production incident replay is read-only, not new delivery.
+Fresh actual-image breaker tests7/7 PASS, result
+`/logs/m2-guardrail-fi-20260919T233343189438Z-eee531ad/result.json`.
+The handoff's mixed stdout/stderr JSON parse failure was preserved and resumed
+from immutable completed evidence; no test/Production output was relabelled.
+
+Reconciliation `m2-recon-source-transcript-20260920` retains103 original holds,
+adds the exact incident hold (104 total), retains6717 queued identities eligible
+for existing source/resource checks and7374 other-state identities without budget
+or lease reset. No additional unexplained Queue identity differences arose.
+Historical preservation remains UNPROVEN. Recovery
+`m2breakerrec_6529bdd51eb9438c86a2dde4aa1c00c3` changed TRIPPED -> ARMED,
+released only its own reconciliation hold at2026-09-19T23:33:52.718677Z.
+Original51 backups plus new backup remain:52. Old Gate150907 evidence is preserved,
+invalidated only for this result-affecting runtime change; no results transferred.
+
+New fixed cohort: `m2-gate-20260919T233351350781Z-92c0c3ec48`, baseline
+`m2-guardrail-v1:13f2f82c52ffb23aa46c4bb2`, start
+`2026-09-19T23:33:51.350781Z`. Initial0/20. The unchanged observer enrolls only
+the first20 eligible current-baseline jobs; failures stay in the cohort. Historical
+recovery/pre-gate attempts remain separate; no backfill or easy-success sampling.
+
+First actual autonomous continuation, UTC2026-09-19:
+`m2ai_f0d5d61c690f654a08b0` safely review_required23:34:56.106080;
+`m2ai_99a4c7f0c7371ecb7248` automatically claimed23:35:45.610042,
+preflight23:35:48.663958, source_transcription(language=zh)23:36:12.338649
+with matching heartbeat. No manual retry between them. Evidence
+`observation-check-1789861016258700893.json`; this is one continuation, not24h proof.
+
+Final cleanup discovery `container-inventory-1789860912375627369.json`:0 related
+stopped containers. Two Production services plus the labelled running inventory
+helper were retained; the helper itself uses --rm. Confirmed old leftovers5,
+archived5, actually removed5, unconfirmed stopped retained0. No volumes, images
+or backups removed. `container-removal.log` compares170 volumes and protected
+services before/after; backup count subsequently increased solely by safe deploy.
+
+## Existing autonomous observation, not a new framework
+
+Worker's existing M2 observer and immutable SQLite gate/result/stage journals
+remain enabled and produce the one-time fixed-cohort terminal report. Existing
+UNRAID cron refreshes provider evidence twice per scheduled minute, independent
+of Codex. Installed script SHA
+`3a6c1808bb12f80e53948b3aaadc1badcfc58080b62f18b0f0d55e15f8fb35c1`;
+`installed-observer-cron.log` records the existing persistent entry. Current
+provider observation VERIFIED with fresh checked_at1789860989.280377.
+The one-shot `observe_existing_evidence.py` only reads indexed existing events
+and writes closeout evidence; it is not a new observer, Queue, timer or admission path.
+
+Minimum observation end: **2026-09-20T23:33:51.350781Z** (Sep21 07:33:51 Taipei).
+Do not finish at that time automatically: also require all fixed20 results,
+multiple terminal/next-claim cycles, at least2 truly new valid formal TC deliveries,
+and no unresolved safety incident. Query existing durable evidence on continuation,
+not complete Queue/media scans. Publication journals must prove a newly created
+TC destination, matching manifest/strict result and source checksum; existing
+output revalidation/replacement and multiple language artifacts do not inflate counts.
+The prior download/extract351-cue single formal TC delivery is reusable evidence
+because those runtime modules are unchanged, but contributes0 to this new-output count.
+
+Two bounded review-boundary checks were preserved in `review-boundary.json`:
+the first post-recovery review has no acceptable subtitle (hard QC failed) and
+only English audio evidence, so automatic JA ASR is not justified. The older
+transient_timeout review retains4 attempts against configured maximum3; it is
+budget exhaustion, not a newly discovered unbounded-retry/classification defect.
+Do not reset either budget or loosen source/QC checks to increase success counts.
+
 ## Persistent acceptance requirements
 
-- [ ] Shared root repairs reproduced and tested on UNRAID isolation, tested SHA recorded.
-- [ ] Relevant integration tests include success/review/fallback/SQLite contention,
+- [x] Shared root repairs reproduced and tested on UNRAID isolation, tested SHA recorded.
+- [x] Relevant integration tests include success/review/fallback/SQLite contention,
       untrusted cache refusal, publication/replay, Gate settle/expiry/refresh/restart,
       real safety events still blocking.
-- [ ] Safe deployment, attestation and new-incident controlled recovery; no blind rearm.
+- [x] Safe deployment, attestation and new-incident controlled recovery; no blind rearm.
 - [ ] At least24 hours of existing server observation on a fixed20 eligible cohort,
       all results retained and no backfill, adequate-resource admission bounded.
 - [ ] Multiple real terminal->next-claim cycles and at least2 newly verified formal subtitles.
 - [ ] Download/extract and AI publication evidence individually attributable,
       unaffected old evidence reused but not recounted as new.
 - [ ] No false completion, source damage, duplicate publish or unbounded retry.
-- [ ] All isolation/UNPROVEN/backups preserved; no unsupported continuity claim.
+- [x] All isolation/UNPROVEN/backups preserved; no unsupported continuity claim.
 - [x] Confirmed obsolete temporary containers actually removed only after archival.
 - [x] Success/failure/timeout/cancel/restart/orphan-next-entry cleanup verified;
       services, live tests, volumes, artifacts and backups unaffected.
 
-Observation not started on a repaired baseline yet. Status INVESTIGATING, not
-WAITING_FOR_EVIDENCE until safe repaired runtime and autonomous collection exist.
+Status **WAITING_FOR_EVIDENCE** on the repaired baseline. Full Goal and M2
+Production acceptance remain incomplete. No M3. Recovery/ARMED and one real
+continuation are not sustained acceptance; do not declare the24-hour or output
+requirements satisfied before their durable evidence exists.

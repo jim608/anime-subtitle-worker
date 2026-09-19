@@ -9,7 +9,13 @@ Work checklist: docs/RELIABILITY_ACCEPTANCE_20260920.md. Includes exact temporar
 container archival/cleanup and existing launcher lifecycle fixes, not a new framework.
 Require relevant server-isolated regression, safe deployed repair,24-hour autonomous
 observation, fixed20 complete results, multiple continuations and2 new strict outputs.
-No Goal complete from ARMED/queued/tests/one heartbeat. Current INVESTIGATING.
+No Goal complete from ARMED/queued/tests/one heartbeat. Current WAITING_FOR_EVIDENCE.
+Worker2a44df9 deployed; exact source-transcript incident controlled recovery ARMED.
+Fixed Gate233351 starts2026-09-19T23:33:51.350781Z; earliest24h endSep20 same UTC.
+One real safe-review -> next automatic ASR claim verified, not sustained acceptance.
+104 holds/UNPROVEN and52 backups retained;5 proven old temp containers archived
+and removed non-force, final related stopped0. Full evidence and pending delivery
+requirements remain in docs/RELIABILITY_ACCEPTANCE_20260920.md. No new Goal/M3.
 
 ## Exact SRT incident recovery complete — 2026-09-19 15:28 UTC
 

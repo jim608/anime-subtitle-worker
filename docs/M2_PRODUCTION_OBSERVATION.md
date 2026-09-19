@@ -1,5 +1,22 @@
 # M2 Production Observation
 
+## 2026-09-20 — source-transcript repair deployed; WAITING_FOR_EVIDENCE
+
+Worker2a44df9cdc064fca62ad43aaa43d3714e955698f / WebUI host-script commit
+69f2352d0d5d371ca58eaf5a4c62d97f79529e69 attested. Exact new-incident recovery
+m2breakerrec_6529bdd51eb9438c86a2dde4aa1c00c3 returned ARMED; no blind latch clear.
+New frozen Gate `m2-gate-20260919T233351350781Z-92c0c3ec48`, baseline
+`m2-guardrail-v1:13f2f82c52ffb23aa46c4bb2`, starts2026-09-19T23:33:51.350781Z.
+Only first20 eligible current-baseline jobs enroll; historical/pre-gate attempts
+remain supplemental. Initial0/20, no backfill or transferred old results.
+One real safe review23:34:56.106080Z -> distinct automatic claim23:35:45.610042Z
+-> actual source_transcription23:36:12.338649Z proved. This is not sustained PASS.
+Existing server observer/immutable journals and installed provider cron continue
+without Codex. Earliest24h end2026-09-20T23:33:51.350781Z, subject also to all20
+results, multiple continuations and2 new verified formal subtitles.104 holds and
+52 backups retained. Full record: `docs/RELIABILITY_ACCEPTANCE_20260920.md` and
+`/logs/reliability-20260920/`. M2 Production Accepted: NO; no M3.
+
 ## 2026-09-19 15:28 UTC — real terminal-to-next-claim verified
 
 Exact SRT incident recovery is complete; M2 Production Accepted remains NO.

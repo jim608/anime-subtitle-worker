@@ -1,5 +1,25 @@
 # M2 Circuit Breaker Test Results
 
+## 2026-09-20 actual source-transcript repair image
+
+Worker2a44df9cdc064fca62ad43aaa43d3714e955698f actual image18ce8036:
+425 related tests PASS, including strict manifest/transcript, unaccepted cache and
+full hallucination rejection, exact incident recovery/later-fault refusal, SQLite
+BUSY vs real DB failure, publication/review/next claim, frozen Gate settlement and
+restart, provider expiry/refresh/timeout. Existing host observer adapter mounted
+read-only for its tests; earlier6 missing-adapter failures remain in a distinct log.
+Real Docker restart/checkpoint/idempotency/source safety/next claim PASS; real
+preserved incident replay manifest valid, old hallucination predicate false,
+new predicate true (not a new Production delivery). Fresh breakers7/7 PASS:
+`/logs/m2-guardrail-fi-20260919T233343189438Z-eee531ad/result.json`.
+Real temporary lifecycle7 PASS covers success/failure/timeout/cancel/restart,
+active-owner retention, bounded orphan cleanup and idempotent repeat. Host deploy
+script10 PASS. Actual5 obsolete fixtures removed only after evidence archival;
+170 volumes/51 old backups unchanged, safe deployment adds backup52.
+Logs: `/logs/reliability-20260920/`; accepted-image proof `actual-image-proof.json`.
+One live review -> next source-ASR claim is proven;24h/new-output requirements
+remain incomplete. Do not turn isolated tests or this recovery into M2 acceptance.
+
 ## 2026-09-19 15:28 UTC — real Production continuation PASS
 
 No changed runtime or rerun suites. Prior154 source-parse, actual-image73 recovery,
