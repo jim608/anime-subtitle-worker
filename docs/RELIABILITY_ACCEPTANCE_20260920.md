@@ -5,6 +5,50 @@ No M3, full-library rescan, broad Queue retry, QC relaxation, source/valid-outpu
 overwrite, backup deletion, or ASR-budget reset. Server must own the eventual
 24-hour observation using existing observer/ledger; not a second framework.
 
+## First current-baseline formal publication verified (03:36 UTC)
+
+No code, configuration, container or Gate change. Worker remains
+`f52118c564e9aebca89d52b336e2156d2ba095cd`. Read-only snapshot03:30:15.878Z:
+ARMED/runtime_baseline_match, provider VERIFIED,105 holds; same014830 Gate has
+9 enrolled/9 settled:1 strict COMPLETED and8 NEEDS_REVIEW, still ACTIVE. All13
+attempts fit the bounded32-attempt sample:8 distinct terminal-to-next-claim/Stage
+sequences and4 separately counted same-obligation repairs. These are not24-hour totals.
+
+Actual task `m2ai_4fea57818662cbb6a3a8`, frozen ordinal8, claimed02:58:08.829388Z
+and succeeded03:09:06.792990Z via trusted-JA ASR. Its completed atomic publication
+transaction03:08:31.359489Z..03:08:32.638294Z has no prior destination backups;
+all3 published destinations were new. Count **one new formal TC target,402 cues**,
+not three deliveries for the JA/CN/TC companion files. Final-location re-read and
+current runtime verification passed parse, hard QC, hallucination and original
+source-checksum comparison. All11 strict evidence fields are true; no duplicate
+job/publish or unresolved retry/quarantine/fallback. The read-only verifier neither
+reran the task nor enrolled/replaced any member or rewrote existing outputs.
+
+- TC SHA256 `538f3d0e2400d39c958726db191eadbb8bdded1152750a6777318cad5f49e4b2`.
+- Formal manifest `/work/ai_output_manifests/4f/4fea57818662cbb6a3a821c057c078b94c5426e650d712e7ec6a519e819a2f72.json`,
+  SHA256 `a8c1358994c3f04315f5ac083d60b0724b72562213b0c8035eebcdfca29f87ae`.
+- Publication journal `/work/ai_output_versions/447bb1c64eaf8960/1789873711352528096/manifest.json`,
+  SHA256 `074367c1619e1f031ccd2d00a695b84fc2dabcfb2805ee04c79ae933dad07157`.
+
+After success, different task `m2ai_47d31a663b7639ec61f8` automatically claimed
+03:10:05.682414Z, entered preflight03:10:10.488388Z, saved verified subtitle-detection
+checkpoint/heartbeat03:10:11.558768Z, then actual JA ASR03:10:29.726655Z. Checkpoint
+`7b1f77a7a91dd890dcb2c893eb05801e435b3ec34ea1a54ade4f59c65651dcd6` is verified.
+Its durable ASR stage heartbeat03:17:17.994753Z precedes safe quality review
+03:17:21.794628Z. The mutable job heartbeat was later updated by bounded repair;
+this proof uses the timestamped stage-attempt row, not a later attempt's heartbeat.
+No manual retry, new pause, breaker recovery or scheduling override was used.
+
+Evidence under `/logs/reliability-20260920/report-export-handoff-20260920/`:
+`observation-check-1789875016203506347.json`,
+`final-publication-1789875385068802312.json`, `final-publication-4fea-verification.log`.
+Current-baseline new formal TC targets:1. Goal-to-date:3, of which2 belong to the
+separate6f400b4 baseline and are not transferred into this Gate. Sep12 download/
+extraction evidence remains historical/reused, not a new delivery. Remaining:
+second new output on this baseline, all fixed20 results, and continuous24-hour
+safety/admission evidence (earliest2026-09-21T01:48:30.021232Z). Server observation
+continues autonomously. WAITING_FOR_EVIDENCE; Goal and M2 are not complete.
+
 ## Current baselinef52118c — deployed; WAITING_FOR_EVIDENCE
 
 Actual Worker `f52118c564e9aebca89d52b336e2156d2ba095cd`, image

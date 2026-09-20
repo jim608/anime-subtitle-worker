@@ -2,6 +2,16 @@
 
 ## Active full-flow reliability Goal — 2026-09-20
 
+Latest meaningful evidence03:36UTC: unchangedf52118c has its first genuinely new
+formal TC target (402 cues), final-location strict verification PASS. Exact completed
+publication journal proves no existing destination overwrite. Completion03:09:06Z
+-> distinct automatic claim03:10:05Z/checkpoint+heartbeat03:10:11Z/JA ASR03:10:29Z.
+Snapshot03:30 Gate9 settled of20:1 strict/8 review, ACTIVE/ARMED;8 distinct automatic
+continuations,4 same-task repairs separate. No runtime deployment/Gate change.
+Current-baseline new formal targets1 (earlier2 belong to6f400b4; not mixed into Gate).
+Remaining second same-baseline new target, all20 and >=24h continuous observation.
+See current reliability proof; WAITING_FOR_EVIDENCE, not Goal complete.
+
 The new Goal supersedes the previous bounded recovery completion conditions.
 Current recurrence incorrect_completion atSep20 01:29:10 Taipei is a NEW incident;
 preserve its evidence and old Gate/receipts, do not reuse the old SRT recovery.

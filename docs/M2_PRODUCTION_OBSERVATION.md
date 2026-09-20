@@ -1,5 +1,24 @@
 # M2 Production Observation
 
+## 2026-09-20 03:36 UTC — first f521 formal TC publication verified
+
+Same Workerf52118c/Gate014830, no deployment or Gate mutation. Snapshot03:30:15Z:
+ARMED, provider VERIFIED,105 holds, Gate9 enrolled/9 settled/1 strict COMPLETED/
+8 NEEDS_REVIEW; ACTIVE. Existing observer continues, no backfill or manual retry.
+Taskm2ai_4fea57818662cbb6a3a8, ordinal8, succeeded03:09:06.792990Z. Final-location
+manifest/QC/parse/hallucination/source-checksum and completed publication journal
+confirm **1 genuinely new TC target,402 cues**, not3 companion-file deliveries.
+Next different47d31a663b7639ec61f8 auto-claimed03:10:05.682414Z -> preflight
+03:10:10.488388Z -> verified checkpoint/heartbeat03:10:11.558768Z -> JA ASR
+03:10:29.726655Z. Its later safe review did not prevent bounded recovery.
+All13 attempts are within the current bounded sample:8 distinct continuations,
+4 same-task repairs separately. New-baseline formal targets1; earlier6f400b4's2
+remain separate historical evidence, not Gate credit. Full proof and hashes:
+docs/RELIABILITY_ACCEPTANCE_20260920.md and current evidence root's
+final-publication-1789875385068802312.json / observation-check-1789875016203506347.json.
+WAITING_FOR_EVIDENCE:24h/all20/second same-baseline new output remain required;
+earliest24h endSep21 01:48:30.021232Z. M2 NOT ACCEPTED. Documents do not deploy.
+
 ## 2026-09-20 02:25 UTC — actualf52118c, WAITING_FOR_EVIDENCE
 
 Workerf52118c564e9aebca89d52b336e2156d2ba095cd/imagee624e0e8 deployed safely;

@@ -1,5 +1,21 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-20 03:36 UTC — actual new publication, sustained window pending
+
+Unchangedf52118c runtime and014830 Gate:03:30 snapshot ARMED,9 enrolled/9 settled,
+1 strict COMPLETED/8 review. Read-only final-location verification confirms one
+new TC402-cue formal output for m2ai_4fea57818662cbb6a3a8; parse/QC/hallucination/
+source checksum/manifest PASS, prior destinations absent, no duplicate publication.
+Success03:09:06.792990Z -> different47d31a663b7639ec61f8 automaticclaim03:10:05.682414Z
+-> verified checkpoint/heartbeat03:10:11.558768Z -> JA ASR03:10:29.726655Z.
+Bounded sample contains8 distinct continuation sequences and4 separate same-job repairs.
+No runtime change, deployment, Gate reset, task replay, source write or hold release.
+Current-baseline new targets1; historical6f400b4 targets2 remain separate (Goal total3).
+Still required: second current-baseline new target, all frozen20 outcomes and24h
+continuous safety/admission proof, earliestSep21 01:48:30.021232Z. No M2 acceptance.
+Proof: current evidence root final-publication-1789875385068802312.json and
+observation-check-1789875016203506347.json; see reliability document for full hashes.
+
 ## 2026-09-20 02:25 UTC — report/admission boundary deployed; sustained evidence pending
 
 Actual Workerf52118c564e9aebca89d52b336e2156d2ba095cd, WebUI69f2352 unchanged.
