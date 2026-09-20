@@ -37,6 +37,15 @@ outcomes and sustained safety/admission/delivery evidence. M2 NOT COMPLETE/ACCEP
 See docs/RELIABILITY_ACCEPTANCE_20260920.md and /logs/reliability-20260920/report-export-handoff-20260920/.
 Do not redeploy or recreate Gate merely to synchronize these documents.
 
+Sep20 scoped reuse audit: the prior351-cue TC/SC formal publication remains88598848
+historical evidence, not f521 output or new Gate credit. Mikan/publish/QC/projection
+paths are identical; the extractor's later JA-dominant-kana branch cannot select
+the recorded zh-tw/zh-cn cases (449 kana-score vs3491/3486 CJK). Shared inventory
+identity changes were reviewed separately; old decisions/checkpoints are not reused.
+Related6069 tests and f521's own386-test evidence remain version-separated.
+Full branch/diff applicability is recorded in docs/RELIABILITY_ACCEPTANCE_20260920.md.
+No formal job replay, runtime modification or deployment was needed for this audit.
+
 ## 2026-09-20 01:08 UTC — latest deployment completed, sustained acceptance pending
 
 Worker6069fcb3729c12e64a7d892903f62cf391fb5563 safely deployed; WebUI69f2352 unchanged.

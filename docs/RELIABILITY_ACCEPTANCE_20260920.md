@@ -155,6 +155,46 @@ The last terminal is only150 seconds before this snapshot, inside the existing
 The server's24-hour/fixed20 observation remains WAITING_FOR_EVIDENCE. No deployment,
 baseline/Gate change or Production repair was justified by this bounded review check.
 
+## Scope of reused Sep12 download/extraction evidence (no replay or new delivery)
+
+The351-cue TC/SC publication remains a historical88598848 result, not an f521 test
+or a current-Gate member. A targeted comparison from full SHA
+88598848ebf2efaf945a9128c320ba188074f3b6 to f52118c564e9aebca89d52b336e2156d2ba095cd
+corrects the earlier blanket statement that every related runtime module is unchanged:
+
+- Mikan worker/matcher/source/cache/fallback/reviewed-repair, qB client, config,
+  subtitle quality, ASS/SRT helpers, language projection, subtitle paths, safe files,
+  resource scheduler, lock, control state, pipeline state and remediation are identical.
+- `subtitle_extract.py` has one21-line change from70853f3: a JA-metadata/dominant-kana
+  classification branch. The original durable extraction diagnostics have TC metadata
+  zh-tw, Japanese score449/CJK3491 and SC metadatazh-cn,449/CJK3486. Neither satisfies
+  the new branch. The import-validation, parallel-Chinese projection and publication
+  implementation are unchanged. Original failed722-event candidates remain failed;
+  the normalized351-cue outputs and their original parse/QC/checksum/replay evidence
+  remain the only accepted artifacts from that case.
+- Shared source inventory/analyzer are not byte-identical to88598848: versioned
+  identity/digest ordering and per-candidate hard-QC evidence were added. The import
+  path calls `_probe_media`/`_subtitle_metrics` and `analyze_subtitle_candidate`, not
+  AI inventory selection/adapter fallback. The metrics change canonical digest order,
+  not cue text/timings/count; the new optional hard-QC field defaults toNone for this
+  import input and its unchanged independent hard-QC check still gates acceptance.
+  Do not reuse old decision/checkpoint identities under the new inventory version.
+- Source classifier/inventory/analyzer/adapter and relevant regression files are
+  byte-identical between6069fcb andf521. The6069 actual-image748-test evidence includes
+  `test_m2_review_source_regressions`, including Chinese/unknown/bilingual rejection
+  of a misleading JA hint. This is explicitly6069 evidence, not a claim that f521 ran
+  748 tests; f521's own actual-image386-test admission/report evidence stays separate.
+
+Server evidence `/logs/reliability-20260920/download-evidence-reuse-diff.log`,
+`download-evidence-reuse-shared-source.diff`, `download-evidence-reuse-tested-boundary.log`;
+original diagnostics are in the Sep12 `formal-canary/verify-1789246297869603050.json`,
+job.result_json.entry_results[3583:2].subtitle_diagnostics. Subtitle-extract Git blob
+db8b5a5bf0157a12b4f0970ea1b83ac133a4f677 (885) differs from
+44a01a87633f3fa3e426c5d7ed860a335b0db43f (both6069 andf521).
+This scoped applicability audit does not re-download/re-extract/re-publish, reread
+the entire media library, mutate a receipt, assert fresh source continuity, or add
+to new-output/Gate counts. No new runtime defect or deployment was justified.
+
 ## Previous baseline6069fcb — preserved deployment and counterexample evidence
 
 Follow-up admission audit reproduced a separate report-only defect in isolation:
@@ -520,7 +560,7 @@ checks, and rejects another trip or old SRT incident proof. No latch/state delet
 | Path | Existing evidence / current gap | Required action |
 | --- | --- | --- |
 | Watch/stabilize/deduplicate/claim | Relevant isolated regression PASS; latest real automatic claim/checkpoint | Sustained admission bound remains under24-hour observation |
-| Search/match/download/extract/import | PASS reused unchanged Sep12 formal351-cue target, replay queued0 | No new delivery counted; unavailable external sources remain individually blocked |
+| Search/match/download/extract/import | PASS reused Sep12 formal351-cue target, replay queued0; TC/SC branch applicability checked above | No new delivery counted; unavailable external sources remain individually blocked |
 | TC/CN/JA subtitle and trusted-JA ASR | Related routing/QC/cache regressions PASS; latest real trusted-JA ASR active | Do not turn a running Stage into publication PASS |
 | Existing non-JA ASR translation | PASS: accepted diagnostic continuity fixed,2 real335/318-cue strict deliveries on6f400b4 | Retain version attribution; do not transfer into latest Gate |
 | Transient failures vs review | PASS relevant tests; exact exhausted readability repair produced real review/next claim on6069fcb; report access failure now isolated onf52118c | Unknown faults/disk/DB/journal/collision still block; no budget resets |
@@ -603,7 +643,8 @@ not complete Queue/media scans. Publication journals must prove a newly created
 TC destination, matching manifest/strict result and source checksum; existing
 output revalidation/replacement and multiple language artifacts do not inflate counts.
 The prior download/extract351-cue single formal TC delivery is reusable evidence
-because those runtime modules are unchanged, but contributes0 to this new-output count.
+for the scoped TC/SC path as checked above, not a blanket assertion that all modules
+are unchanged. It contributes0 to this new-output count.
 
 Two bounded review-boundary checks were preserved in `review-boundary.json`:
 the first post-recovery review has no acceptable subtitle (hard QC failed) and
