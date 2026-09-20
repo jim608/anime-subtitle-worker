@@ -1,5 +1,27 @@
 # M2 Production Observation
 
+## 2026-09-20 01:51 UTC — actualf52118c, WAITING_FOR_EVIDENCE
+
+Workerf52118c564e9aebca89d52b336e2156d2ba095cd/imagee624e0e8 deployed safely;
+WebUI69f2352 unchanged. Actual-image386/non-root report-access failure and real
+Docker restart/retry-budget/report-once/next-Stage PASS; fresh7/7 breakers PASS.
+Report-only permission failure is no longer a global incident; disk/DB/collision/
+journal/unknown-fault guards remain. No report fault injected into Production.
+Recovery9146d3b1d14f460280dc0b52312b0f2e ARMED,105 holds/56 backups retained.
+New Gate `m2-gate-20260920T014830021232Z-8147e39531`, baseline
+`m2-guardrail-v1:c83fd65db8ed1c8307468303`, start2026-09-20T01:48:30.021232Z.
+At01:51Z enrolled1/20, settled0, strict0. Real7a642... auto-claim01:49:22Z -> JA ASR
+and heartbeat01:49:48Z, valid checkpoint. Correct ASR quality review01:56:24Z;
+at01:58Z1 enrolled/1 settled/0 strict, ARMED. Existing bounded remediation queued;
+latest distinct full terminal/next-claim pending, no forced scheduling.
+Old005942 Gate2 review members preserved/INVALIDATED_BY_RUNTIME_CHANGE, no backfill.
+6069fcb separately proves2 distinct continuations plus1 bounded same-task repair;
+6f400b4's5 distinct continuations/2 new335/318-cue targets remain versioned evidence.
+Existing observer/provider cron continue; earliest24h endSep21 01:48:30.021232Z,
+also requiring all fixed20 outcomes/sustained safety/delivery. M2 NOT ACCEPTED.
+Evidence `/logs/reliability-20260920/report-export-handoff-20260920/`;
+full checklist `docs/RELIABILITY_ACCEPTANCE_20260920.md`. Docs-only sync must not deploy.
+
 ## 2026-09-20 01:08 UTC — current6069fcb baseline, WAITING_FOR_EVIDENCE
 
 Actual Worker `6069fcb3729c12e64a7d892903f62cf391fb5563`, WebUI

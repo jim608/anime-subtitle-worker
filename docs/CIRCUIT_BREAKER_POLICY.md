@@ -1,5 +1,23 @@
 # M2 Circuit Breaker Policy
 
+## 2026-09-20 derived report access failure is not a safety latch
+
+After verifying the immutable SQLite summary journal/hash, only the derived report
+export's EACCES/EPERM/EROFS may defer without blocking independent safe jobs or
+throwing out an already committed terminal result. Existing observation metadata
+holds original/last failure time, errno, attempts and recovery condition; public
+status exposes summary_export. Three attempts with60/120-second backoff, then
+WAITING_FOR_ACCESS_CHANGE. A real bounded filesystem access-fingerprint change
+allows another bounded attempt; restart/time alone does not reset the budget.
+Recovered output must equal the same journal and may emit once only.
+
+ENOSPC/EIO, database corruption, report collision, journal/retry-evidence corruption
+and unknown implementation faults still fail closed. No blanket OSError swallowing,
+new Queue, schema, report daemon, production permission change or safety-latch clearing.
+Actualf52118c386/non-root/restart/fresh7 PASS; controlled planned-runtime recovery
+9146d3b1... ARMED only after new attestation.105 holds/all56 backups retained.
+Old005942 Gate/results remain immutable; latest014830 Gate is not rebuilt for docs.
+
 ## 2026-09-20 precise candidate and exhausted-quality scope
 
 Only UnicodeDecodeError from source-candidate hard-QC reading is classified as

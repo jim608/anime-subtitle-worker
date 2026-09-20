@@ -1,5 +1,27 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-20 01:51 UTC — report/admission boundary deployed; sustained evidence pending
+
+Actual Workerf52118c564e9aebca89d52b336e2156d2ba095cd, WebUI69f2352 unchanged.
+Reproduced report-only EACCES terminal/admission coupling fixed without masking
+DB/disk/unknown faults or invalid journal/collision.386 actual-image tests, real
+non-root permission boundary, Docker restart/budget preservation/report-once/next
+Stage, and fresh7/7 breakers PASS. Recovery9146d3b1... ARMED,105 holds/56 backups kept.
+Current Gate014830021232Z-8147e39531 baselinec83fd65db8ed1c8307468303 starts
+2026-09-20T01:48:30.021232Z;1 enrolled/0 settled/0 strict at01:51Z. Real claim
+01:49:22Z -> JA ASR/heartbeat/checkpoint -> correct quality review01:56:24Z.
+At01:58Z Gate1 enrolled/1 settled/0 strict; ARMED, bounded remediation queued,
+not sustained completion or a new subtitle delivery.
+Old005942 Gate's2 review members preserved.6069fcb's exact exhausted-readability
+review -> next claim is now Production-proven,2 distinct cycles total; same-task
+ASR repair is separately counted with unchanged revision-bound max3 budget.
+Goal-to-date2 new335/318-cue strict outputs on6f400b4; no transfer into latest Gate.
+Latest related stopped containers0; initial5 removals and protected-resource proof kept.
+Remaining: latest-baseline terminal/next claim,24h from this start, fixed20/all
+outcomes and sustained safety/admission/delivery evidence. M2 NOT COMPLETE/ACCEPTED.
+See docs/RELIABILITY_ACCEPTANCE_20260920.md and /logs/reliability-20260920/report-export-handoff-20260920/.
+Do not redeploy or recreate Gate merely to synchronize these documents.
+
 ## 2026-09-20 01:08 UTC — latest deployment completed, sustained acceptance pending
 
 Worker6069fcb3729c12e64a7d892903f62cf391fb5563 safely deployed; WebUI69f2352 unchanged.

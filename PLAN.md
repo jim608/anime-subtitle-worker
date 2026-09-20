@@ -10,21 +10,22 @@ container archival/cleanup and existing launcher lifecycle fixes, not a new fram
 Require relevant server-isolated regression, safe deployed repair,24-hour autonomous
 observation, fixed20 complete results, multiple continuations and2 new strict outputs.
 No Goal complete from ARMED/queued/tests/one heartbeat. Current WAITING_FOR_EVIDENCE.
-Actual Worker6069fcb3729c12e64a7d892903f62cf391fb5563 includes the source-ASR
+Actual Workerf52118c564e9aebca89d52b336e2156d2ba095cd includes the source-ASR
 evidence continuity, precise corrupt-encoding candidate rejection and exact exhausted
 readability-repair classification fixes. No blanket exception catch/QC/budget change.
-Safe deployment20260920T005641Z-2895914 completed; actual-image748/restart/fresh7 PASS.
-Controlled recoverym2breakerrec_bfb2cfc287f94ca3a482e6e47bd1fa33 ARMED; owned hold
-released00:59:43Z.105 holds/UNPROVEN and all55 backups preserved.
-Current fixed Gate005942949442Z-ffe5ed7d42 starts2026-09-20T00:59:42.949442Z;
-baseline32850f5c3550d3b5fbfe78c6. Earliest24h endSep21 same UTC, plus all required
+Safe deployment20260920T014525Z-3338102 completed; actual-image386/restart/fresh7 PASS.
+Controlled recoverym2breakerrec_9146d3b1d14f460280dc0b52312b0f2e ARMED; owned hold
+released01:48:30Z.105 holds/UNPROVEN and all56 backups preserved.
+Current fixed Gate014830021232Z-8147e39531 starts2026-09-20T01:48:30.021232Z;
+baselinec83fd65db8ed1c8307468303. Earliest24h endSep21 same UTC, plus all required
 fixed20 results and sustained safety/delivery evidence. Old Gates/history retained.
-At01:08:57Z ACTIVE0/20; historical task84744809b306acf8b95c automatically claimed
-01:05:25Z -> trusted-JA ASR01:05:33Z -> heartbeat01:08:34Z. Latest terminal/next-claim
-subsequently proven: review01:12:40Z -> next fe725855a8d35dee61f8 claim01:13:34Z ->
-preflight01:13:36Z/heartbeat01:13:38Z, valid checkpoint; still ARMED. At01:14Z Gate
-enrolled1/20, settled0. Prior6f400b4 separately proves2 new335/318-cue strict TC outputs and
-5 continuations, not current cohort replacements or24-hour evidence.
+At01:51Z ARMED/ACTIVE1 enrolled,0 settled: real7a642b2574cf708e9e19 auto-claim
+01:49:22Z -> JA-ASR/heartbeat01:49:48Z, verified checkpoint -> quality review01:56:24Z.
+At01:58Z Gate1 enrolled/1 settled/0 strict; queued bounded ASR remediation,300s existing
+cycle. Latest distinct terminal/next-claim and24-hour proof pending. Prior6069fcb has2 distinct terminal-next claims plus1 bounded
+same-task repair (not3 distinct); old Gate2 review members preserved/invalidated only
+by actual runtime change.6f400b4 has2 new335/318-cue strict outputs and5 distinct
+continuations, not current cohort replacements or24-hour evidence.
 Five proven old temp fixtures archived and removed non-force; latest related stopped0.
 Existing entrypoints lifecycle7/deployment-script10 and latest real restart teardown PASS.
 Full evidence/current remaining requirements: docs/RELIABILITY_ACCEPTANCE_20260920.md.
@@ -34,11 +35,11 @@ Follow-up:6069fcb now proves exact exhausted-readability quality review01:23:07Z
 -> automatic next JA-ASR claim01:24:01Z/Stage01:24:28Z, still ARMED; Gate2 enrolled,
 1 settled/0 strict. A separate isolated report-permission regression found derived
 summary export EACCES falsely trips admission after durable Gate settlement.
-Minimal existing metadata/export boundary candidate defers only report-access errors,
+The deployed existing metadata/export boundary defers only report-access errors,
 three persisted/backed-off attempts then waits for actual access change; journal/disk/
-DB/collision/unknown-fault safeguards remain. Non-root filesystem and179 related tests,
-existing real Docker restart/next-stage proof pass; final regression/deploy pending.
-No Production incident invented and no existing Gate modified during this analysis.
+DB/collision/unknown-fault safeguards remain. Final candidate386 and actual-image386
+PASS asnonroot, existing actual Docker restart/next-stage proof PASS. No Production
+report permission fault injected; current safe deployment/attestation above completed.
 
 ## Exact SRT incident recovery complete — 2026-09-19 15:28 UTC
 

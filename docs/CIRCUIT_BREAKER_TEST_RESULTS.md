@@ -1,5 +1,27 @@
 # M2 Circuit Breaker Test Results
 
+## 2026-09-20 actualf52118c report-export/admission regression —386 and fresh7/7 PASS
+
+Workerf52118c564e9aebca89d52b336e2156d2ba095cd,
+imagee624e0e890a68025660fe320d1dd1b109450d179120d13f617ac13b15e139f65.
+Actual image386 PASS as non-root (5.328s): real chmod report-directory failure,
+terminal journal -> safe next admission, bounded retries, restart persistence,
+access-change recovery, exact report-once publication and safety faults still blocking.
+Actual Docker restart also preserves the same20-member journal and max3 budget,
+then claims/starts the next isolated job; evidence exported and fixture removed.
+Fresh7/7 breakers PASS;105 holds/56 backups retained. All tests isolated, no
+Production report permissions altered. Previous ASR/source/QC fixes remain intact.
+
+Before proof: report EACCES escaped terminal callback and next admission tripped.
+An initial corruption fixture was stopped by the immutable-journal trigger, then
+corrected only in the temporary test. First wide386 run exposed a pre-existing
+readability-test process-local latch leak; fixture setup/cleanup corrected, no runtime
+latch semantics changed. Failed logs retained; final candidate386 and actual386 PASS.
+Root `/logs/reliability-20260920/report-export-handoff-20260920/actual-image-proof.json`,
+`actual-image-tests.log`, `fault-suite.log`; restart sibling
+`report-export-final-restart-actual/restart-xk15hswm/state/result.json`.
+Actual recovery9146d3b1... ARMED; live claim/Stage/checkpoint, not24h acceptance.
+
 ## 2026-09-20 latest actual6069fcb image —748 related tests and fresh7/7 PASS
 
 Worker `6069fcb3729c12e64a7d892903f62cf391fb5563`, image

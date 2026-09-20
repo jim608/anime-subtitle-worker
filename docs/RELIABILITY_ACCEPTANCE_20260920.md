@@ -5,7 +5,70 @@ No M3, full-library rescan, broad Queue retry, QC relaxation, source/valid-outpu
 overwrite, backup deletion, or ASR-budget reset. Server must own the eventual
 24-hour observation using existing observer/ledger; not a second framework.
 
-## Current baseline6069fcb — deployed; WAITING_FOR_EVIDENCE
+## Current baselinef52118c — deployed; WAITING_FOR_EVIDENCE
+
+Actual Worker `f52118c564e9aebca89d52b336e2156d2ba095cd`, image
+`sha256:e624e0e890a68025660fe320d1dd1b109450d179120d13f617ac13b15e139f65`,
+source revision `f65fbb031e62f1e06d58572acadc8d09b9b8661f686032c877f7685fbc0d9daf`.
+WebUI69f2352/image63e035bc unchanged. Safe deployment `20260920T014525Z-3338102`
+completed only after the active ASR task naturally reached review01:44:36.811125Z.
+No force-kill or foreign pause release. Actual image386 related tests PASS as non-root,
+including real report-directory permission failure; real Docker exit/restart preserves
+the report retry budget and immutable20-result journal, access repair publishes once,
+and the next isolated queue task claims/starts Stage. Fresh7/7 breakers PASS.
+
+Reconciliation `m2-recon-report-export-20260920`, receipt SHA256
+`bd36fc24b0aa8284a27d4e9959fc96f0fc5db8211c70e547483aa661d5a71885`:0 new holds,
+105 prior holds retained;6735 queued identities/7377 other states preserved, not
+eligible/delivered counts. All55 old backups plus new56 retained. Recovery
+`m2breakerrec_9146d3b1d14f460280dc0b52312b0f2e` cleared only the exact planned
+runtime-change trip and released owned hold01:48:30.652033Z. Report permissions
+were never changed in Production; its independently reproduced defect was isolated.
+
+New Gate `m2-gate-20260920T014830021232Z-8147e39531`, baseline
+`m2-guardrail-v1:c83fd65db8ed1c8307468303`, starts2026-09-20T01:48:30.021232Z.
+Configuration fingerprint f71f27e11f68a07b316dd5797cc670ec55359d13de13f7d11665872fa7781aac,
+decision schema1/frozen-first20 unchanged. Old005942 Gate's2 review members retained,
+INVALIDATED_BY_RUNTIME_CHANGE, no backfill. Earliest24-hour end
+2026-09-21T01:48:30.021232Z; all other acceptance criteria also remain required.
+At01:51:04Z: ARMED, provider freshly VERIFIED, Gate enrolled1/20, settled0/strict0.
+`m2ai_7a642b2574cf708e9e19` auto-claimed01:49:22.115900Z -> trusted-JA ASR/heartbeat
+01:49:48.898084Z; verified subtitle-detection checkpoint90e759ca9811801aaaebf8e739eed0d6750d10e967f7fad5a811d865c1136b17.
+At01:56:24.249511Z this first member reached deterministic_asr_quality review,
+not false completion.01:58:19Z: ARMED, enrolled1/20, settled1, strict0. Existing
+ASR review autopilot queued cmd_2ecb79858b0cb8ba3c664d1c at01:57:04.759Z and normal
+queue yielded to that bounded revision-scoped remediation; no manual Retry.
+Narrow durable log `post-terminal-scheduler.log` (01:56:20..01:58:40) records the
+reason. Existing watch interval is300 seconds; do not force a legitimate wait.
+Latest-baseline distinct terminal/next-claim and sustained24-hour proof remain pending.
+
+Evidence `/logs/reliability-20260920/report-export-handoff-20260920/`:
+`actual-runtime.json`, `actual-image-proof.json`, `actual-image-tests.log`,
+`fault-suite.log`, `recovery-closeout.json`, `backup-preservation.json`,
+`observation-check-1789869064933116458.json`,
+`observation-check-1789869499543303553.json`. Actual restart
+`../report-export-final-restart-actual/restart-xk15hswm/state/result.json`, fixture
+6ac102bc... removed after export, volumes_removed0. Latest related stopped containers0
+in `../container-inventory-1789869063852915091.json`; initial5 obsolete removals unchanged.
+
+The one-shot read-only closeout now bounds Stage/heartbeat evidence to each claim's
+own terminal time and separates same-obligation repair from distinct next-job claims.
+Old JSON is not rewritten.6069fcb had2 distinct continuations plus1 bounded ASR repair;
+6f400b4's5 continuations were independently checked to be distinct. Same-task ASR
+repair uses an existing revision-bound command and max3 total attempts, not a budget
+reset/new delivery. Goal-to-date2 new335/318-cue TC outputs remain6f400b4 evidence;
+prior download/extract351-cue proof is reused and not recounted. Mux remains disabled.
+
+| Recorded interval (UTC) | Cause / boundary | Duration to controlled admission resume |
+| --- | --- | --- |
+| Sep19 17:29:10.445402 ->23:33:52.718677 | Actual incorrect_completion/source-transcript evidence bridge incident | 6h04m42s |
+| Sep19 23:45:34.896185 ->Sep20 00:12:30.342904 | Actual source-ASR diagnostic-loss recurrence | 26m55s |
+| Sep20 01:37:44.613069 ->01:48:30.652033 | Owned planned report-boundary deployment pause; active job finished naturally | 10m46s, not unexplained safety stoppage |
+
+These historical interruptions cannot count toward the new continuous24-hour window.
+No M2 acceptance or Goal completion; documents alone must not redeploy/recreate Gate.
+
+## Previous baseline6069fcb — preserved deployment and counterexample evidence
 
 Follow-up admission audit reproduced a separate report-only defect in isolation:
 after all20 results are durably journaled, report-directory EACCES escaped terminal
@@ -23,7 +86,8 @@ Existing Docker lifecycle proof `report-export-restart-candidate/restart-vsvv_45
 preserves20 frozen results and retry budget through exit/restart, then publishes once
 after access changes and claims the next real isolated queue Stage. Fixture removed.
 Original failing logs remain (`report-export-before.log`, `report-export-targeted.log`).
-This candidate is not deployed yet; current runtime/Gate below remain authoritative.
+This was candidate-stage evidence. The current section above records the later
+f52118c deployment and actual-image386 tests; no old test is substituted for that SHA.
 
 6069fcb real counterexample is now proven, not just first claim: task
 `m2ai_fe725855a8d35dee61f8` exhausted the existing hard-display repair at index140,
@@ -372,9 +436,9 @@ checks, and rejects another trip or old SRT incident proof. No latch/state delet
 | Search/match/download/extract/import | PASS reused unchanged Sep12 formal351-cue target, replay queued0 | No new delivery counted; unavailable external sources remain individually blocked |
 | TC/CN/JA subtitle and trusted-JA ASR | Related routing/QC/cache regressions PASS; latest real trusted-JA ASR active | Do not turn a running Stage into publication PASS |
 | Existing non-JA ASR translation | PASS: accepted diagnostic continuity fixed,2 real335/318-cue strict deliveries on6f400b4 | Retain version attribution; do not transfer into latest Gate |
-| Transient failures vs review | PASS relevant tests; exact exhausted readability repair now quality review, unknown faults propagate | Real latest-baseline quality terminal and subsequent claim still need evidence |
-| Publish/mux/terminal/next claim | PASS isolated publication/replay/restart;5 continuations on6f400b4 and1 on6069fcb; runtime mux disabled | Latest-baseline24-hour sustained evidence pending; no mux output falsely claimed |
-| Provider/Gate/observation/restart | PASS fake-clock expiry/refresh, settlement and real restart; cron refreshes fresh evidence | Latest ACTIVE enrolled1/20, settled0; fixed cohort and24 hours not passed |
+| Transient failures vs review | PASS relevant tests; exact exhausted readability repair produced real review/next claim on6069fcb; report access failure now isolated onf52118c | Unknown faults/disk/DB/journal/collision still block; no budget resets |
+| Publish/mux/terminal/next claim | PASS isolated publication/replay/restart;5 distinct continuations on6f400b4 and2 on6069fcb; runtime mux disabled | Latestf52118c terminal/next-claim and24-hour sustained evidence pending |
+| Provider/Gate/observation/restart | PASS expiry/refresh, settlement and real restart; report-access retry budget persists; cron refreshes fresh evidence | Latest ACTIVE enrolled1/20, settled0; fixed cohort and24 hours not passed |
 | Historical recovery/fair admission | Real normal/recovery claims retained, budgets/checkpoints not reset | Continued fairness/no starvation is a sustained-observation criterion |
 | WebUI waiting reason | Existing underlying reason/time wiring retained; scheduler now processing | No interface redesign; surface future actual admission reasons |
 | Temporary Docker lifecycle | PASS7 actual lifecycle/10 deployment-script tests; initial5 removed, final related stopped0 | Labels/--rm/traps/owned-orphan handling in existing entrypoints, no service cleanup |
