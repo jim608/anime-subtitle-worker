@@ -1,6 +1,6 @@
 # M2 Production Observation
 
-## 2026-09-20 02:13 UTC — actualf52118c, WAITING_FOR_EVIDENCE
+## 2026-09-20 02:25 UTC — actualf52118c, WAITING_FOR_EVIDENCE
 
 Workerf52118c564e9aebca89d52b336e2156d2ba095cd/imagee624e0e8 deployed safely;
 WebUI69f2352 unchanged. Actual-image386/non-root report-access failure and real
@@ -28,6 +28,15 @@ cycles (next claims02:10:40Z,02:11:45Z,02:13:07Z), plus1 separately counted same
 repair. ARMED/fresh provider VERIFIED; Gate4 enrolled/4 settled/all NEEDS_REVIEW/
 strict0. No manual Retry, new formal output or cohort replacement. Proof
 observation-check-1789870428080672824.json; exact event times in the reliability document.
+Latest02:25:07Z same runtime/ARMED, Gate6 enrolled/6 settled/all review/strict0.
+Five distinct terminal->next claim/Stage sequences; four matching heartbeat rows,
+fifth durable ASR-stage history but mutable heartbeat no longer in that interval.
+Snapshot observation-check-1789871107847594257.json, no new formal subtitle.
+Three shared candidate_analysis_inconclusive decisions were checked: hard QC and
+non-JA/unknown audio justify continued review. Exact copied TC timing examples
+exceed unchanged bounded-repair limits; no safe automatic repair was demonstrated.
+Only isolated diagnostic copies were touched; both originals unchanged and both
+temporary --rm fixtures absent. No runtime deployment/Gate change for this check.
 Old005942 Gate2 review members preserved/INVALIDATED_BY_RUNTIME_CHANGE, no backfill.
 6069fcb separately proves2 distinct continuations plus1 bounded same-task repair;
 6f400b4's5 distinct continuations/2 new335/318-cue targets remain versioned evidence.

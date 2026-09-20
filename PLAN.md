@@ -32,6 +32,12 @@ Final02:13:47Z:3 distinct automatic terminal->claim/Stage/heartbeat cycles now p
 plus1 separate same-job repair. ARMED, Gate4 enrolled/4 settled/all review/strict0;
 no new formal delivery on this baseline. Server observes autonomously; do not poll
 the Queue, force another task, redeploy documents or mark the Goal complete.
+At02:25Z samef521/ARMED, Gate6 enrolled/6 settled/all review/strict0. Three exact
+shared source-review decisions were investigated; copied timing tests confirm
+over-budget overlaps and no trusted JA audio, so no runtime repair/deploy justified.
+Five distinct next-claim/Stage sequences recorded (4 heartbeat matches; fifth
+durable ASR history).24h/all20/delivery evidence still outstanding; source originals,
+105 holds,56 backups preserved and both new isolated fixtures auto-removed.
 Prior6069fcb has2 distinct
 terminal-next claims plus1 bounded same-task repair (not3 distinct); its2 Gate review
 members were preserved/invalidated only

@@ -1,6 +1,6 @@
 # M2 remaining acceptance — 2026-09-08
 
-## 2026-09-20 02:13 UTC — report/admission boundary deployed; sustained evidence pending
+## 2026-09-20 02:25 UTC — report/admission boundary deployed; sustained evidence pending
 
 Actual Workerf52118c564e9aebca89d52b336e2156d2ba095cd, WebUI69f2352 unchanged.
 Reproduced report-only EACCES terminal/admission coupling fixed without masking
@@ -21,6 +21,12 @@ Evidence observation-check-1789870318559243726.json; same-job repair counted sep
 Final02:13:47Z evidence observation-check-1789870428080672824.json proves3 distinct
 terminal->next claim/Stage/heartbeat cycles, no manual Retry. Gate4 enrolled/4
 settled/all review/strict0; ARMED, provider VERIFIED, current-baseline formal outputs0.
+At02:25:07Z Gate6 enrolled/6 settled/all review/strict0;5 distinct next-claim/Stage
+sequences (4 bounded heartbeat matches; fifth has durable ASR history). Three
+shared source-review reasons were verified against exact decisions and copied
+subtitle timing tests: no safe repair within existing bounds; retain review.
+No runtime change/deploy/Gate replacement; two diagnostic temp fixtures removed
+automatically, original sidecars unchanged. See reliability follow-up evidence.
 Old005942 Gate's2 review members preserved.6069fcb's exact exhausted-readability
 review -> next claim is now Production-proven,2 distinct cycles total; same-task
 ASR repair is separately counted with unchanged revision-bound max3 budget.

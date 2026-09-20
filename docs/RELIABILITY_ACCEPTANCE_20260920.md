@@ -103,6 +103,58 @@ prior download/extract351-cue proof is reused and not recounted. Mux remains dis
 These historical interruptions cannot count toward the new continuous24-hour window.
 No M2 acceptance or Goal completion; documents alone must not redeploy/recreate Gate.
 
+## Follow-up of three shared source-review decisions (02:25 UTC, no runtime change)
+
+Only the three exact durable decisions following the first ASR repair were read;
+no jobs were rerun and no library/Queue scan was performed. Source inventories
+were complete, but no candidate passed existing eligibility/QC:
+
+| Anonymous task | Verified rejection evidence | Disposition |
+| --- | --- | --- |
+| m2ai_bc57ccafc7143aec78c8 | TC/CN timing overlaps; JA overlap/CPS failures; only English-tagged audio | Preserve review |
+| m2ai_25f59843d061fba1c2a3 | TC ASS timing overlaps; TC SRT parse failure; only English-tagged audio | Preserve review |
+| m2ai_60682c962f8bd3a320c8 | JA content fails overlap/CPS/min-duration QC; audio language unknown | Preserve review |
+
+These3 are genuine exceptions under current safety limits, not proven FALSE_REVIEW.
+High language/coverage confidence does not override hard QC or establish trusted JA
+audio. Re-evaluation requires new validated candidate/identity/audio evidence; these
+records are not permanent declarations that no subtitles exist.
+
+Two exact TC candidates were SHA/size/mtime matched to the durable decisions and
+copied into UNRAID isolation. Current deployed imagee624e0e8, no network/GPU/live
+DB/media mounts: SRT has3 overlaps of3.46/3.78/2.70 seconds; existing bounded
+remediation records `no_safe_change`, and idempotent replay leaves its immutable
+diagnostic unchanged. ASS has15 overlap findings, including0.47..4.56 seconds;
+the SRT-only remediation does not accept ASS, and converting syntax would not
+resolve the over-budget timing. Policy remains200ms per overlap/single shift,
+500ms total. No repair allowance, QC threshold, source subtitle or job budget changed.
+The test correctly retains QC FAIL; it is not successful subtitle repair/publication.
+
+Evidence: `report-export-handoff-20260920/review-decisions-1789870690852646228.json`
+and `/logs/reliability-20260920/review-timing-feasibility-20260920T0223/`.
+`isolated-test-2.exit=0`, `output/result.json`, immutable remediation diagnostic,
+`sources-unchanged.json` prove both original sidecars' SHA/size/mtime unchanged.
+Original failed `isolated-test.log` remains: the diagnostic fixture initially compared
+whole return objects, incorrectly rejecting the expected `already_attempted` replay
+status. Corrected fixture compares fingerprint/hash/artifact bytes/mtime instead.
+The shell fixture's no-newline CID read was corrected; remaining source verification
+and exact-container absence checks were completed separately, without rerunning jobs.
+Both temporary fixtures used labels/--rm; `container-1-after.txt` and
+`container-2-after.txt` are empty authoritative exact-ID listings. No container/image/
+volume/backup prune, source write or Worker restart was performed.
+
+Latest read-only snapshot `observation-check-1789871107847594257.json` at02:25:07Z:
+samef521 runtime/ARMED, provider VERIFIED,105 holds, no pause/reconciliation hold;
+Gate6 enrolled/6 settled/all NEEDS_REVIEW/strict0, no new formal outputs. Five distinct
+terminal->next-claim/Stage sequences are present; four have bounded matching
+heartbeat rows in this snapshot. The fifth has durable preflight, audio selection,
+language detection and ASR02:15:30.890Z->review02:22:34.429Z, but its mutable
+heartbeat row is no longer inside the attempt interval; do not invent that evidence.
+The last terminal is only150 seconds before this snapshot, inside the existing
+300-second watch interval; do not infer another outage or force Retry from idle alone.
+The server's24-hour/fixed20 observation remains WAITING_FOR_EVIDENCE. No deployment,
+baseline/Gate change or Production repair was justified by this bounded review check.
+
 ## Previous baseline6069fcb — preserved deployment and counterexample evidence
 
 Follow-up admission audit reproduced a separate report-only defect in isolation:
