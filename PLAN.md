@@ -22,8 +22,11 @@ fixed20 results and sustained safety/delivery evidence. Old Gates/history retain
 At01:51Z ARMED/ACTIVE1 enrolled,0 settled: real7a642b2574cf708e9e19 auto-claim
 01:49:22Z -> JA-ASR/heartbeat01:49:48Z, verified checkpoint -> quality review01:56:24Z.
 At01:58Z Gate1 enrolled/1 settled/0 strict; queued bounded ASR remediation,300s existing
-cycle. Latest distinct terminal/next-claim and24-hour proof pending. Prior6069fcb has2 distinct terminal-next claims plus1 bounded
-same-task repair (not3 distinct); old Gate2 review members preserved/invalidated only
+cycle. Latest distinct terminal/next-claim and24-hour proof pending. Currentf521
+same-task remediation auto-claimed02:02:23Z and entered transcription/heartbeat
+02:02:31Z, not counted as a new Gate member or delivery. Prior6069fcb has2 distinct
+terminal-next claims plus1 bounded same-task repair (not3 distinct); its2 Gate review
+members were preserved/invalidated only
 by actual runtime change.6f400b4 has2 new335/318-cue strict outputs and5 distinct
 continuations, not current cohort replacements or24-hour evidence.
 Five proven old temp fixtures archived and removed non-force; latest related stopped0.

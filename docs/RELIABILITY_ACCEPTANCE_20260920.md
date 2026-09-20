@@ -40,13 +40,19 @@ ASR review autopilot queued cmd_2ecb79858b0cb8ba3c664d1c at01:57:04.759Z and nor
 queue yielded to that bounded revision-scoped remediation; no manual Retry.
 Narrow durable log `post-terminal-scheduler.log` (01:56:20..01:58:40) records the
 reason. Existing watch interval is300 seconds; do not force a legitimate wait.
+At02:02:23.239434Z the same obligation's bounded ASR remediation automatically
+claimed, entered transcription02:02:31.801830Z and produced Stage/heartbeat evidence.
+02:02:50Z snapshot still ARMED, enrolled1/20, settled1/strict0. This is one same-job
+repair, not a distinct next-job continuation, new cohort member or delivered subtitle.
 Latest-baseline distinct terminal/next-claim and sustained24-hour proof remain pending.
 
 Evidence `/logs/reliability-20260920/report-export-handoff-20260920/`:
 `actual-runtime.json`, `actual-image-proof.json`, `actual-image-tests.log`,
 `fault-suite.log`, `recovery-closeout.json`, `backup-preservation.json`,
 `observation-check-1789869064933116458.json`,
-`observation-check-1789869499543303553.json`. Actual restart
+`observation-check-1789869499543303553.json`,
+`observation-check-1789869770166730449.json` (bounded automatic same-job remediation).
+Actual restart
 `../report-export-final-restart-actual/restart-xk15hswm/state/result.json`, fixture
 6ac102bc... removed after export, volumes_removed0. Latest related stopped containers0
 in `../container-inventory-1789869063852915091.json`; initial5 obsolete removals unchanged.

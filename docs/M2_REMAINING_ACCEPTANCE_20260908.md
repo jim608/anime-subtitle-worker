@@ -12,6 +12,8 @@ Current Gate014830021232Z-8147e39531 baselinec83fd65db8ed1c8307468303 starts
 01:49:22Z -> JA ASR/heartbeat/checkpoint -> correct quality review01:56:24Z.
 At01:58Z Gate1 enrolled/1 settled/0 strict; ARMED, bounded remediation queued,
 not sustained completion or a new subtitle delivery.
+02:02:23Z same-job bounded repair actually auto-claimed and began transcription/
+heartbeat02:02:31Z; no manual action. Distinct next-job evidence remains pending.
 Old005942 Gate's2 review members preserved.6069fcb's exact exhausted-readability
 review -> next claim is now Production-proven,2 distinct cycles total; same-task
 ASR repair is separately counted with unchanged revision-bound max3 budget.

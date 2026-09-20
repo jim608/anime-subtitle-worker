@@ -14,6 +14,8 @@ At01:51Z enrolled1/20, settled0, strict0. Real7a642... auto-claim01:49:22Z -> JA
 and heartbeat01:49:48Z, valid checkpoint. Correct ASR quality review01:56:24Z;
 at01:58Z1 enrolled/1 settled/0 strict, ARMED. Existing bounded remediation queued;
 latest distinct full terminal/next-claim pending, no forced scheduling.
+02:02:23Z same-job remediation auto-claimed -> transcription/heartbeat02:02:31Z;
+ARMED,1 enrolled/1 settled/0 strict. Recorded separately, not new delivery/backfill.
 Old005942 Gate2 review members preserved/INVALIDATED_BY_RUNTIME_CHANGE, no backfill.
 6069fcb separately proves2 distinct continuations plus1 bounded same-task repair;
 6f400b4's5 distinct continuations/2 new335/318-cue targets remain versioned evidence.
