@@ -22,9 +22,17 @@ fixed20 results and sustained safety/delivery evidence. Old Gates/history retain
 At01:51Z ARMED/ACTIVE1 enrolled,0 settled: real7a642b2574cf708e9e19 auto-claim
 01:49:22Z -> JA-ASR/heartbeat01:49:48Z, verified checkpoint -> quality review01:56:24Z.
 At01:58Z Gate1 enrolled/1 settled/0 strict; queued bounded ASR remediation,300s existing
-cycle. Latest distinct terminal/next-claim and24-hour proof pending. Currentf521
+cycle. At that time distinct terminal/next-claim and24-hour proof were pending. Currentf521
 same-task remediation auto-claimed02:02:23Z and entered transcription/heartbeat
-02:02:31Z, not counted as a new Gate member or delivery. Prior6069fcb has2 distinct
+02:02:31Z, not counted as a new Gate member or delivery. First distinct continuation
+now proven: review02:09:48Z -> differentbc57ccafc7143aec78c8 claim02:10:40Z,
+preflight/heartbeat02:10:43..45Z. At02:11:58Z ARMED, Gate3 enrolled/2 settled/0 strict,
+new-baseline formal subtitles0;24h/all20 and sustained evidence remain pending.
+Final02:13:47Z:3 distinct automatic terminal->claim/Stage/heartbeat cycles now proven,
+plus1 separate same-job repair. ARMED, Gate4 enrolled/4 settled/all review/strict0;
+no new formal delivery on this baseline. Server observes autonomously; do not poll
+the Queue, force another task, redeploy documents or mark the Goal complete.
+Prior6069fcb has2 distinct
 terminal-next claims plus1 bounded same-task repair (not3 distinct); its2 Gate review
 members were preserved/invalidated only
 by actual runtime change.6f400b4 has2 new335/318-cue strict outputs and5 distinct

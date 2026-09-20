@@ -1,6 +1,6 @@
 # M2 Production Observation
 
-## 2026-09-20 01:51 UTC — actualf52118c, WAITING_FOR_EVIDENCE
+## 2026-09-20 02:13 UTC — actualf52118c, WAITING_FOR_EVIDENCE
 
 Workerf52118c564e9aebca89d52b336e2156d2ba095cd/imagee624e0e8 deployed safely;
 WebUI69f2352 unchanged. Actual-image386/non-root report-access failure and real
@@ -13,9 +13,21 @@ New Gate `m2-gate-20260920T014830021232Z-8147e39531`, baseline
 At01:51Z enrolled1/20, settled0, strict0. Real7a642... auto-claim01:49:22Z -> JA ASR
 and heartbeat01:49:48Z, valid checkpoint. Correct ASR quality review01:56:24Z;
 at01:58Z1 enrolled/1 settled/0 strict, ARMED. Existing bounded remediation queued;
-latest distinct full terminal/next-claim pending, no forced scheduling.
+at that snapshot distinct full terminal/next-claim was pending, no forced scheduling.
 02:02:23Z same-job remediation auto-claimed -> transcription/heartbeat02:02:31Z;
 ARMED,1 enrolled/1 settled/0 strict. Recorded separately, not new delivery/backfill.
+At02:11:58Z ARMED,3 enrolled/2 settled/0 strict. First distinct cycle now proven:
+7a642... bounded repair review02:09:48.573166Z -> bc57ccafc7143aec78c8 auto-claim
+02:10:40.485752Z/preflight02:10:43.577813Z/heartbeat02:10:45.203803Z.
+The latter safely reviewed02:10:47.546120Z;25f59843d061fba1c2a3 claimed02:11:45.322203Z,
+but its Stage was not yet in this snapshot. New-baseline formal subtitles0.
+Proof observation-check-1789870318559243726.json; latest32-attempt counts are
+explicit samples, not full-window totals. Complete fixed-cohort records are separate.
+Final snapshot02:13:47Z now proves3 distinct terminal->claim/preflight/heartbeat
+cycles (next claims02:10:40Z,02:11:45Z,02:13:07Z), plus1 separately counted same-job
+repair. ARMED/fresh provider VERIFIED; Gate4 enrolled/4 settled/all NEEDS_REVIEW/
+strict0. No manual Retry, new formal output or cohort replacement. Proof
+observation-check-1789870428080672824.json; exact event times in the reliability document.
 Old005942 Gate2 review members preserved/INVALIDATED_BY_RUNTIME_CHANGE, no backfill.
 6069fcb separately proves2 distinct continuations plus1 bounded same-task repair;
 6f400b4's5 distinct continuations/2 new335/318-cue targets remain versioned evidence.

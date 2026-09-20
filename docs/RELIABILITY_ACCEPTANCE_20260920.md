@@ -44,14 +44,40 @@ At02:02:23.239434Z the same obligation's bounded ASR remediation automatically
 claimed, entered transcription02:02:31.801830Z and produced Stage/heartbeat evidence.
 02:02:50Z snapshot still ARMED, enrolled1/20, settled1/strict0. This is one same-job
 repair, not a distinct next-job continuation, new cohort member or delivered subtitle.
-Latest-baseline distinct terminal/next-claim and sustained24-hour proof remain pending.
+At02:11:58Z the latest-baseline distinct terminal/next-claim is now proven:
+the bounded repair of7a642b2574cf708e9e19 ended in deterministic_asr_quality review
+02:09:48.573166Z; different taskbc57ccafc7143aec78c8 auto-claimed02:10:40.485752Z,
+entered preflight02:10:43.577813Z and updated Stage/heartbeat02:10:45.203803Z.
+Its candidate_analysis_inconclusive review settled02:10:47.546120Z without blocking
+independent work. Task25f59843d061fba1c2a3 then claimed02:11:45.322203Z;
+this snapshot has not yet captured its Stage, so it is not a second verified cycle.
+ARMED/runtime_baseline_match, fresh provider VERIFIED, Gate3 enrolled/2 settled/
+0 strict. One distinct continuation and one same-obligation repair are separate;
+new formal subtitles on this baseline remain0. Sustained24-hour/all20 proof is pending.
+
+Final bounded snapshot02:13:47.791Z proves3 distinct automatic continuations onf521:
+
+| Previous terminal review (UTC) | Next anonymous task | Automatic claim | Preflight / heartbeat |
+| --- | --- | --- | --- |
+| 02:09:48.573 | m2ai_bc57ccafc7143aec78c8 | 02:10:40.485 | 02:10:43.577 /02:10:45.203 |
+| 02:10:47.546 | m2ai_25f59843d061fba1c2a3 | 02:11:45.322 | 02:12:01.823 /02:12:02.237 |
+| 02:12:05.368 | m2ai_60682c962f8bd3a320c8 | 02:13:07.078 | 02:13:09.503 /02:13:10.206 |
+
+No manual Retry between these events. The last task also reached source-selection
+review; this does not establish successful publication. Gate4 enrolled/4 settled,
+all4 NEEDS_REVIEW, strict0, no substitution. Runtime/breaker ARMED, provider freshly
+VERIFIED, no pause/reconciliation hold. Scheduler idle between completed cycles is
+not evidence of another admission outage. New-baseline formal outputs0;25 minutes
+of observation is not24 hours. Existing server observation continues independently.
 
 Evidence `/logs/reliability-20260920/report-export-handoff-20260920/`:
 `actual-runtime.json`, `actual-image-proof.json`, `actual-image-tests.log`,
 `fault-suite.log`, `recovery-closeout.json`, `backup-preservation.json`,
 `observation-check-1789869064933116458.json`,
 `observation-check-1789869499543303553.json`,
-`observation-check-1789869770166730449.json` (bounded automatic same-job remediation).
+`observation-check-1789869770166730449.json` (bounded automatic same-job remediation),
+`observation-check-1789870318559243726.json` (first distinct continuation),
+`observation-check-1789870428080672824.json` (3 distinct continuations, fixed4 reviews).
 Actual restart
 `../report-export-final-restart-actual/restart-xk15hswm/state/result.json`, fixture
 6ac102bc... removed after export, volumes_removed0. Latest related stopped containers0
@@ -59,6 +85,9 @@ in `../container-inventory-1789869063852915091.json`; initial5 obsolete removals
 
 The one-shot read-only closeout now bounds Stage/heartbeat evidence to each claim's
 own terminal time and separates same-obligation repair from distinct next-job claims.
+It samples the latest32 attempts/latest40 result events and reports indexed window
+counts and truncation explicitly; sample continuation counts are not full24-hour
+totals. The fixed Gate's complete member evidence remains separately included.
 Old JSON is not rewritten.6069fcb had2 distinct continuations plus1 bounded ASR repair;
 6f400b4's5 continuations were independently checked to be distinct. Same-task ASR
 repair uses an existing revision-bound command and max3 total attempts, not a budget

@@ -1,6 +1,6 @@
 # M2 remaining acceptance — 2026-09-08
 
-## 2026-09-20 01:51 UTC — report/admission boundary deployed; sustained evidence pending
+## 2026-09-20 02:13 UTC — report/admission boundary deployed; sustained evidence pending
 
 Actual Workerf52118c564e9aebca89d52b336e2156d2ba095cd, WebUI69f2352 unchanged.
 Reproduced report-only EACCES terminal/admission coupling fixed without masking
@@ -13,13 +13,20 @@ Current Gate014830021232Z-8147e39531 baselinec83fd65db8ed1c8307468303 starts
 At01:58Z Gate1 enrolled/1 settled/0 strict; ARMED, bounded remediation queued,
 not sustained completion or a new subtitle delivery.
 02:02:23Z same-job bounded repair actually auto-claimed and began transcription/
-heartbeat02:02:31Z; no manual action. Distinct next-job evidence remains pending.
+heartbeat02:02:31Z; no manual action. First distinct continuation now proven:
+repair review02:09:48.573166Z -> bc57ccafc7143aec78c8 claim02:10:40.485752Z,
+preflight02:10:43.577813Z/heartbeat02:10:45.203803Z. ARMED at02:11:58Z;
+Gate3 enrolled/2 settled/0 strict, latest-baseline new formal subtitles0.
+Evidence observation-check-1789870318559243726.json; same-job repair counted separately.
+Final02:13:47Z evidence observation-check-1789870428080672824.json proves3 distinct
+terminal->next claim/Stage/heartbeat cycles, no manual Retry. Gate4 enrolled/4
+settled/all review/strict0; ARMED, provider VERIFIED, current-baseline formal outputs0.
 Old005942 Gate's2 review members preserved.6069fcb's exact exhausted-readability
 review -> next claim is now Production-proven,2 distinct cycles total; same-task
 ASR repair is separately counted with unchanged revision-bound max3 budget.
 Goal-to-date2 new335/318-cue strict outputs on6f400b4; no transfer into latest Gate.
 Latest related stopped containers0; initial5 removals and protected-resource proof kept.
-Remaining: latest-baseline terminal/next claim,24h from this start, fixed20/all
+Remaining:24h from this start, fixed20/all
 outcomes and sustained safety/admission/delivery evidence. M2 NOT COMPLETE/ACCEPTED.
 See docs/RELIABILITY_ACCEPTANCE_20260920.md and /logs/reliability-20260920/report-export-handoff-20260920/.
 Do not redeploy or recreate Gate merely to synchronize these documents.
