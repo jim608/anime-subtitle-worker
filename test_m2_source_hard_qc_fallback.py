@@ -32,8 +32,14 @@ class SourceHardQcFallbackTest(unittest.TestCase):
             p=root/f'episode.{label}.srt';raw=srt_text(text)
             if bad == 'parse':
                 raw += '\n\n327\n00:00:00,000 --> 00:00:05,000\n'
+            elif bad == 'encoding':
+                raw = raw.encode('utf-8') + b'\x86'
             elif bad:raw=raw.replace('00:00:01,900','00:00:04,000',1)
-            p.write_text(raw,encoding='utf-8');paths.append(p)
+            if isinstance(raw, bytes):
+                p.write_bytes(raw)
+            else:
+                p.write_text(raw,encoding='utf-8')
+            paths.append(p)
         before={p:(p.read_bytes(),p.stat().st_mtime_ns) for p in (video,*paths)}
         job=build_source_input_identity(video,'test-job',config=config).media_job_identity
         streams=[{'index':1,'codec_type':'audio','codec_name':'aac','duration':'48',
@@ -118,6 +124,46 @@ class SourceHardQcFallbackTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             with patch('subtitle_quality.analyze_subtitle_file',side_effect=ValueError('unexpected QC defect')):
                 with self.assertRaisesRegex(ValueError,'unexpected QC defect'):
+                    self.inventory(Path(temp),[('zh-CN',CN,False)])
+
+    def test_undecodable_srt_rejects_only_candidate_and_keeps_safe_priority(self):
+        cases = [
+            ([('zh-TW',TW,'encoding'),('zh-CN',CN,False)],'jpn',CONVERT_ZH_CN),
+            ([('zh-CN',CN,'encoding'),('ja',JA,False)],'jpn',TRANSLATE_JA_SUBTITLE),
+            ([('zh-CN',CN,'encoding')],'jpn',ASR_JA_AUDIO),
+            ([('zh-CN',CN,'encoding')],'und','NEEDS_REVIEW'),
+            ([('zh-TW',TW,False),('zh-CN',CN,'encoding')],'jpn',USE_EXISTING_ZH_TW),
+        ]
+        for sources,language,expected in cases:
+            with self.subTest(expected=expected),tempfile.TemporaryDirectory() as temp:
+                inventory,_=self.inventory(Path(temp),sources,audio_language=language)
+                decision=analyze_sources(**inventory.analyzer_arguments())
+                self.assertEqual(expected,decision.strategy)
+                rejected=[c for c in decision.candidates if c.kind=='subtitle' and not c.eligible]
+                self.assertEqual(1,len(rejected))
+                self.assertIn('subtitle_encoding_invalid',rejected[0].evidence['hard_qc']['failure_codes'])
+                self.assertIn('subtitle_parse_failed',rejected[0].evidence['hard_qc']['failure_codes'])
+                self.assertIn('source_hard_qc_failed',rejected[0].rejection_reasons)
+
+    def test_encoding_rejection_is_replay_stable_after_reopening_source(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp)
+            first,config=self.inventory(root,[('zh-CN',CN,'encoding')])
+            video=root/'episode.mkv';sidecar=root/'episode.zh-CN.srt'
+            before={p:(p.read_bytes(),p.stat().st_mtime_ns) for p in (video,sidecar)}
+            job=build_source_input_identity(video,'test-job',config=config).media_job_identity
+            with patch('source_inventory._probe_media',return_value={'format':{'duration':'48'},'streams':[]}):
+                replay=inventory_sources(video,job,config=config,sidecar_paths=[sidecar])
+            self.assertEqual(first.candidate_fingerprint,replay.candidate_fingerprint)
+            self.assertEqual(first.subtitle_candidates,replay.subtitle_candidates)
+            self.assertEqual('NEEDS_REVIEW',analyze_sources(**replay.analyzer_arguments()).strategy)
+            self.assertEqual(before,{p:(p.read_bytes(),p.stat().st_mtime_ns) for p in before})
+
+    def test_non_decode_unicode_fault_is_not_hidden_as_bad_input(self):
+        exc=UnicodeEncodeError('ascii','字幕',0,1,'synthetic implementation fault')
+        with tempfile.TemporaryDirectory() as temp:
+            with patch('subtitle_quality.analyze_subtitle_file',side_effect=exc):
+                with self.assertRaises(UnicodeEncodeError):
                     self.inventory(Path(temp),[('zh-CN',CN,False)])
 
 

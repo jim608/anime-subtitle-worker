@@ -1,5 +1,24 @@
 # M2 Circuit Breaker Test Results
 
+## 2026-09-20 source-language accepted-checkpoint continuity repair
+
+Actual Worker6f400b4c4818d196785f26b67ae35caefcf472c4/imageab80ef55:
+572 related tests PASS. Newly reproduced shared failure was loss of accepted
+diagnostics during source-language line formatting. Candidate245 related tests,
+real Docker crash/restart accepted-pair restoration/no repeated ASR/no budget
+reset/idempotency/source safety, safe review -> next claim/Stage all PASS.
+Exact real incident read-only canary refuses absent evidence before translation;
+does not regenerate historical acceptance or count as new formal delivery.
+Fresh breaker7/7 PASS, controlled recovery exact-event binding retained.
+Proof `/logs/reliability-20260920/recurrence-1789861657751744899/actual-image-proof.json`;
+full tests `actual-image-tests.log`, restart in sibling
+`source-continuity-restart-actual/restart-cbizd3kf/`. Actual fixture exported and
+removed non-force by existing teardown, volumes_removed0/no warning.
+Earlier failed logs and old Gates remain intact. Production now has one safe
+terminal -> next source-ASR claim proof, not24h acceptance or a delivered subtitle.
+Current105 holds/53 backups retained. Prior unaffected lifecycle7/deploy-script10
+test evidence below reused; no cleanup service, prune or runtime redeploy for docs.
+
 ## 2026-09-20 actual source-transcript repair image
 
 Worker2a44df9cdc064fca62ad43aaa43d3714e955698f actual image18ce8036:

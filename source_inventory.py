@@ -1035,6 +1035,11 @@ def _source_hard_qc_failures(path: Path, config: object | None) -> tuple[str, ..
         # Worker failure. Keep its identity and reject it through existing QC
         # eligibility; I/O errors and unrelated implementation faults propagate.
         return ("subtitle_parse_failed",)
+    except UnicodeDecodeError:
+        # The source bytes cannot be decoded by the supported subtitle reader.
+        # Preserve the candidate identity and explicit reason; never replace
+        # undecodable bytes or suppress I/O, encoding-output or QC code faults.
+        return ("subtitle_encoding_invalid", "subtitle_parse_failed")
     return tuple(sorted({issue.code for issue in report.issues if issue.severity == "fail"}))
 
 

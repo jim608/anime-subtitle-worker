@@ -5,14 +5,114 @@ No M3, full-library rescan, broad Queue retry, QC relaxation, source/valid-outpu
 overwrite, backup deletion, or ASR-budget reset. Server must own the eventual
 24-hour observation using existing observer/ledger; not a second framework.
 
-## New recurrence supersedes the previous WAITING closeout
+## Follow-up encoding classification repair (candidate; deployment pending)
+
+On6f400b4, task `m2ai_4709098eb5ad9c7bd956` actually completed00:19:07.054968Z,
+then next automatic claim00:20:01.424621Z. Final-location verification proved
+**1 new formal TC target,335 cues**, full parse/hard QC/hallucination/source checksum
+and all strict predicates PASS; TC destination absent from publication backups,
+no duplicate publication. Other language artifacts are not extra delivered targets.
+Evidence `recurrence-1789861657751744899/final-publication-1789864028435634327.json`.
+00:22:49Z snapshot proves3 terminal -> next-claim cycles, still ARMED. Historical
+attempts remain supplemental, not Gate replacements. This proves the preceding
+source-ASR normalization defect repaired on a real task, not24-hour acceptance.
+
+A distinct single-source defect was then reproduced, not an unexplained rearm:
+`m2ai_c47042257e92ee49e2b3` at00:20:04.789Z, source_inventory hard-QC ->
+subtitle_quality -> read_srt UTF-8 decoding at byte26480. A preserved `.error.ja.srt`
+candidate raised UnicodeDecodeError as worker_unknown. Independent work continued;
+no global trip observed. Current candidate catches ONLY UnicodeDecodeError at
+source-candidate QC and records subtitle_encoding_invalid + subtitle_parse_failed.
+No replace/ignore decoding, global exception suppression, QC relaxation or retry
+budget reset. OSError, unrelated ValueError and UnicodeEncodeError still propagate.
+
+Server `source-encoding-before.log`:13tests/6 expected errors. After repair
+`source-encoding-related.log`:172 PASS. Existing leased Docker restart runner
+`source-encoding-restart-candidate/restart-cnzim509/` proves candidate review,
+actual exit/restart, preserved checkpoint/source/terminal, next claim/Stage and
+idempotency; container exported and removed by existing teardown. Real candidate
+read-only replay `source-encoding-real-candidate.log` rejects exactly1 undecodable
+candidate and selects already valid Japanese subtitles at confidence0.996805.
+All1 source video+8 existing sidecars retain SHA256/size/mtime; zero writes/deliveries.
+This additional result-affecting change requires another safe deployment and
+normal runtime-change Gate policy, not clearance of a new global safety accident.
+Do not mix the delivered6f400b4 result into a later frozen cohort.
+
+## Current deployed baseline —6f400b4 (encoding candidate not deployed yet)
+
+Second necessary safe deployment `20260920T000919Z-2451937` completed with exit0.
+Actual Worker `6f400b4c4818d196785f26b67ae35caefcf472c4`, image
+`sha256:ab80ef55949e5548de96916daec6906f53729d12461b637e9170dbaa676679aa`;
+source revision `7c273f072f20bac076f7a0ae70a2e525ffc634060f8755f58751ba3f14f180e0`.
+WebUI remains `69f2352d0d5d371ca58eaf5a4c62d97f79529e69`, application image
+`sha256:63e035bc7d0cac764247a7eb83c7197597a026088e53f335c42e3848fdd46e5b`.
+Subsequent document commits are not runtime changes and must not cause deployment.
+
+Existing controlled recovery `m2breakerrec_352653f76f3546c59e480d696fe27f59`
+consumed reconciliation `m2-recon-source-normalization-20260920` (receipt SHA256
+`0a728f93e720f3ab3e76e87da3e3f8d91ee5fec3481f4dc8112668fd3cc3a2c3`).
+It binds the new23:45:34 incident rather than reusing the earlier receipt;
+TRIPPED -> ARMED, only the owned hold released at2026-09-20T00:12:30.342903Z.
+All104 prior holds plus this unproven source-ASR incident remain (105 total).
+Reconciliation retained6717 recoverable queued identities and7373 other-state
+identities without resetting budgets/leases; these counts are not delivered jobs.
+All52 predeployment backups plus the new one remain (53). Historical preservation
+and the missing original ASR acceptance remain UNPROVEN/UNKNOWN, never upgraded.
+
+Active frozen Gate `m2-gate-20260920T001228986223Z-5eee243835`, baseline
+`m2-guardrail-v1:0a6d3597e833a5da1b634964`, starts2026-09-20T00:12:28.986223Z.
+Configuration fingerprint `sha256:f71f27e11f68a07b316dd5797cc670ec55359d13de13f7d11665872fa7781aac`,
+decision schema1, eligibility `m2-frozen-first-20-v1`. Previous233351 Gate is
+INVALIDATED_BY_RUNTIME_CHANGE with all evidence retained, not relabelled PASS.
+No result transfer, backfill or historical-recovery substitution. Initial and
+00:16:27Z snapshot0/20; two historical attempts are explicitly supplemental.
+Earliest24-hour end **2026-09-21T00:12:28.986223Z** (08:12:28 Taipei), conditional
+also on all20 results, multiple continuations and at least2 genuinely new outputs.
+The failed previous observation window does not count toward uninterrupted24h.
+
+Actual-image572 related tests PASS, fresh7/7 breaker tests PASS. Actual Docker
+crash/restart restores the accepted SRT/diagnostic checkpoint pair without another
+ASR pass, preserves repair budget/source bytes and proves idempotency. Its other
+fixture proves safe review -> next claim/Stage. Exact incident canary is read-only:
+missing original evidence is refused, not fabricated or published. Restart fixture
+`b5d2c8490ec33fcc971db8290551c255884965caaa32cb78997b54198fd26a9c` was exported and
+automatically removed non-force, volumes_removed0, no cleanup warning.
+
+Real Production evidence at00:16:27Z: `m2ai_5fa8e3c27f076d9138e1` safely enters
+review_required00:13:29.259905Z; next `m2ai_4709098eb5ad9c7bd956` automatically
+claims00:14:21.766109Z, preflight00:14:24.091346Z, source_transcription(zh)
+00:14:57.489767Z with heartbeat and verified source-decision checkpoint
+`9cdeb7885b20fa64b6986230b51aabb016a28ecea95b06bd164f35d2d0852a09`.
+No intervening manual retry. One continuation is not sustained acceptance;
+actual new qualified formal TC subtitles verified on this baseline:0 so far.
+Provider VERIFIED with fresh checked_at1789863381.8710325 under the new baseline;
+existing server observer, scheduler and installed cron continue independently.
+
+Current evidence root `/logs/reliability-20260920/recurrence-1789861657751744899/`:
+`safe-deploy.log`, `actual-runtime.json`, `actual-image-tests.log`,
+`actual-image-proof.json`, `read-only-canary-actual.log`, `recovery-closeout.json`,
+`backup-preservation.json`, `observation-check-1789863388143003584.json`.
+Restart proof is in sibling `source-continuity-restart-actual/restart-cbizd3kf/`.
+Full logs and earlier failed attempts remain on the server, not overwritten.
+
+Final bounded temporary-container inventory at00:18:20Z:
+`/logs/reliability-20260920/container-inventory-1789863500848030618.json` finds
+0 related stopped containers. Worker/WebUI running; the third related running
+container is the labelled --rm inventory helper. Original leftovers discovered5,
+confirmed5, archived5, removed5; unconfirmed stopped retained0. The later candidate
+restart fixture was separately archived/explicitly removed after allowlist refusal;
+the actual-image fixture was automatically removed only after exported results.
+These newly created fixtures are not counted as old residuals. Protected services,
+volumes, images and all backups were not cleaned or pruned.
+
+## New recurrence (historical repair evidence, now deployed above)
 
 At2026-09-19T23:45:34.896185Z, task `m2ai_99a4c7f0c7371ecb7248` again reached
 incorrect_completion/hallucination_validation_pass failure on deployed2a44df9.
 The prior ARMED snapshot and one continuation remain historically true, but do
-not prove sustained recovery. Breaker remains TRIPPED during repair; no repeated
-rearm or reuse of the preceding receipt. Current phase: REPAIR_VALIDATED,
-deployment/controlled recovery pending.
+not prove sustained recovery. Breaker stayed TRIPPED during repair; no repeated
+rearm or reuse of the preceding receipt. Repair/deployment/recovery are completed
+as recorded above; sustained Production acceptance remains pending.
 
 New cause: `_process_source_transcription` formatted accepted source-language
 SRT, deleted its now-stale diagnostics and cleared the hold. The source manifest
@@ -49,7 +149,7 @@ The interrupted observation baseline cannot satisfy uninterrupted24-hour deliver
 acceptance. Preserve its Gate/results; only actual new runtime deployment permits
 the existing invalidation/new-baseline policy. Do not restart observation for queries.
 
-## Current incident
+## Initial incident (prior baseline; preserved evidence)
 
 Read-only snapshot `/logs/reliability-20260920/diagnostic-1789856641308746202.json`:
 Worker d4155dbd0d74c67ebea971beb3e413b3633bf129, WebUI f956b762 unchanged.
@@ -138,7 +238,7 @@ checks, and rejects another trip or old SRT incident proof. No latch/state delet
 | WebUI waiting reason | Shows generic admission guard in scheduler | Expose authoritative underlying reason/time/recovery condition only |
 | Temporary Docker lifecycle | Discovery requires labels/mounts/run evidence, not names alone | Export evidence, exact non-force removal, repair existing launch/teardown paths |
 
-## Deployed repair and controlled recovery
+## First deployed repair and controlled recovery (superseded baseline)
 
 Safe deployment `20260919T232213Z-2029080` exited0. Actual Worker
 `2a44df9cdc064fca62ad43aaa43d3714e955698f`, image
@@ -202,7 +302,8 @@ provider observation VERIFIED with fresh checked_at1789860989.280377.
 The one-shot `observe_existing_evidence.py` only reads indexed existing events
 and writes closeout evidence; it is not a new observer, Queue, timer or admission path.
 
-Minimum observation end: **2026-09-20T23:33:51.350781Z** (Sep21 07:33:51 Taipei).
+Original minimum end was2026-09-20T23:33:51.350781Z; the recurrence interrupted
+this window. Use only the current baseline/time above for new acceptance.
 Do not finish at that time automatically: also require all fixed20 results,
 multiple terminal/next-claim cycles, at least2 truly new valid formal TC deliveries,
 and no unresolved safety incident. Query existing durable evidence on continuation,

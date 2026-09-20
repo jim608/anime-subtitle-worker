@@ -1,5 +1,21 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-20 00:12 UTC — latest deployed repair, sustained evidence still pending
+
+Worker6f400b4c4818d196785f26b67ae35caefcf472c4 safely deployed; WebUI69f2352
+unchanged. Source-ASR formatting now preserves accepted diagnostic/checkpoint
+continuity and rejects unproven caches before translation/publication/manifest.
+Actual-image572 plus real restart and fresh7/7 breaker tests PASS; exact new
+incident controlled recovery352653f76f3546c59e480d696fe27f59 ARMED.105 holds,
+53 backups preserved, historical UNPROVEN unchanged. Old233351 Gate retained
+and invalidated only by actual runtime change; new001228986223Z-5eee243835
+start2026-09-20T00:12:28.986223Z,0/20 at00:16:27Z. Historical attempts excluded.
+One live safe review -> next auto source-ASR claim/heartbeat proven;0 new strict
+formal outputs verified. Minimum24h endSep21 00:12:28.986223Z, plus fixed20/all
+results, multiple continuations and2 new valid outputs. Server observer continues.
+See `docs/RELIABILITY_ACCEPTANCE_20260920.md` and recurrence evidence root there.
+Current WAITING_FOR_EVIDENCE; M2 NOT COMPLETE. Do not redeploy for document sync.
+
 ## 2026-09-20 — current full-flow reliability Goal remains incomplete
 
 The later source-transcript strict-evidence incident supersedes the narrow

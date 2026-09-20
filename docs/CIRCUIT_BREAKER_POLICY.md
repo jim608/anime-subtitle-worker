@@ -1,5 +1,21 @@
 # M2 Circuit Breaker Policy
 
+## 2026-09-20 source-ASR normalization evidence-loss incident
+
+Source-language ASR formatting must use the existing accepted SRT/diagnostic
+checkpoint-pair transaction and shared full quality validation. Missing old ASR
+acceptance is UNKNOWN, not evidence that can be recreated after publication.
+M2 source-ASR cache/translation/publication/manifest boundaries refuse absent,
+unaccepted or mismatched diagnostics; genuine non-ASR subtitle sources remain
+distinct. No relaxation of hallucination checks, source protection or repair budget.
+Exact new incident recovered using existing `asr_postprocess_diagnostics_loss`
+and `m2-asr-postprocess-regression-v1` contracts, not a new framework or latch clear.
+Original result/hash/claim/Gate binding, retained incident hold, actual-image tests,
+restart/source/DB/runtime checks required. Later or unrelated faults still refuse.
+Recovery352653f76f3546c59e480d696fe27f59 moved TRIPPED -> ARMED only after
+safe deployment6f400b4;105 holds and53 backups remain. The failed previous
+observation window is retained and cannot count as continuous24-hour acceptance.
+
 ## 2026-09-20 exact source-transcript evidence bridge
 
 The newly reproduced incorrect_completion incident was not the old malformed-SRT

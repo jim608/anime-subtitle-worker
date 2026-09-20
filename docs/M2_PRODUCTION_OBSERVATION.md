@@ -1,5 +1,24 @@
 # M2 Production Observation
 
+## 2026-09-20 00:12 UTC — recurrence repair; current WAITING_FOR_EVIDENCE
+
+Actual Worker `6f400b4c4818d196785f26b67ae35caefcf472c4`, WebUI69f2352 unchanged.
+The23:45:34 source-ASR diagnostic-loss incident interrupted the previous window;
+its original failed result and receipt remain preserved, not reused as clearance.
+Typed controlled recovery `m2breakerrec_352653f76f3546c59e480d696fe27f59` returned
+ARMED after safe deploy, actual-image572/restart and fresh7/7 tests.
+New Gate `m2-gate-20260920T001228986223Z-5eee243835`, baseline
+`m2-guardrail-v1:0a6d3597e833a5da1b634964`, start2026-09-20T00:12:28.986223Z;
+old233351 Gate INVALIDATED_BY_RUNTIME_CHANGE. All results/history retained.
+00:16:27Z snapshot0/20; two historical attempts supplemental, no replacements.
+One real safe review00:13:29Z -> next auto-claim00:14:21Z -> source-ASR/heartbeat
+00:14:57Z proven.105 holds and53 backups preserved. Verified new formal outputs0.
+Existing observer/cron continue; earliest24h end2026-09-21T00:12:28.986223Z,
+also requiring all fixed20 results, multiple continuations and2 new strict outputs.
+Evidence `/logs/reliability-20260920/recurrence-1789861657751744899/`;
+full criteria in `docs/RELIABILITY_ACCEPTANCE_20260920.md`. M2 NOT ACCEPTED.
+Document-only updates must not deploy or recreate this Gate.
+
 ## 2026-09-20 — source-transcript repair deployed; WAITING_FOR_EVIDENCE
 
 Worker2a44df9cdc064fca62ad43aaa43d3714e955698f / WebUI host-script commit

@@ -9,15 +9,24 @@ Work checklist: docs/RELIABILITY_ACCEPTANCE_20260920.md. Includes exact temporar
 container archival/cleanup and existing launcher lifecycle fixes, not a new framework.
 Require relevant server-isolated regression, safe deployed repair,24-hour autonomous
 observation, fixed20 complete results, multiple continuations and2 new strict outputs.
-No Goal complete from ARMED/queued/tests/one heartbeat. Current REPAIR_VALIDATED,
-new source-normalization recurrence23:45:34Z requires safe deployment/recovery.
-The previous WAITING snapshot below is historical, not ongoing success.
-Worker2a44df9 deployed; exact source-transcript incident controlled recovery ARMED.
-Fixed Gate233351 starts2026-09-19T23:33:51.350781Z; earliest24h endSep20 same UTC.
-One real safe-review -> next automatic ASR claim verified, not sustained acceptance.
-104 holds/UNPROVEN and52 backups retained;5 proven old temp containers archived
-and removed non-force, final related stopped0. Full evidence and pending delivery
+No Goal complete from ARMED/queued/tests/one heartbeat. Current WAITING_FOR_EVIDENCE:
+new source-normalization recurrence23:45:34Z repaired by actual Worker
+6f400b4c4818d196785f26b67ae35caefcf472c4; safe deployment20260920T000919Z-2451937,
+actual-image572/restart/fresh7 PASS; exact new-incident controlled recovery ARMED.
+Fixed Gate001228986223Z-5eee243835 starts2026-09-20T00:12:28.986223Z;
+earliest24h endSep21 same UTC. Previous interrupted window/Gate retained, not PASS.
+One new real safe-review00:13:29Z -> next automatic source-ASR claim00:14:21Z,
+Stage/heartbeat00:14:57Z verified, not sustained acceptance. New strict outputs0.
+105 holds/UNPROVEN and53 backups retained;5 proven old temp containers archived
+and removed non-force, new test fixture teardown also proven. Full evidence and pending delivery
 requirements remain in docs/RELIABILITY_ACCEPTANCE_20260920.md. No new Goal/M3.
+
+Follow-up00:22:49Z:6f400b4 proves1 genuinely new335-cue TC output with full strict
+evidence and3 real continuations. One independent corrupt-encoding SRT candidate
+still raised worker_unknown. Minimal candidate-QC UnicodeDecodeError classification
+fix is now172-test/restart/real-read-only-replay validated, pending safe deploy.
+Other exceptions/safety boundaries unchanged. Keep running jobs intact; preserve
+the current Gate until actual result-affecting deployment, never transfer its result.
 
 ## Exact SRT incident recovery complete — 2026-09-19 15:28 UTC
 
