@@ -755,6 +755,8 @@ def _source_transcription_provenance_matches(
                 return False
             return True
 
+        if bool(getattr(config, "m2_server_canary_observer_enabled", False)) and not diagnostic_path.is_file():
+            return False
         if diagnostic_path.is_file():
             diagnostic = read_asr_diagnostics(source_path, config)
             if str(diagnostic.get("status") or "") not in {

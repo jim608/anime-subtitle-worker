@@ -9,7 +9,9 @@ Work checklist: docs/RELIABILITY_ACCEPTANCE_20260920.md. Includes exact temporar
 container archival/cleanup and existing launcher lifecycle fixes, not a new framework.
 Require relevant server-isolated regression, safe deployed repair,24-hour autonomous
 observation, fixed20 complete results, multiple continuations and2 new strict outputs.
-No Goal complete from ARMED/queued/tests/one heartbeat. Current WAITING_FOR_EVIDENCE.
+No Goal complete from ARMED/queued/tests/one heartbeat. Current REPAIR_VALIDATED,
+new source-normalization recurrence23:45:34Z requires safe deployment/recovery.
+The previous WAITING snapshot below is historical, not ongoing success.
 Worker2a44df9 deployed; exact source-transcript incident controlled recovery ARMED.
 Fixed Gate233351 starts2026-09-19T23:33:51.350781Z; earliest24h endSep20 same UTC.
 One real safe-review -> next automatic ASR claim verified, not sustained acceptance.

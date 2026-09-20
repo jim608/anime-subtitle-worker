@@ -2333,6 +2333,10 @@ class VideoWorker:
             source_paths.srt.is_file()
             and not self._asr_cache_diagnostics_are_trusted(source_paths.srt)
         ):
+            if bool(getattr(self.config, "m2_server_canary_observer_enabled", False)):
+                # Preserve unproven cache/evidence and its repair budget. A
+                # missing acceptance record is not permission to recreate it.
+                raise SourceSelectionReviewError("asr_cache_acceptance_unproven")
             self.logger.warning(
                 "Invalidating untrusted source-language ASR cache before reuse: "
                 "video=%s language=%s srt=%s diagnostic=%s",
@@ -2412,17 +2416,6 @@ class VideoWorker:
                         "Fresh source-language ASR diagnostic is rejected or "
                         f"untrusted: {source_paths.srt}"
                     )
-                normalized = self._normalize_source_language_srt_for_readability(
-                    source_paths.srt
-                )
-                if normalized:
-                    # The final validated SRT no longer matches the backend's
-                    # pre-normalization diagnostic hash.  The durable hold is
-                    # still active, so removing that stale evidence is safe.
-                    asr_diagnostics_path(
-                        source_paths.srt,
-                        self.config,
-                    ).unlink(missing_ok=True)
                 self._finish_asr_commit(
                     source_paths.srt,
                     hold,
@@ -2467,6 +2460,13 @@ class VideoWorker:
                 f"Source-language SRT cache hit language={source_paths.language}",
             )
             self.logger.info("Source-language SRT exists, skip ASR: %s", source_paths.srt)
+
+        # The raw accepted checkpoint is now committed. Formatting uses the
+        # existing recoverable SRT/diagnostic pair transaction, also on resume.
+        # A failed formatting step must not discard the accepted ASR checkpoint.
+        self._normalize_source_language_srt_for_readability(
+            source_paths.srt, active_config=transcribe_config
+        )
 
         if bool(getattr(self.config, "translate_non_japanese_sources", True)):
             return self._translate_source_transcription(video, source_paths)
@@ -2514,6 +2514,14 @@ class VideoWorker:
     ) -> ProcessOutcome:
         """Translate a verified non-Japanese ASR transcript into strict zh-TW delivery."""
 
+        require_asr_diagnostics = source_subtitle is None and bool(
+            getattr(self.config, "m2_server_canary_observer_enabled", False)
+        )
+        self._enforce_asr_publication_gate(
+            source_paths.srt,
+            label=f"Source-language:{source_paths.language}",
+            require_diagnostics=require_asr_diagnostics,
+        )
         canonical_paths = paths_for_video(video, self.config)
         translated_paths = SubtitlePaths(
             ja_srt=source_paths.srt,
@@ -2697,6 +2705,7 @@ class VideoWorker:
                 translated_paths,
                 source_language=source_paths.language,
                 allow_source_timing_remediation=source_subtitle is None,
+                require_asr_diagnostics=require_asr_diagnostics,
             )
             source_stat = source_paths.srt.stat()
             publication_provenance = (
@@ -5336,6 +5345,7 @@ class VideoWorker:
         *,
         source_language: str = "ja",
         allow_source_timing_remediation: bool = True,
+        require_asr_diagnostics: bool = False,
     ) -> int:
         """Validate a complete staged ASS set before replacing media sidecars."""
 
@@ -5351,6 +5361,7 @@ class VideoWorker:
                 if source_is_japanese
                 else f"Source-language:{source_language}"
             ),
+            require_diagnostics=require_asr_diagnostics,
         )
         srt_snapshots: dict[Path, bytes] = {}
         for srt_path in (paths.ja_srt, paths.zh_cn_srt, paths.zh_tw_srt):
@@ -5378,6 +5389,7 @@ class VideoWorker:
                     if source_is_japanese
                     else f"Source-language:{source_language}"
                 ),
+                require_diagnostics=require_asr_diagnostics,
             )
             run_token = f"{time.time_ns()}-{hashlib.sha1(str(video).encode('utf-8')).hexdigest()[:8]}"
             video_digest = hashlib.sha1(str(video.resolve()).encode("utf-8", errors="replace")).hexdigest()[:16]
@@ -5890,6 +5902,7 @@ class VideoWorker:
         self._enforce_asr_publication_gate(
             source_srt,
             label="source-language",
+            require_diagnostics=bool(getattr(self.config, "m2_server_canary_observer_enabled", False)),
         )
         run_token = f"{time.time_ns()}-{hashlib.sha1(str(video).encode('utf-8')).hexdigest()[:8]}"
         video_digest = hashlib.sha1(str(video.resolve()).encode("utf-8", errors="replace")).hexdigest()[:16]
@@ -5918,6 +5931,7 @@ class VideoWorker:
         srt_path: Path,
         *,
         label: str,
+        require_diagnostics: bool = False,
     ) -> None:
         hold = asr_transcription_hold_path(srt_path, self.config)
         if hold.is_file():
@@ -5926,16 +5940,28 @@ class VideoWorker:
             )
         diagnostic = asr_diagnostics_path(srt_path, self.config)
         if not diagnostic.is_file():
+            if require_diagnostics:
+                raise SourceSelectionReviewError("asr_cache_acceptance_unproven")
             return
         try:
             trusted = self._asr_cache_diagnostics_are_trusted(srt_path)
         except OSError:
             trusted = False
         if not trusted:
+            if require_diagnostics:
+                raise SourceSelectionReviewError("asr_cache_acceptance_unproven")
             raise SubtitleQualityError(
                 f"{label} ASR diagnostic is rejected, corrupt, or does not "
                 f"match the SRT; retranscription is required: {diagnostic}"
             )
+        if require_diagnostics:
+            blocks = read_srt(srt_path)
+            if not blocks or any(
+                not " ".join(block.text).strip()
+                or _is_hallucination_text(" ".join(block.text).strip(), self.config)
+                for block in blocks
+            ):
+                raise SourceSelectionReviewError("asr_cache_acceptance_unproven")
 
     def _persist_validated_quality_reports(
         self,
@@ -6840,10 +6866,9 @@ class VideoWorker:
     def _asr_cache_diagnostics_are_trusted(self, srt_path: Path) -> bool:
         diagnostic_path = asr_diagnostics_path(srt_path, self.config)
         if not diagnostic_path.is_file():
-            # Legacy caches and backends with diagnostics disabled are accepted
-            # only when there is no pending marker.  Every new worker-managed
-            # attempt has the durable hold as its crash barrier.
-            return True
+            # Legacy non-M2 compatibility cannot authorize an unproven M2
+            # source cache, even after its pending marker has disappeared.
+            return not bool(getattr(self.config, "m2_server_canary_observer_enabled", False))
         diagnostics = read_asr_diagnostics(srt_path, self.config)
         status = str(diagnostics.get("status") or "")
         expected_sha256 = str(diagnostics.get("srt_sha256") or "").strip()
@@ -7724,7 +7749,9 @@ class VideoWorker:
         if empty_blocks:
             raise TranscriptionError(f"{label} SRT has empty subtitle blocks at indexes {empty_blocks[:10]}: {path}")
 
-    def _normalize_source_language_srt_for_readability(self, path: Path) -> bool:
+    def _normalize_source_language_srt_for_readability(
+        self, path: Path, *, active_config: AppConfig | None = None
+    ) -> bool:
         max_chars = int(
             getattr(
                 self.config,
@@ -7748,7 +7775,12 @@ class VideoWorker:
                 changed = True
             normalized.append(SrtBlock(index=block.index, timing=block.timing, text=wrapped))
         if changed:
-            write_srt(path, normalized)
+            from asr_postprocess import commit_asr_postprocess
+
+            if not commit_asr_postprocess(path, normalized, active_config or self.config, self.logger):
+                # The helper only permits this legacy compatibility path when
+                # M2 is disabled and there was no acceptance record to preserve.
+                write_srt(path, normalized)
             self.logger.info("Normalized source-language SRT readability: %s max_chars=%s", path, max_chars)
         return changed
 

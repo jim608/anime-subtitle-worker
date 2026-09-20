@@ -5,6 +5,50 @@ No M3, full-library rescan, broad Queue retry, QC relaxation, source/valid-outpu
 overwrite, backup deletion, or ASR-budget reset. Server must own the eventual
 24-hour observation using existing observer/ledger; not a second framework.
 
+## New recurrence supersedes the previous WAITING closeout
+
+At2026-09-19T23:45:34.896185Z, task `m2ai_99a4c7f0c7371ecb7248` again reached
+incorrect_completion/hallucination_validation_pass failure on deployed2a44df9.
+The prior ARMED snapshot and one continuation remain historically true, but do
+not prove sustained recovery. Breaker remains TRIPPED during repair; no repeated
+rearm or reuse of the preceding receipt. Current phase: REPAIR_VALIDATED,
+deployment/controlled recovery pending.
+
+New cause: `_process_source_transcription` formatted accepted source-language
+SRT, deleted its now-stale diagnostics and cleared the hold. The source manifest
+validator allowed absent diagnostics; strict terminal validation correctly did
+not. The exact real transcript has no flagged hallucination cues and unchanged
+source/output checksums, but missing original ASR evidence is not fabricated.
+It remains a preserved review incident, not a new accepted delivery.
+
+Candidate connects source-language formatting to existing `commit_asr_postprocess`:
+first commit the accepted raw checkpoint, then atomically validate/commit the
+formatted SRT plus hash-bound diagnostics. Restart restores that pair and skips
+ASR. M2 unproven source caches review before translation, full text is checked
+before publication, and M2 source manifests cannot accept missing diagnostics.
+Non-ASR subtitle sources and non-M2 compatibility stay distinct; no QC threshold,
+model route or ASR repair budget was relaxed or reset.
+
+Evidence `/logs/reliability-20260920/`:
+`source-continuity-before.log` reproduces the missing evidence (9 tests,11 failed
+subtests); `source-continuity-related-3.log`245 PASS after the fix, including full
+Worker/source-priority/strict/publication/safety and existing recovery tests.
+`source-continuity-restart-candidate/restart-boqdvwhu/state/source-result.json`
+proves actual os._exit/restart/checkpoint pair restoration/no repeated ASR;
+its `result.json` proves correct review -> next real isolated claim/Stage.
+The mount allowlist correctly retained this finished candidate fixture for
+explicit verification; full inspect/logs/artifacts exported, then exact ID943bab7e
+non-force removed. Original cleanup warning and failed mount-order check retained.
+Future candidate runner uses only the existing fixture bind allowlist.
+`recurrence-1789861657751744899/read-only-canary-candidate.log` proves the exact
+real missing-diagnostic transcript is refused before translation, source and
+all original artifacts unchanged, zero Production writes/new deliveries.
+The older failed diagnostic/test attempts remain separate, not relabelled PASS.
+
+The interrupted observation baseline cannot satisfy uninterrupted24-hour delivery
+acceptance. Preserve its Gate/results; only actual new runtime deployment permits
+the existing invalidation/new-baseline policy. Do not restart observation for queries.
+
 ## Current incident
 
 Read-only snapshot `/logs/reliability-20260920/diagnostic-1789856641308746202.json`:

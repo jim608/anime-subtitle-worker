@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from test_support import configure_isolated_test_tempdir
+from transcriber import read_asr_diagnostics
 
 configure_isolated_test_tempdir()
 
@@ -4619,7 +4620,9 @@ class VideoWorkerTest(unittest.TestCase):
                 *,
                 source_language: str,
                 allow_source_timing_remediation: bool,
+                require_asr_diagnostics: bool,
             ) -> int:
+                self.assertFalse(require_asr_diagnostics)  # legacy non-M2 fixture
                 seen["publication_source_language"] = source_language
                 seen["allow_source_timing_remediation"] = (
                     allow_source_timing_remediation
@@ -4905,7 +4908,12 @@ class VideoWorkerTest(unittest.TestCase):
             video = root / "Assassination Classroom S01E20.mkv"
             video.write_bytes(b"video")
             audio = root / "audio.wav"
-            audio.write_bytes(b"audio")
+            import wave
+            with wave.open(str(audio), "wb") as wav:
+                wav.setnchannels(1)
+                wav.setsampwidth(2)
+                wav.setframerate(16000)
+                wav.writeframes(b"\0\0" * 16000 * 5)
             config = _config(
                 root,
                 export_ai_ass=True,
@@ -4975,6 +4983,7 @@ class VideoWorkerTest(unittest.TestCase):
                         {
                             "status": "accepted",
                             "srt_path": str(target),
+                            "audio_path": str(audio),
                             "srt_sha256": sha256_file(target),
                         }
                     ),
@@ -5022,8 +5031,10 @@ class VideoWorkerTest(unittest.TestCase):
             self.assertFalse(fallback_config.whisper_condition_on_previous_text)
             self.assertTrue(fallback_config.asr_optional_rescue_rejection_is_fatal)
             self.assertGreater(len(read_srt(source_paths.srt)[0].text), 1)
-            self.assertFalse(
-                asr_diagnostics_path(source_paths.srt, config).exists()
+            self.assertTrue(asr_diagnostics_path(source_paths.srt, config).is_file())
+            self.assertEqual(
+                read_asr_diagnostics(source_paths.srt, config)["srt_sha256"],
+                sha256_file(source_paths.srt),
             )
             self.assertFalse(
                 asr_transcription_hold_path(source_paths.srt, config).exists()
