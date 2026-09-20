@@ -5,6 +5,26 @@ No M3, full-library rescan, broad Queue retry, QC relaxation, source/valid-outpu
 overwrite, backup deletion, or ASR-budget reset. Server must own the eventual
 24-hour observation using existing observer/ledger; not a second framework.
 
+## Low-frequency live window (05:30 UTC; same runtime and Gate)
+
+`observation-check-1789882229325759596.json` at05:30:28.983Z: same f52118c/imagee624e0e8,
+ARMED/runtime_baseline_match, provider freshly VERIFIED,105 holds, no pause or
+reconciliation hold. No new trip. Gate014830 remains ACTIVE:18 enrolled/17 settled,
+1 strict COMPLETED,16 NEEDS_REVIEW and1 processing. All27 attempts fit the bounded
+sample:17 distinct automatic continuations,9 same-obligation repairs separate.
+Latest different-task sequence:42270fc4c1ce7b62f3aa quality review05:29:08.729144Z
+-> 2b92ab830b2b2e76d60a claim05:30:03.799858Z -> verified subtitle-detection
+checkpoint05:30:09.140651Z -> language-detection Stage/heartbeat05:30:13.638267Z.
+Checkpoint0598331bac9c96eda7adacf18b451680e3c697a853fdb197622b304ecacc504c.
+Do not promote a running Stage or review into a delivery. Current-baseline new
+formal TC count remains1;3.700 hours is not24-hour acceptance.
+
+Only the known live main process was monitored between snapshots. `window-0530.*`
+records04:34:40..05:29:40Z; exit124 is the read-only waiter's deadline, not a Worker
+exit/signal. No full Queue/media scan, Docker-log polling or Production mutation.
+No runtime deployment/Gate reset. All20 outcomes, second current-baseline new target,
+and24-hour sustained safety/admission evidence remain WAITING_FOR_EVIDENCE.
+
 ## Low-frequency live window (04:30 UTC; same runtime and Gate)
 
 `observation-check-1789878621438532173.json` at04:30:21.058Z records f52118c/imagee624e0e8,
@@ -69,6 +89,22 @@ No manual retry, new pause, breaker recovery or scheduling override was used.
 Evidence under `/logs/reliability-20260920/report-export-handoff-20260920/`:
 `observation-check-1789875016203506347.json`,
 `final-publication-1789875385068802312.json`, `final-publication-4fea-verification.log`.
+
+Additional read-only source-decision/preservation proof at05:34 UTC:
+`review-decisions-1789882229797071628.json` exports exact pre-publication decision
+effe79a9f0d647aa9afa468888d476c0, created02:58:27.262614Z. SHA256
+951166bc141dde7ff44185d5c446d313c0746cd0ab1591b7ccf56bb82bfe097a matches the saved
+provenance. Its inventory was complete:18 subtitle candidates,0 eligible; the four
+TC/CN sidecar aliases failed existing hard QC with invalid_timing (duplicate content
+also identified). Two audio tracks were evaluated; selected JA confidence0.96,
+reason trusted_japanese_audio_no_usable_subtitle. Existing subtitles were present,
+but no valid directly usable TC candidate was recorded; this is not revalidation
+of an already valid subtitle or a filename-only inference of a missing target.
+`prior-sidecar-preservation-1789882466835961673.json`/`prior-sidecar-preservation-4fea.log`
+verify all17 prior sidecar files still have the original decision's SHA256/size/mtime.
+Those expected fingerprints predate publication; current hashes are not substituted
+for historical evidence.0 source writes,0 new deliveries counted by this extra check.
+
 Current-baseline new formal TC targets:1. Goal-to-date:3, of which2 belong to the
 separate6f400b4 baseline and are not transferred into this Gate. Sep12 download/
 extraction evidence remains historical/reused, not a new delivery. Remaining:
@@ -635,8 +671,8 @@ checks, and rejects another trip or old SRT incident proof. No latch/state delet
 | TC/CN/JA subtitle and trusted-JA ASR | Related routing/QC/cache regressions PASS; f521 trusted-JA ASR produced1 new402-cue strict TC target, verified at final location | Subtitle-route regression and reused download evidence remain separately attributed; one output is not sustained acceptance |
 | Existing non-JA ASR translation | PASS: accepted diagnostic continuity fixed,2 real335/318-cue strict deliveries on6f400b4 | Retain version attribution; do not transfer into latest Gate |
 | Transient failures vs review | PASS relevant tests; exact exhausted readability repair produced real review/next claim on6069fcb; report access failure now isolated onf52118c | Unknown faults/disk/DB/journal/collision still block; no budget resets |
-| Publish/mux/terminal/next claim | f521 formal manifest/journal/final QC PASS; success03:09:06Z -> different claim03:10:05Z/checkpoint heartbeat03:10:11Z/JA ASR03:10:29Z; runtime mux disabled | At04:30Z14 distinct continuations are in the bounded21-attempt sample,6 same-task repairs separate; second current-baseline delivery and24-hour proof remain pending |
-| Provider/Gate/observation/restart | PASS expiry/refresh, settlement and real restart; report-access retry budget persists; cron refreshes fresh evidence | At04:30Z same ACTIVE Gate15 enrolled/14 settled,1 strict/13 review/1 running; all20 and24 hours not passed |
+| Publish/mux/terminal/next claim | f521 formal manifest/journal/final QC PASS; success03:09:06Z -> different claim03:10:05Z/checkpoint heartbeat03:10:11Z/JA ASR03:10:29Z; runtime mux disabled | At05:30Z17 distinct continuations are in the bounded27-attempt sample,9 same-task repairs separate; second current-baseline delivery and24-hour proof remain pending |
+| Provider/Gate/observation/restart | PASS expiry/refresh, settlement and real restart; report-access retry budget persists; cron refreshes fresh evidence | At05:30Z same ACTIVE Gate18 enrolled/17 settled,1 strict/16 review/1 running; all20 and24 hours not passed |
 | Historical recovery/fair admission | Real normal/recovery claims retained, budgets/checkpoints not reset | Continued fairness/no starvation is a sustained-observation criterion |
 | WebUI waiting reason | Existing underlying reason/time wiring retained; bounded03:41 check distinguished an inter-job idle gap from actual admission refusal | No interface redesign; surface future actual admission reasons |
 | Temporary Docker lifecycle | PASS7 actual lifecycle/10 deployment-script tests; initial5 removed, latest targeted inventory had0 related stopped containers | Labels/--rm/traps/owned-orphan handling in existing entrypoints, no service cleanup |

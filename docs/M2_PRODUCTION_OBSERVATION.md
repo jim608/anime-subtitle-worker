@@ -1,5 +1,21 @@
 # M2 Production Observation
 
+## 2026-09-20 05:30 UTC — continued automatic claims, source preservation corroborated
+
+Samef52118c runtime/ARMED/fresh provider VERIFIED,105 holds, no pause or new trip.
+Same014830 Gate18 enrolled/17 settled:1 strict,16 review,1 processing. The bounded
+27-attempt sample records17 distinct continuations and9 same-task repairs separately.
+Latest review05:29:08Z -> different2b92ab830b2b2e76d60a claim05:30:03Z -> verified
+checkpoint05:30:09Z -> language-detection Stage/heartbeat05:30:13Z. No manual Retry.
+Current-baseline new TC remains1. Its original pre-publication decision was exported
+and hash-matched:18 subtitle candidates,0 eligible; TC/CN candidates failed hard QC.
+All17 existing sidecars' original SHA256/size/mtime remain unchanged. This strengthens
+the existing402-cue delivery proof, does not add another delivery, and does not
+assert that no subtitle files existed. Evidence: observation-check-1789882229325759596.json,
+review-decisions-1789882229797071628.json, prior-sidecar-preservation-1789882466835961673.json
+in the current evidence root.3.700 hours is not24h. All20/second current-baseline
+output/sustained proof remain pending. Documentation only; no deployment/Gate mutation.
+
 ## 2026-09-20 04:30 UTC — continued autonomous processing, no baseline change
 
 Actualf52118c/imagee624e0e8 still ARMED; provider freshly VERIFIED,105 holds,
