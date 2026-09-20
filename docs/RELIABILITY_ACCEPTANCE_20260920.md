@@ -5,7 +5,52 @@ No M3, full-library rescan, broad Queue retry, QC relaxation, source/valid-outpu
 overwrite, backup deletion, or ASR-budget reset. Server must own the eventual
 24-hour observation using existing observer/ledger; not a second framework.
 
-## Follow-up encoding classification repair (candidate; deployment pending)
+## Latest deployed baseline70abdc2; quality terminal candidate validated
+
+Encoding repair safely deployed as `70abdc2684dfdd6171c71c71763376c647086ca8`,
+image `sha256:b3b759cf50248c081722d8a17449b53636e85bdb9e2128a4dbfeaf3ad1573efe`.
+Deployment `20260920T004010Z-2739505` completed. Actual-image642 tests PASS;
+actual Docker quality-candidate review/restart/checkpoint/next-claim and real
+read-only encoding-source replay PASS. Recovery
+`m2breakerrec_20bd9a1c79604026bb6738b17bfc2396` restored ARMED and released only
+owned pause at00:43:43.953804Z.105 holds remain; all53 prior backups plus new54
+retained. Reconciliation `m2-recon-source-encoding-20260920` (SHA256
+`bb881746519a6586bfeeb066038a702c0b0b02e6d9828c93a96344b9bedfc13d`),0 new differences.
+Old001228 Gate retained/INVALIDATED_BY_RUNTIME_CHANGE. New
+`m2-gate-20260920T004343198914Z-5c074626fa`, baseline
+`m2-guardrail-v1:782ac873948e53bca3c1614a`, starts00:43:43.198914Z at0/20.
+Evidence root `/logs/reliability-20260920/encoding-handoff-20260920/`.
+
+The last predeployment job naturally ended at00:39:13.178Z, not killed:
+`m2ai_4042788fbbd12585edde` exhausted2/2 targeted readability repairs (24 chars,
+hard allowance23). Completed translation checkpoint retained. Normal Queue wrongly
+classified this proven deterministic quality condition as translation_unknown /
+bounded_retry; historical recovery already classifies the exact condition as
+QUALITY_BLOCKED. Candidate changes ONLY main._ai_failure_policy: anchored exact
+bounded-repair failure in the translation stage -> existing subtitle_quality_review /
+manual_review. No blanket TranslationError catch, QC change, budget reset or fake
+completion. Timeout/OOM/unknown faults and source mutation continue original paths.
+
+Before test40 (including37 imported fixture tests) reproduced4 failed assertions;
+candidate fixture import corrected to avoid duplicate discovery, related374 PASS.
+Actual JA/zh/en two-attempt repair failures retain source/existing output bytes.
+Three distinct quality terminals remain ARMED and next claim succeeds. Real Docker
+restart `readability-restart-candidate/restart-fjgnyj8a/` preserves review and
+checkpoint, next claim/Stage and idempotency; fixture removed after evidence export.
+Logs `readability-terminal-before.log`, `readability-terminal-related.log`,
+`readability-restart-candidate.log`. Candidate not yet deployed; do not mix evidence.
+An attempted pre-retire cancellation was correctly NOT performed because safe
+deployment had already reached backup stage; no process/container was terminated.
+Any further deployment is specifically for this newly reproduced shared defect.
+
+Second genuine new TC output on6f400b4: `m2ai_335743db83bb4232b57a`,318 cues,
+COMPLETED00:27:05.676Z, all strict predicates and final-file parse/QC/source checksum
+PASS. Proof `recurrence-1789861657751744899/final-publication-1789865089081816293.json`.
+Together with335-cue output below:2 distinct new formal TC targets, counted once.
+They remain on6f400b4 evidence and do not populate any subsequent frozen Gate.
+Predeployment00:39:18Z snapshot5 true terminal->next-claim transitions, not24 hours.
+
+## Follow-up encoding classification repair (now deployed above)
 
 On6f400b4, task `m2ai_4709098eb5ad9c7bd956` actually completed00:19:07.054968Z,
 then next automatic claim00:20:01.424621Z. Final-location verification proved
@@ -38,7 +83,7 @@ This additional result-affecting change requires another safe deployment and
 normal runtime-change Gate policy, not clearance of a new global safety accident.
 Do not mix the delivered6f400b4 result into a later frozen cohort.
 
-## Current deployed baseline —6f400b4 (encoding candidate not deployed yet)
+## Previous deployed baseline —6f400b4 (preserved history)
 
 Second necessary safe deployment `20260920T000919Z-2451937` completed with exit0.
 Actual Worker `6f400b4c4818d196785f26b67ae35caefcf472c4`, image

@@ -21,12 +21,14 @@ Stage/heartbeat00:14:57Z verified, not sustained acceptance. New strict outputs0
 and removed non-force, new test fixture teardown also proven. Full evidence and pending delivery
 requirements remain in docs/RELIABILITY_ACCEPTANCE_20260920.md. No new Goal/M3.
 
-Follow-up00:22:49Z:6f400b4 proves1 genuinely new335-cue TC output with full strict
-evidence and3 real continuations. One independent corrupt-encoding SRT candidate
-still raised worker_unknown. Minimal candidate-QC UnicodeDecodeError classification
-fix is now172-test/restart/real-read-only-replay validated, pending safe deploy.
-Other exceptions/safety boundaries unchanged. Keep running jobs intact; preserve
-the current Gate until actual result-affecting deployment, never transfer its result.
+Follow-up:6f400b4 proves2 genuinely new335/318-cue TC outputs with full strict
+evidence and5 real continuations. Corrupt-encoding candidate fix is now deployed
+as70abdc2684dfdd6171c71c71763376c647086ca8, actual-image642/restart/real replay PASS,
+controlled recovery ARMED, Gate004343198914Z-5c074626fa0/20,105 holds/54 backups.
+Next newly reproduced gap: exhausted bounded display repair is quality-blocked
+in historical recovery but normal Queue says translation_unknown/bounded_retry.
+Minimal shared policy candidate now374-test/real-restart validated, pending deploy.
+No QC/budget relaxation. Preserve active work/Gates and do not mix runtime evidence.
 
 ## Exact SRT incident recovery complete — 2026-09-19 15:28 UTC
 

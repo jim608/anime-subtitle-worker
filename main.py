@@ -8934,6 +8934,14 @@ def _ai_failure_policy(stage: str, message: str) -> tuple[str, str]:
         return "source_unsupported", "permanent"
     if normalized_stage == "source_selection_review":
         return "source_selection_needs_review", "manual_review"
+    if normalized_stage == "translation" and re.fullmatch(
+        r"targeted subtitle readability repair exceeded its hard display limit "
+        r"at index [1-9]\d{0,6}: allowed=[1-9]\d{0,6}", normalized_message
+    ):
+        # Emitted only after both bounded display repairs fail. Preserve the
+        # completed translation checkpoint and use the existing quality review
+        # terminal, not another whole-job retry or a system-failure streak.
+        return "subtitle_quality_review", "manual_review"
     if any(
         marker in normalized_message
         for marker in (
