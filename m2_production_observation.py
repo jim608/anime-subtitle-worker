@@ -1595,6 +1595,7 @@ def public_status(config: Any) -> dict[str, Any]:
         "gate_baseline_version": str(
             gate_status.get("gate_baseline_version") or ""
         ),
+        "summary_export": dict(gate_status.get("summary_export") or {}),
         "circuit_breaker": {
             "enabled": bool(
                 getattr(config, "m2_server_canary_circuit_breaker_enabled", False)

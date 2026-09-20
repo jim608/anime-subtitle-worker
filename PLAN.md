@@ -30,6 +30,16 @@ Existing entrypoints lifecycle7/deployment-script10 and latest real restart tear
 Full evidence/current remaining requirements: docs/RELIABILITY_ACCEPTANCE_20260920.md.
 No new Goal/M3; documentation-only sync must not redeploy or recreate the Gate.
 
+Follow-up:6069fcb now proves exact exhausted-readability quality review01:23:07Z
+-> automatic next JA-ASR claim01:24:01Z/Stage01:24:28Z, still ARMED; Gate2 enrolled,
+1 settled/0 strict. A separate isolated report-permission regression found derived
+summary export EACCES falsely trips admission after durable Gate settlement.
+Minimal existing metadata/export boundary candidate defers only report-access errors,
+three persisted/backed-off attempts then waits for actual access change; journal/disk/
+DB/collision/unknown-fault safeguards remain. Non-root filesystem and179 related tests,
+existing real Docker restart/next-stage proof pass; final regression/deploy pending.
+No Production incident invented and no existing Gate modified during this analysis.
+
 ## Exact SRT incident recovery complete — 2026-09-19 15:28 UTC
 
 The missing real continuation is now proven, superseding the earlier bounded

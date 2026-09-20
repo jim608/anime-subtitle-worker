@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import errno
 import hashlib
 import json
+import logging
 import math
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -1259,6 +1262,67 @@ def reserve_result_event(
     }
 
 
+_REPORT_PERMISSION_ERRORS = frozenset({errno.EACCES, errno.EPERM, errno.EROFS})
+
+
+def _summary_export_retry(connection: sqlite3.Connection, gate_id: str) -> dict[str, Any]:
+    row = connection.execute(
+        "SELECT value FROM m2_observation_meta WHERE key=?",
+        (f"summary_export:{gate_id}",),
+    ).fetchone()
+    if row is None:
+        return {}
+    try:
+        value = json.loads(str(row[0]))
+        if (not isinstance(value, dict)
+                or value.get("status") not in {"RETRY_PENDING", "WAITING_FOR_ACCESS_CHANGE", "RESOLVED"}
+                or type(value.get("attempts")) is not int
+                or not 1 <= value["attempts"] <= 3
+                or not isinstance(value.get("access_fingerprint"), str)
+                or not math.isfinite(float(value["next_retry_at"]))):
+            raise ValueError("invalid export retry metadata")
+        return value
+    except (TypeError, ValueError, KeyError) as exc:
+        raise ObservationStoreError("summary_export_retry_evidence_invalid") from exc
+
+
+def _summary_export_access_fingerprint(directory: Path, target: Path) -> str:
+    """A targeted access-change condition, not a directory or media scan."""
+    candidate = directory
+    for _ in range(8):
+        try:
+            status = candidate.stat()
+            flags = os.statvfs(candidate).f_flag if hasattr(os, "statvfs") else 0
+            values = [str(candidate), status.st_dev, status.st_ino, status.st_mode,
+                      status.st_uid, status.st_gid, status.st_ctime_ns, flags]
+            try:
+                report = target.stat()
+                values.append([report.st_dev, report.st_ino, report.st_mode,
+                               report.st_uid, report.st_gid, report.st_ctime_ns])
+            except FileNotFoundError:
+                values.append("report_absent")
+            return hashlib.sha256(_json(values).encode("utf-8")).hexdigest()
+        except FileNotFoundError:
+            if candidate.parent == candidate:
+                break
+            candidate = candidate.parent
+        except OSError as exc:
+            if exc.errno not in _REPORT_PERMISSION_ERRORS:
+                raise
+            return hashlib.sha256(f"{candidate}:{exc.errno}".encode("utf-8")).hexdigest()
+    return hashlib.sha256(f"missing:{directory}".encode("utf-8")).hexdigest()
+
+
+def _save_summary_export_retry(connection: sqlite3.Connection, gate_id: str,
+                               state: Mapping[str, Any], now: float) -> None:
+    with immediate_transaction(connection):
+        connection.execute(
+            "INSERT INTO m2_observation_meta(key,value,updated_at) VALUES(?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+            (f"summary_export:{gate_id}", _json(state), now),
+        )
+
+
 def publish_pending_summaries(config: Any) -> list[str]:
     connection = connect_observation_database(config)
     emitted: list[str] = []
@@ -1280,13 +1344,46 @@ def publish_pending_summaries(config: Any) -> list[str]:
             output_dir = Path(str(config.m2_server_canary_observation_output_dir))
             if not output_dir.is_absolute():
                 output_dir = Path(str(config.work_path)) / output_dir
-            output_dir.mkdir(parents=True, exist_ok=True)
+            retry = _summary_export_retry(connection, str(gate_id))
+            now = time.time()
             target = output_dir / f"{gate_id}.json"
-            if target.exists():
-                if target.read_text(encoding="utf-8") != text:
-                    raise ObservationStoreError("summary_output_collision")
-            else:
-                atomic_write_text(target, text)
+            access = _summary_export_access_fingerprint(output_dir, target)
+            same_access = retry.get("access_fingerprint") == access
+            if retry and same_access and (
+                int(retry["attempts"]) >= 3 or now < float(retry["next_retry_at"])
+            ):
+                continue
+            try:
+                output_dir.mkdir(parents=True, exist_ok=True)
+                if target.exists():
+                    if target.read_text(encoding="utf-8") != text:
+                        raise ObservationStoreError("summary_output_collision")
+                else:
+                    atomic_write_text(target, text)
+            except OSError as exc:
+                # Only the derived report's access failure is deferrable. The
+                # immutable SQLite journal is already committed/hash-verified.
+                # ENOSPC/EIO, DB failures, collision and unknown code faults still
+                # propagate to the existing fail-closed admission boundary.
+                if exc.errno not in _REPORT_PERMISSION_ERRORS:
+                    raise
+                attempts = int(retry.get("attempts", 0)) + 1 if same_access else 1
+                state = {
+                    "status": "WAITING_FOR_ACCESS_CHANGE" if attempts >= 3 else "RETRY_PENDING",
+                    "reason_code": "summary_export_permission_denied",
+                    "errno": int(exc.errno), "attempts": attempts,
+                    "first_failed_at": retry.get("first_failed_at", now) if same_access else now,
+                    "failed_at": now,
+                    "next_retry_at": 0.0 if attempts >= 3 else now + 60 * (2 ** (attempts - 1)),
+                    "access_fingerprint": _summary_export_access_fingerprint(output_dir, target),
+                    "recovery_condition": "report_directory_access_changed" if attempts >= 3 else "bounded_backoff",
+                }
+                _save_summary_export_retry(connection, str(gate_id), state, now)
+                logging.getLogger(__name__).warning(
+                    "M2 report export deferred: gate=%s reason=%s errno=%s attempts=%s status=%s",
+                    gate_id, state["reason_code"], exc.errno, attempts, state["status"],
+                )
+                continue
             with immediate_transaction(connection):
                 changed = connection.execute(
                     """
@@ -1300,6 +1397,10 @@ def publish_pending_summaries(config: Any) -> list[str]:
                 ).rowcount
             if int(changed or 0) == 1:
                 emitted.append(target.name)
+            if retry:
+                _save_summary_export_retry(connection, str(gate_id),
+                    {**retry, "status": "RESOLVED", "resolved_at": time.time(),
+                     "next_retry_at": 0.0, "recovery_condition": ""}, time.time())
     finally:
         connection.close()
     return emitted
@@ -1516,6 +1617,7 @@ def status_summary(connection: sqlite3.Connection) -> dict[str, Any]:
         "strict_verified_count": strict_count,
         "summary_emitted_at": gate["summary_emitted_at"],
         "invalidation_reason": str(gate["invalidation_reason"]),
+        "summary_export": _summary_export_retry(connection, str(gate["gate_id"])),
     }
 
 

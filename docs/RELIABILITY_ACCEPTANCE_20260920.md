@@ -7,6 +7,33 @@ overwrite, backup deletion, or ASR-budget reset. Server must own the eventual
 
 ## Current baseline6069fcb — deployed; WAITING_FOR_EVIDENCE
 
+Follow-up admission audit reproduced a separate report-only defect in isolation:
+after all20 results are durably journaled, report-directory EACCES escaped terminal
+settlement; the next admission classified it as observation_state_degraded and
+tripped globally. This is NOT a new Production incident/clearance. Candidate limits
+deferral to report-export EACCES/EPERM/EROFS, preserving immutable journal/hash,
+full disk/EIO, database corruption, report collision and unknown-fault protection.
+Existing observation metadata records reason/time and three bounded attempts with
+backoff; unchanged failed access cannot retry forever. A real report-directory/file
+access change permits recovery; restart retains the budget. Public status exposes
+this report warning separately from the safety latch. No new Queue/framework/schema.
+Server non-root real-permission test and179 relevant tests PASS before final metadata
+refinement; final candidate regression and actual-image verification remain required.
+Existing Docker lifecycle proof `report-export-restart-candidate/restart-vsvv_45j/`
+preserves20 frozen results and retry budget through exit/restart, then publishes once
+after access changes and claims the next real isolated queue Stage. Fixture removed.
+Original failing logs remain (`report-export-before.log`, `report-export-targeted.log`).
+This candidate is not deployed yet; current runtime/Gate below remain authoritative.
+
+6069fcb real counterexample is now proven, not just first claim: task
+`m2ai_fe725855a8d35dee61f8` exhausted the existing hard-display repair at index140,
+allowed25; it correctly reached subtitle_quality_review01:23:07.851195Z instead of
+translation_unknown/bounded_retry. Next `m2ai_8a574174b40e28870976` auto-claimed
+01:24:01.445965Z and entered JA transcription01:24:28.627032Z. ARMED at01:25:57Z,
+two continuations; Gate enrolled2/20, settled1, strict0. Report
+`readability-handoff-20260920/observation-check-1789867557338683531.json` preserves
+the first member's review, not a replacement or strict success. No new output counted.
+
 Worker `6069fcb3729c12e64a7d892903f62cf391fb5563`, image
 `sha256:170661722f188234f403d476eb4d58f7d0846d9490c919ff1dc4113e7bc37e3d`,
 source revision `2878754113c9a3c2848972ff0c04126539c8331fc56b1914047fea4cd49d1b58`.
