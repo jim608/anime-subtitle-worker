@@ -5,6 +5,33 @@ No M3, full-library rescan, broad Queue retry, QC relaxation, source/valid-outpu
 overwrite, backup deletion, or ASR-budget reset. Server must own the eventual
 24-hour observation using existing observer/ledger; not a second framework.
 
+## Low-frequency live window (04:30 UTC; same runtime and Gate)
+
+`observation-check-1789878621438532173.json` at04:30:21.058Z records f52118c/imagee624e0e8,
+ARMED/runtime_baseline_match, provider freshly VERIFIED,105 holds, no pause or
+reconciliation hold. The latest historical trip is still the exact planned deployment
+event, not a new incident. Same014830 Gate:15 enrolled/14 settled,1 strict COMPLETED,
+13 NEEDS_REVIEW and1 running. All21 attempts fit the bounded32-attempt sample;
+14 distinct terminal-to-next-claim/Stage sequences and6 same-obligation repairs are
+reported separately. Elapsed2.698 hours is not24-hour acceptance.
+
+Previously queued task412fb3a870b8085a15de actually re-claimed03:53:58.679976Z,
+entered ASR03:54:02.708651Z, had durable stage heartbeat04:01:10.075241Z, then
+safely reviewed04:01:12.941462Z. A different task9fef3fec7a916f33cb96 automatically
+claimed04:03:08.793656Z. No manual retry, budget reset or failed-member substitution.
+Later task976623019d9c89f877ca reviewed04:25:57.977265Z -> different
+bfc73c9bacadb733f48c claimed04:26:51.061177Z -> verified checkpoint04:26:57.045961Z
+-> actual JA ASR04:27:24.805481Z -> active bounded-repair heartbeat04:30:04.972103Z.
+The running repair is not another publication or a new Gate member.
+
+Between snapshots, only the confirmed live main PID3357554 was monitored with a
+bounded read-only tail--pid wait. `window-0430.*` records03:54:40..04:28:40Z,
+waiter exit124 at its deadline (not Worker exit or a Worker signal). No Queue, media,
+WebUI or Docker-log polling during that interval. Existing server observers continued.
+No code/configuration/runtime/Gate change or extra cleanup. New current-baseline
+formal TC count remains1, verified below; historical2 deliveries remain separate.
+WAITING_FOR_EVIDENCE: all20 results, second current-baseline new target, and24 hours.
+
 ## First current-baseline formal publication verified (03:36 UTC)
 
 No code, configuration, container or Gate change. Worker remains
@@ -605,14 +632,24 @@ checks, and rejects another trip or old SRT incident proof. No latch/state delet
 | --- | --- | --- |
 | Watch/stabilize/deduplicate/claim | Relevant isolated regression PASS; latest real automatic claim/checkpoint | Sustained admission bound remains under24-hour observation |
 | Search/match/download/extract/import | PASS reused Sep12 formal351-cue target, replay queued0; TC/SC branch applicability checked above | No new delivery counted; unavailable external sources remain individually blocked |
-| TC/CN/JA subtitle and trusted-JA ASR | Related routing/QC/cache regressions PASS; latest real trusted-JA ASR active | Do not turn a running Stage into publication PASS |
+| TC/CN/JA subtitle and trusted-JA ASR | Related routing/QC/cache regressions PASS; f521 trusted-JA ASR produced1 new402-cue strict TC target, verified at final location | Subtitle-route regression and reused download evidence remain separately attributed; one output is not sustained acceptance |
 | Existing non-JA ASR translation | PASS: accepted diagnostic continuity fixed,2 real335/318-cue strict deliveries on6f400b4 | Retain version attribution; do not transfer into latest Gate |
 | Transient failures vs review | PASS relevant tests; exact exhausted readability repair produced real review/next claim on6069fcb; report access failure now isolated onf52118c | Unknown faults/disk/DB/journal/collision still block; no budget resets |
-| Publish/mux/terminal/next claim | PASS isolated publication/replay/restart;5 distinct continuations on6f400b4 and2 on6069fcb; runtime mux disabled | Latestf52118c terminal/next-claim and24-hour sustained evidence pending |
-| Provider/Gate/observation/restart | PASS expiry/refresh, settlement and real restart; report-access retry budget persists; cron refreshes fresh evidence | Latest ACTIVE enrolled1/20, settled0; fixed cohort and24 hours not passed |
+| Publish/mux/terminal/next claim | f521 formal manifest/journal/final QC PASS; success03:09:06Z -> different claim03:10:05Z/checkpoint heartbeat03:10:11Z/JA ASR03:10:29Z; runtime mux disabled | At04:30Z14 distinct continuations are in the bounded21-attempt sample,6 same-task repairs separate; second current-baseline delivery and24-hour proof remain pending |
+| Provider/Gate/observation/restart | PASS expiry/refresh, settlement and real restart; report-access retry budget persists; cron refreshes fresh evidence | At04:30Z same ACTIVE Gate15 enrolled/14 settled,1 strict/13 review/1 running; all20 and24 hours not passed |
 | Historical recovery/fair admission | Real normal/recovery claims retained, budgets/checkpoints not reset | Continued fairness/no starvation is a sustained-observation criterion |
-| WebUI waiting reason | Existing underlying reason/time wiring retained; scheduler now processing | No interface redesign; surface future actual admission reasons |
-| Temporary Docker lifecycle | PASS7 actual lifecycle/10 deployment-script tests; initial5 removed, final related stopped0 | Labels/--rm/traps/owned-orphan handling in existing entrypoints, no service cleanup |
+| WebUI waiting reason | Existing underlying reason/time wiring retained; bounded03:41 check distinguished an inter-job idle gap from actual admission refusal | No interface redesign; surface future actual admission reasons |
+| Temporary Docker lifecycle | PASS7 actual lifecycle/10 deployment-script tests; initial5 removed, latest targeted inventory had0 related stopped containers | Labels/--rm/traps/owned-orphan handling in existing entrypoints, no service cleanup |
+
+The03:51UTC sample is `report-export-handoff-20260920/observation-check-1789876303638821103.json`.
+Taskm2ai_412fb3a870b8085a15de was independently confirmed live (host child183983),
+then naturally exited03:48:19Z within a single720-second read-only process wait.
+Durable records show ASR quality review03:48:18.784072Z, not publication. Existing
+revision-bound autopilot queued its permitted repair03:49:00.107752Z; the03:52
+exact query still showed queued, not a verified second claim. No forced retry,
+Worker signal, budget reset or false-success count. Detailed evidence:
+`task-412fb-wait.*`, `review-resumption-1789876350030845287.json`. Whole-window
+totals must eventually come from the existing journals, not an assumed extrapolation.
 
 ## First deployed repair and controlled recovery (superseded baseline)
 
@@ -673,8 +710,10 @@ remain enabled and produce the one-time fixed-cohort terminal report. Existing
 UNRAID cron refreshes provider evidence twice per scheduled minute, independent
 of Codex. Installed script SHA
 `3a6c1808bb12f80e53948b3aaadc1badcfc58080b62f18b0f0d55e15f8fb35c1`;
-`installed-observer-cron.log` records the existing persistent entry. Current
-provider observation VERIFIED with fresh checked_at1789860989.280377.
+`installed-observer-cron.log` records the existing persistent entry. The
+first-baseline provider observation was VERIFIED with checked_at1789860989.280377;
+this historical timestamp is not current freshness evidence. Current-baseline
+freshness is separately captured in the timestamped observation snapshots above.
 The one-shot `observe_existing_evidence.py` only reads indexed existing events
 and writes closeout evidence; it is not a new observer, Queue, timer or admission path.
 
@@ -706,8 +745,12 @@ Do not reset either budget or loosen source/QC checks to increase success counts
 - [x] Safe deployment, attestation and new-incident controlled recovery; no blind rearm.
 - [ ] At least24 hours of existing server observation on a fixed20 eligible cohort,
       all results retained and no backfill, adequate-resource admission bounded.
-- [x] Goal-to-date5 real terminal->next-claim cycles and2 new strict TC targets on6f400b4.
-- [ ] Latest-baseline sustained continuation and new-output evidence, without mixing windows.
+- [x] Historical6f400b4 has5 real terminal->next-claim cycles and2 new strict TC targets;
+      these remain separately versioned and do not transfer into the current Gate.
+- [x] Latestf52118c has real terminal->next-claim/Stage/checkpoint-heartbeat proof and
+      its first new strict402-cue TC target, final location independently verified.
+- [ ] Latest-baseline sustained continuation and at least2 new formal TC targets,
+      all fixed20 results and24-hour safety/admission evidence, without mixing windows.
 - [x] Download/extract and AI publication evidence individually attributable;
       unaffected old351-cue proof reused but not recounted as new.
 - [ ] No false completion, source damage, duplicate publish or unbounded retry.

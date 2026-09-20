@@ -1,5 +1,20 @@
 # M2 Production Observation
 
+## 2026-09-20 04:30 UTC — continued autonomous processing, no baseline change
+
+Actualf52118c/imagee624e0e8 still ARMED; provider freshly VERIFIED,105 holds,
+no pause/reconciliation hold and no new trip. Same014830 Gate15 enrolled/14 settled:
+1 strict COMPLETED,13 NEEDS_REVIEW,1 actual ASR running. All21 attempts fit the
+bounded sample:14 distinct automatic continuations,6 same-task repairs separate.
+Previously queued412fb repair actually claimed03:53:58Z -> ASR -> safe review
+04:01:12Z -> different9fef claim04:03:08Z. Most recent differentbfc73 task claimed
+04:26:51Z -> verified checkpoint04:26:57Z -> JA ASR04:27:24Z/heartbeat04:30:04Z.
+No manual retry or cohort substitution. Formal new TC remains1 on this baseline,
+historical2 kept separately.2.698 hours is not24h; all20/second output/sustained
+proof still pending. Evidence current root observation-check-1789878621438532173.json;
+full checklist/evidence attribution in docs/RELIABILITY_ACCEPTANCE_20260920.md.
+Only documentation corrected this turn; no deployment, test rerun or Gate mutation.
+
 ## 2026-09-20 03:36 UTC — first f521 formal TC publication verified
 
 Same Workerf52118c/Gate014830, no deployment or Gate mutation. Snapshot03:30:15Z:
