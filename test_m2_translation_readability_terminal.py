@@ -48,7 +48,11 @@ class ReadabilityTerminalTests(unittest.TestCase):
 
     def test_three_distinct_exhausted_repairs_do_not_trip_and_next_claim_resumes(self):
         with tempfile.TemporaryDirectory() as d:
-            root=Path(d);fixture=observer_fixtures.M2ProductionObservationTests();fixture.root=root
+            root=Path(d);fixture=observer_fixtures.M2ProductionObservationTests()
+            fixture.setUp()
+            self.addCleanup(fixture.doCleanups)
+            self.addCleanup(fixture.tearDown)
+            fixture.root=root
             values=vars(_config(root));values.pop('work_path')
             c=fixture._config('cycle',**values,control_state_path='control.sqlite3',auto_ai_max_attempts=3)
             state=ScanStateStore.from_config(c)
