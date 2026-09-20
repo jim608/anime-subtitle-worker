@@ -9,26 +9,26 @@ Work checklist: docs/RELIABILITY_ACCEPTANCE_20260920.md. Includes exact temporar
 container archival/cleanup and existing launcher lifecycle fixes, not a new framework.
 Require relevant server-isolated regression, safe deployed repair,24-hour autonomous
 observation, fixed20 complete results, multiple continuations and2 new strict outputs.
-No Goal complete from ARMED/queued/tests/one heartbeat. Current WAITING_FOR_EVIDENCE:
-new source-normalization recurrence23:45:34Z repaired by actual Worker
-6f400b4c4818d196785f26b67ae35caefcf472c4; safe deployment20260920T000919Z-2451937,
-actual-image572/restart/fresh7 PASS; exact new-incident controlled recovery ARMED.
-Fixed Gate001228986223Z-5eee243835 starts2026-09-20T00:12:28.986223Z;
-earliest24h endSep21 same UTC. Previous interrupted window/Gate retained, not PASS.
-One new real safe-review00:13:29Z -> next automatic source-ASR claim00:14:21Z,
-Stage/heartbeat00:14:57Z verified, not sustained acceptance. New strict outputs0.
-105 holds/UNPROVEN and53 backups retained;5 proven old temp containers archived
-and removed non-force, new test fixture teardown also proven. Full evidence and pending delivery
-requirements remain in docs/RELIABILITY_ACCEPTANCE_20260920.md. No new Goal/M3.
-
-Follow-up:6f400b4 proves2 genuinely new335/318-cue TC outputs with full strict
-evidence and5 real continuations. Corrupt-encoding candidate fix is now deployed
-as70abdc2684dfdd6171c71c71763376c647086ca8, actual-image642/restart/real replay PASS,
-controlled recovery ARMED, Gate004343198914Z-5c074626fa0/20,105 holds/54 backups.
-Next newly reproduced gap: exhausted bounded display repair is quality-blocked
-in historical recovery but normal Queue says translation_unknown/bounded_retry.
-Minimal shared policy candidate now374-test/real-restart validated, pending deploy.
-No QC/budget relaxation. Preserve active work/Gates and do not mix runtime evidence.
+No Goal complete from ARMED/queued/tests/one heartbeat. Current WAITING_FOR_EVIDENCE.
+Actual Worker6069fcb3729c12e64a7d892903f62cf391fb5563 includes the source-ASR
+evidence continuity, precise corrupt-encoding candidate rejection and exact exhausted
+readability-repair classification fixes. No blanket exception catch/QC/budget change.
+Safe deployment20260920T005641Z-2895914 completed; actual-image748/restart/fresh7 PASS.
+Controlled recoverym2breakerrec_bfb2cfc287f94ca3a482e6e47bd1fa33 ARMED; owned hold
+released00:59:43Z.105 holds/UNPROVEN and all55 backups preserved.
+Current fixed Gate005942949442Z-ffe5ed7d42 starts2026-09-20T00:59:42.949442Z;
+baseline32850f5c3550d3b5fbfe78c6. Earliest24h endSep21 same UTC, plus all required
+fixed20 results and sustained safety/delivery evidence. Old Gates/history retained.
+At01:08:57Z ACTIVE0/20; historical task84744809b306acf8b95c automatically claimed
+01:05:25Z -> trusted-JA ASR01:05:33Z -> heartbeat01:08:34Z. Latest terminal/next-claim
+subsequently proven: review01:12:40Z -> next fe725855a8d35dee61f8 claim01:13:34Z ->
+preflight01:13:36Z/heartbeat01:13:38Z, valid checkpoint; still ARMED. At01:14Z Gate
+enrolled1/20, settled0. Prior6f400b4 separately proves2 new335/318-cue strict TC outputs and
+5 continuations, not current cohort replacements or24-hour evidence.
+Five proven old temp fixtures archived and removed non-force; latest related stopped0.
+Existing entrypoints lifecycle7/deployment-script10 and latest real restart teardown PASS.
+Full evidence/current remaining requirements: docs/RELIABILITY_ACCEPTANCE_20260920.md.
+No new Goal/M3; documentation-only sync must not redeploy or recreate the Gate.
 
 ## Exact SRT incident recovery complete — 2026-09-19 15:28 UTC
 

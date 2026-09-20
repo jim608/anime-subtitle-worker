@@ -5,7 +5,75 @@ No M3, full-library rescan, broad Queue retry, QC relaxation, source/valid-outpu
 overwrite, backup deletion, or ASR-budget reset. Server must own the eventual
 24-hour observation using existing observer/ledger; not a second framework.
 
-## Latest deployed baseline70abdc2; quality terminal candidate validated
+## Current baseline6069fcb — deployed; WAITING_FOR_EVIDENCE
+
+Worker `6069fcb3729c12e64a7d892903f62cf391fb5563`, image
+`sha256:170661722f188234f403d476eb4d58f7d0846d9490c919ff1dc4113e7bc37e3d`,
+source revision `2878754113c9a3c2848972ff0c04126539c8331fc56b1914047fea4cd49d1b58`.
+WebUI remains `69f2352d0d5d371ca58eaf5a4c62d97f79529e69`, image
+`sha256:63e035bc7d0cac764247a7eb83c7197597a026088e53f335c42e3848fdd46e5b`.
+Safe deployment `20260920T005641Z-2895914` and complete handoff exited0.
+Actual-image748 related tests, actual Docker review/restart/next-claim,
+read-only original exhausted-quality classification and fresh7/7 breakers PASS.
+The original failed attempt is preserved, not retroactively made successful.
+
+Reconciliation `m2-recon-readability-20260920`, receipt SHA256
+`1fdd427fda40ac75905ea45ae095568743db81db83a8228f0d3ddb8054d678f5`:
+0 new unexplained differences,105 existing holds retained;6715 queued identities
+and7375 other-state records retained (not eligible/delivered counts).
+Recovery `m2breakerrec_bfb2cfc287f94ca3a482e6e47bd1fa33` changed the exact planned
+runtime-change trip to ARMED. Only owned hold released00:59:43.448694Z.
+All54 previous backups plus this deployment backup retained:55. No source writes,
+valid-output overwrite, isolation release, checkpoint-budget reset or latch deletion.
+
+Current Gate `m2-gate-20260920T005942949442Z-ffe5ed7d42`, baseline
+`m2-guardrail-v1:32850f5c3550d3b5fbfe78c6`, start
+`2026-09-20T00:59:42.949442Z`. Prior004343 Gate retained and
+INVALIDATED_BY_RUNTIME_CHANGE. Configuration fingerprint
+`sha256:f71f27e11f68a07b316dd5797cc670ec55359d13de13f7d11665872fa7781aac`, schema1,
+unchanged frozen-first20 policy. Earliest24-hour end
+`2026-09-21T00:59:42.949442Z`; time alone does not satisfy the acceptance criteria.
+
+At01:08:57Z: ARMED, ACTIVE0/20, no active pause or reconciliation hold.
+Real `m2ai_84744809b306acf8b95c` automatically claimed01:05:25.348897Z,
+trusted-JA transcription started01:05:33.968073Z, heartbeat01:08:34.449437Z;
+verified subtitle-detection checkpoint SHA256
+`5f706597d505a29b40d7d291af5d78c75b6a9b37d0798077299928bc573f78c5`.
+No manual Retry. This historical retry is not a new frozen-cohort member.
+Later bounded evidence at01:14:00.857531Z proves one latest-baseline continuation:
+`m2ai_84744809b306acf8b95c` reached review_required01:12:40.895177Z for
+deterministic_asr_quality (prompt-free ASR still contains one-character/punctuation
+fragments); quality safeguards/budget remain intact. Distinct
+`m2ai_fe725855a8d35dee61f8` automatically claimed01:13:34.259037Z, preflight
+01:13:36.217625Z, language-detection heartbeat01:13:38.877426Z and verified
+subtitle-detection checkpoint `d410acddb6a605fd042dc8635e9b9d313861b5e04b7da430efc35618869807a7`.
+No manual operation between terminal and next claim. ARMED; current Gate enrolled1/20,
+settled0, strict0; ordinal1 is the latter task's first eligible attempt. The preceding
+historical retry remains excluded, not replaced. This is one real cycle, not24 hours
+or proof of the separate exhausted-readability case's Production terminal.
+
+Evidence root `/logs/reliability-20260920/readability-handoff-20260920/`:
+`safe-deploy.log`, `actual-runtime.json`, `actual-image-proof.json`,
+`actual-image-tests.log`, `fault-suite.log`, `recovery-closeout.json`,
+`backup-preservation.json`, `observation-check-1789866538968444059.json`,
+`observation-check-1789866841011099343.json` (real terminal/next claim).
+Actual restart result: sibling `readability-restart-actual/restart-l63b34if/state/result.json`.
+Final bounded container inventory `../container-inventory-1789866149610699545.json`
+found0 related stopped containers; only running Worker/WebUI and --rm inventory helper.
+Initial5 proven obsolete fixtures removed after archival; an additional candidate
+fixture retained by strict mount checking was subsequently archived and removed
+by exact non-force ID. All later fixtures exported and removed by existing teardown.
+
+Goal-to-date2 new strict formal TC targets (335/318 cues) remain attributed to
+6f400b4 below, not this new Gate/window. Prior download/extraction351-cue proof
+is reused function evidence, contributes0 new deliveries here. No M2 acceptance.
+Read-only loaded runtime config (`effective-delivery-scope.log`) confirms
+completed_delivery_enabled=false and watch_interval_seconds=300. Mux is not enabled
+on this baseline; no fresh mux output is required or falsely claimed, and this check
+did not enable it or alter result-affecting settings.
+Documentation-only synchronization must not redeploy or recreate the current Gate.
+
+## Previous baseline70abdc2 and then-candidate quality terminal repair
 
 Encoding repair safely deployed as `70abdc2684dfdd6171c71c71763376c647086ca8`,
 image `sha256:b3b759cf50248c081722d8a17449b53636e85bdb9e2128a4dbfeaf3ad1573efe`.
@@ -38,7 +106,8 @@ Three distinct quality terminals remain ARMED and next claim succeeds. Real Dock
 restart `readability-restart-candidate/restart-fjgnyj8a/` preserves review and
 checkpoint, next claim/Stage and idempotency; fixture removed after evidence export.
 Logs `readability-terminal-before.log`, `readability-terminal-related.log`,
-`readability-restart-candidate.log`. Candidate not yet deployed; do not mix evidence.
+`readability-restart-candidate.log`. This was predeployment evidence; the current
+section above records the later actual-image deployment. Do not mix baseline results.
 An attempted pre-retire cancellation was correctly NOT performed because safe
 deployment had already reached backup stage; no process/container was terminated.
 Any further deployment is specifically for this newly reproduced shared defect.
@@ -272,16 +341,16 @@ checks, and rejects another trip or old SRT incident proof. No latch/state delet
 
 | Path | Existing evidence / current gap | Required action |
 | --- | --- | --- |
-| Watch/stabilize/deduplicate/claim | Existing durable pipeline and event watcher | Reuse unaffected tests; check claim fairness and stale leases |
-| Search/match/download/extract/import | Prior real1 formal TC delivery351 cues, replay queued0 | Reuse only after dependency/diff check; do not count as new |
-| TC/CN/JA subtitle and trusted-JA ASR | c204 parser154 and live fallback verified | Preserve QC and unproven-cache rejection; regress common boundaries |
-| Existing non-JA ASR translation | Real source-language publication followed by strict rejection | Reproduce actual transcript/diagnostic/final-state bridge; no assumed PASS |
-| Transient failures vs review | Recent transient_timeout on existing ASR review | Inspect retry budget and retry/review classification, no reset |
-| Publish/mux/terminal/next claim | Prior next-claim proven, later recurrence disproves sustained reliability | Correct shared cause; full terminal/settlement/next-claim cycle |
-| Provider/Gate/observation/restart | Fresh provider verified; current Gate ACTIVE0/20 | Fake-clock expiry/refresh and Gate settlement regression; preserve old FAIL |
-| Historical recovery/fair admission | Existing ledger/dispatcher | Verify bounded retries/checkpoint reuse and no starvation |
-| WebUI waiting reason | Shows generic admission guard in scheduler | Expose authoritative underlying reason/time/recovery condition only |
-| Temporary Docker lifecycle | Discovery requires labels/mounts/run evidence, not names alone | Export evidence, exact non-force removal, repair existing launch/teardown paths |
+| Watch/stabilize/deduplicate/claim | Relevant isolated regression PASS; latest real automatic claim/checkpoint | Sustained admission bound remains under24-hour observation |
+| Search/match/download/extract/import | PASS reused unchanged Sep12 formal351-cue target, replay queued0 | No new delivery counted; unavailable external sources remain individually blocked |
+| TC/CN/JA subtitle and trusted-JA ASR | Related routing/QC/cache regressions PASS; latest real trusted-JA ASR active | Do not turn a running Stage into publication PASS |
+| Existing non-JA ASR translation | PASS: accepted diagnostic continuity fixed,2 real335/318-cue strict deliveries on6f400b4 | Retain version attribution; do not transfer into latest Gate |
+| Transient failures vs review | PASS relevant tests; exact exhausted readability repair now quality review, unknown faults propagate | Real latest-baseline quality terminal and subsequent claim still need evidence |
+| Publish/mux/terminal/next claim | PASS isolated publication/replay/restart;5 continuations on6f400b4 and1 on6069fcb; runtime mux disabled | Latest-baseline24-hour sustained evidence pending; no mux output falsely claimed |
+| Provider/Gate/observation/restart | PASS fake-clock expiry/refresh, settlement and real restart; cron refreshes fresh evidence | Latest ACTIVE enrolled1/20, settled0; fixed cohort and24 hours not passed |
+| Historical recovery/fair admission | Real normal/recovery claims retained, budgets/checkpoints not reset | Continued fairness/no starvation is a sustained-observation criterion |
+| WebUI waiting reason | Existing underlying reason/time wiring retained; scheduler now processing | No interface redesign; surface future actual admission reasons |
+| Temporary Docker lifecycle | PASS7 actual lifecycle/10 deployment-script tests; initial5 removed, final related stopped0 | Labels/--rm/traps/owned-orphan handling in existing entrypoints, no service cleanup |
 
 ## First deployed repair and controlled recovery (superseded baseline)
 
@@ -374,9 +443,10 @@ Do not reset either budget or loosen source/QC checks to increase success counts
 - [x] Safe deployment, attestation and new-incident controlled recovery; no blind rearm.
 - [ ] At least24 hours of existing server observation on a fixed20 eligible cohort,
       all results retained and no backfill, adequate-resource admission bounded.
-- [ ] Multiple real terminal->next-claim cycles and at least2 newly verified formal subtitles.
-- [ ] Download/extract and AI publication evidence individually attributable,
-      unaffected old evidence reused but not recounted as new.
+- [x] Goal-to-date5 real terminal->next-claim cycles and2 new strict TC targets on6f400b4.
+- [ ] Latest-baseline sustained continuation and new-output evidence, without mixing windows.
+- [x] Download/extract and AI publication evidence individually attributable;
+      unaffected old351-cue proof reused but not recounted as new.
 - [ ] No false completion, source damage, duplicate publish or unbounded retry.
 - [x] All isolation/UNPROVEN/backups preserved; no unsupported continuity claim.
 - [x] Confirmed obsolete temporary containers actually removed only after archival.

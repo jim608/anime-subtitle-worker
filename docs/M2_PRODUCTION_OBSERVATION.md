@@ -1,5 +1,30 @@
 # M2 Production Observation
 
+## 2026-09-20 01:08 UTC — current6069fcb baseline, WAITING_FOR_EVIDENCE
+
+Actual Worker `6069fcb3729c12e64a7d892903f62cf391fb5563`, WebUI
+`69f2352d0d5d371ca58eaf5a4c62d97f79529e69`; actual-image748/restart/fresh7 PASS.
+Recovery `m2breakerrec_bfb2cfc287f94ca3a482e6e47bd1fa33` restored ARMED;
+105 isolation holds and all55 backups retained. Previous004343 Gate/history retained,
+INVALIDATED_BY_RUNTIME_CHANGE, not FAIL-to-PASS or transferred results.
+Current Gate `m2-gate-20260920T005942949442Z-ffe5ed7d42`, baseline
+`m2-guardrail-v1:32850f5c3550d3b5fbfe78c6`, start2026-09-20T00:59:42.949442Z.
+ACTIVE0/20 at01:08:57Z. Automatic real historical claim01:05:25Z -> JA ASR01:05:33Z
+-> heartbeat01:08:34Z. Later01:14Z evidence: that task correctly reached quality review
+01:12:40Z -> distinct automatic claim01:13:34Z -> preflight/heartbeat01:13:36/38Z,
+verified checkpoint, still ARMED. Gate enrolled1/20, settled0, strict0; no backfill.
+Historical retries remain supplemental; failed cohort members cannot be replaced.
+
+Two newly published strict TC targets335/318 cues and5 continuations on6f400b4
+are separately preserved, not mixed into this Gate/window. Old download/extraction
+351-cue proof is reused, not a new delivery. Earliest24-hour endSep21 00:59:42.949442Z;
+also require immutable20/all outcomes, sustained admission/safety and delivery evidence.
+Existing server observer/provider cron continue without Codex; no high-frequency polling.
+Evidence `/logs/reliability-20260920/readability-handoff-20260920/`, especially
+`recovery-closeout.json` and `observation-check-1789866841011099343.json`.
+Full function/evidence checklist: `docs/RELIABILITY_ACCEPTANCE_20260920.md`.
+M2 NOT ACCEPTED; document synchronization does not deploy or change this Gate.
+
 ## 2026-09-20 00:12 UTC — recurrence repair; current WAITING_FOR_EVIDENCE
 
 Actual Worker `6f400b4c4818d196785f26b67ae35caefcf472c4`, WebUI69f2352 unchanged.

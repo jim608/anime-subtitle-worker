@@ -1,5 +1,28 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-20 01:08 UTC — latest deployment completed, sustained acceptance pending
+
+Worker6069fcb3729c12e64a7d892903f62cf391fb5563 safely deployed; WebUI69f2352 unchanged.
+Actual-image748 relevant tests, real Docker restart/checkpoint/next-claim and fresh7/7
+breakers PASS. Precise exhausted-readability classification joins preserved ASR evidence
+and corrupt-SRT candidate fixes; no QC/ASR-budget/source guard relaxation.
+Controlled recoverybfb2cfc287f94ca3a482e6e47bd1fa33 ARMED;105 holds/55 backups kept.
+Current Gate005942949442Z-ffe5ed7d42 baseline32850f5c3550d3b5fbfe78c6, starts
+2026-09-20T00:59:42.949442Z;0/20 at01:08:57Z. Old004343 Gate preserved/invalidated
+only by actual runtime change. Latest real auto-claim01:05:25Z -> JA ASR/heartbeat;
+latest terminal-to-next-claim subsequently proven at01:14Z: quality review01:12:40Z
+-> distinct automatic claim01:13:34Z -> preflight/heartbeat/checkpoint, still ARMED.
+Gate now enrolled1/20, settled0.24-hour sustained observation remains pending.
+
+Completed evidence remains versioned:6f400b4 produced2 genuinely new strict335/318-cue
+TC targets and5 continuations. Download/extract prior351-cue delivery is reused function
+proof, not newly counted. Initial5 confirmed obsolete containers actually archived and
+removed; latest related stopped0; lifecycle7/deployment-script10 and teardown PASS.
+All detail/log locations: `docs/RELIABILITY_ACCEPTANCE_20260920.md`.
+WAITING_FOR_EVIDENCE, earliest24h endSep21 00:59:42.949442Z plus all fixed20 outcomes,
+sustained admission/safety and required delivery evidence. M2 NOT COMPLETE/ACCEPTED.
+Do not deploy, replay completed handoffs or recreate Gate for document-only updates.
+
 ## 2026-09-20 00:12 UTC — latest deployed repair, sustained evidence still pending
 
 Worker6f400b4c4818d196785f26b67ae35caefcf472c4 safely deployed; WebUI69f2352

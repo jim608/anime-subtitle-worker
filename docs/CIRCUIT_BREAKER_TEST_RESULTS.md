@@ -1,5 +1,29 @@
 # M2 Circuit Breaker Test Results
 
+## 2026-09-20 latest actual6069fcb image —748 related tests and fresh7/7 PASS
+
+Worker `6069fcb3729c12e64a7d892903f62cf391fb5563`, image
+`sha256:170661722f188234f403d476eb4d58f7d0846d9490c919ff1dc4113e7bc37e3d`.
+Exact known two-attempt readability repair exhaustion in translation now enters
+existing subtitle_quality_review/manual_review; timeout/OOM/unknown faults retain
+their own policies. Three distinct quality-review terminals do not trip global safety.
+JA/zh/en cases preserve source/old output and repair budget. Real Docker terminal
+review -> restart -> next claim/Stage/checkpoint/idempotency PASS; fixture evidence
+exported before exact non-force removal, volumes_removed0.
+
+Actual-image748 PASS (19.875s); fresh7/7 isolated breakers PASS, production resources
+unaffected. Read-only classification of the exact original failed attempt PASS;
+its original failure is not rewritten. Earlier candidate374 tests/restart and all
+failed-before logs remain, not substituted for actual-image evidence.
+Proof `/logs/reliability-20260920/readability-handoff-20260920/actual-image-proof.json`,
+full `actual-image-tests.log`, `fault-suite.log`, `read-only-quality.log`;
+restart `/logs/reliability-20260920/readability-restart-actual/restart-l63b34if/state/result.json`.
+Controlled recoverybfb2cfc287f94ca3a482e6e47bd1fa33 ARMED;105 holds/55 backups.
+Real latest quality review01:12:40Z -> automatic next claim01:13:34Z -> Stage/heartbeat
+and verified checkpoint now proven; ARMED. This is not24-hour acceptance. Gate1/20
+enrolled,0 settled. Initial5 obsolete fixtures removed; final related stopped0.
+Existing lifecycle7/deployment-script10 tests reused unchanged, no cleanup daemon/prune.
+
 ## 2026-09-20 source-language accepted-checkpoint continuity repair
 
 Actual Worker6f400b4c4818d196785f26b67ae35caefcf472c4/imageab80ef55:

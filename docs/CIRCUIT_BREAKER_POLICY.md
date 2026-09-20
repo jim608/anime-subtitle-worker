@@ -1,5 +1,26 @@
 # M2 Circuit Breaker Policy
 
+## 2026-09-20 precise candidate and exhausted-quality scope
+
+Only UnicodeDecodeError from source-candidate hard-QC reading is classified as
+subtitle_encoding_invalid/subtitle_parse_failed. It rejects that candidate without
+silently replacing bytes; I/O, arbitrary ValueError and encoding/output exceptions
+still propagate. Valid alternative selection must satisfy the existing source/QC rules.
+
+Only the anchored known bounded-readability-repair-exhaustion message in translation
+maps to existing subtitle_quality_review/manual_review. Actual repair budget and hard
+display/QC limit do not change. Unknown translation faults, timeout, OOM and source
+integrity exceptions are not masked. Original retry/checkpoint/history is retained;
+no reclassification of durable old results into fake completion.
+
+Actual6069fcb image748/restart/fresh7 tests validate these boundaries and preserve
+ASR diagnostic/cache safeguards. Planned runtime-change recovery uses a newly sealed
+reconciliation, exact trip/runtime proof and fresh attestation; it cannot clear an
+unrelated incident. Recoverybfb2cfc287f94ca3a482e6e47bd1fa33 ARMED,105 holds/55 backups.
+Current Gate005942 retained unchanged by documentation or container cleanup.
+Quality review/Gate FAIL/statistics alone do not justify global stopping; genuine
+source, database, unknown runtime, false-completion and systemic-fault guards remain.
+
 ## 2026-09-20 source-ASR normalization evidence-loss incident
 
 Source-language ASR formatting must use the existing accepted SRT/diagnostic
