@@ -1,5 +1,15 @@
 # Incremental Delivery Plan
 
+## 2026-09-22 23:52 UTC — current-image observer/admission regression
+
+UNRAID isolated cf82 image: report-export admission **9/9 PASS** as non-root;
+true EACCES defers only the derived report, while integrity/disk/system
+faults still block. Existing 201-test receipt includes frozen20 one-time
+summary, restart idempotence and mixed-result Gate FAIL→next claim outside
+cohort. Two disposable containers verified absent. No code/deploy/Gate
+change. This clears a test-evidence gap, not Production 20/20 settlement,
+24-hour operation or two new formal subtitles.
+
 ## 2026-09-22 23:46 UTC — separate historical download/extract from new Gate output
 
 Sep12's real download/extraction publication remains one reusable historical

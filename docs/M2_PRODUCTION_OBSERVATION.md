@@ -1,5 +1,18 @@
 # M2 Production Observation
 
+## 2026-09-22 23:52 UTC — isolated settled-Gate/report boundary
+
+Current cf82 image passes the full nine-case report-export admission suite
+as non-root on UNRAID. A settled or strict-FAIL Gate alone does not block
+safe later claims or rewrite the frozen report. EACCES report export is
+persisted/deferred with bounded retry; damaged report journal, collision,
+ENOSPC/EIO and unknown faults remain fail-closed. Existing same-image
+frozen-cohort tests prove one-time all-20 summary and restart idempotence.
+Both new disposable test containers auto-removed; no Worker redeploy or
+Gate mutation. Full receipts and test scope are in
+`docs/RELIABILITY_ACCEPTANCE_20260920.md`. Production Gate settlement and
+24-hour/two-new-output requirements remain unverified.
+
 ## 2026-09-22 23:46 UTC — prior download/extraction publication remains intact
 
 The exact Sep12 historical obligation's manifest and both final TC/SC files

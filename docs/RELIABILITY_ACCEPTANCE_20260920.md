@@ -1,5 +1,34 @@
 # Full-flow reliability acceptance — 2026-09-20
 
+## 2026-09-22 23:52 UTC — current-image settled-Gate admission boundary
+
+Worker cf82fc27 image
+`sha256:2733529ad6c8d56b9edab7e8facccc1c4df43843aa70a8a9098a4130dcf3537f`
+was tested on UNRAID in a networkless, read-only-root, no-capability,
+CPU/RAM-limited disposable container. The focused
+`test_m2_report_export_admission` suite passed **9/9 as non-root**, including
+a real report-directory EACCES→access-restored recovery. Report permission
+failure is journaled with bounded backoff and does not block a safe next
+claim; report collision/hash corruption, ENOSPC/EIO and unknown code faults
+still block. A root-mode repeat had 8 passes and the expected skip of the
+non-root-only real-permission test; counts are not added together.
+
+The same actual-image 201-test receipt already includes frozen-20 settlement
+and write-once/restart tests 17/18 plus
+`test_publish_review_terminal_next_claim_and_failed_gate_restart`: a
+mixed success/review Gate settles at 10 strict of 20, remains ARMED after
+restart, and an additional claim stays outside the frozen cohort without
+rewriting its report. Code inspection confirms `admit_new_job` accepts
+`ACTIVE` or `SETTLED`, and report permission deferral is separate from
+integrity faults. The two newly used `--rm` test container IDs were checked
+absent afterward; no Production service, Queue, Gate or media was changed.
+Server logs: `logs/laya-20260923/{actual-image-tests.log,
+report-export-regression-20260922T2352Z.log,
+report-export-nonroot-20260922T2353Z.log,
+report-export-cleanup-check-20260922T2353Z.log}`.
+This is current-image isolated regression evidence, **not** the unfinished
+Production Gate-20/24-hour or two-new-output acceptance.
+
 ## 2026-09-22 23:46 UTC — historical download/extraction proof reused precisely
 
 One exact Sep12 formal obligation (`m2dl_f0133acfdbb11284e318`) was checked
