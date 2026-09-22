@@ -1,5 +1,30 @@
 # Full-flow reliability acceptance — 2026-09-20
 
+## 2026-09-22 23:46 UTC — historical download/extraction proof reused precisely
+
+One exact Sep12 formal obligation (`m2dl_f0133acfdbb11284e318`) was checked
+read-only at its two final-language paths. Its unchanged publication manifest
+still exists with the original SHA-256; the zh-TW and zh-CN files still match
+their original receipt hashes, each parses to 351 dialogue events, and each
+passes current hard QC with no failure codes. The historical receipt records
+one newly served target and two language files, not two target deliveries.
+
+The targeted 88598848→f521 applicability review below already scoped the
+later `subtitle_extract.py` JA-metadata branch outside this TC/SC case. A
+further f521→current Worker cf82fc27 comparison shows no change to Mikan,
+qB, `subtitle_extract.py`, `subtitle_quality.py`, source inventory/adapter or
+the official-extraction manifest route. The only additional publication edits
+are the separate AI source-normalization path and its legacy/canonical output
+policy in `worker.py`, `subtitle_paths.py` and `output_manifest.py`; the
+official extractor writes its own versioned manifest. Thus the Sep12 case
+remains applicable historical download/extraction final-publication evidence,
+not a new cf82 delivery or a frozen-Gate member. The target video checksum was
+verified in Sep12 evidence but **not recomputed in this read**; do not promote
+this to fresh source-continuity proof. This audit contributes zero new
+current-baseline deliveries; the last separate Gate snapshot at 23:37 UTC
+reported zero strict publications. Read-only server report:
+`logs/laya-20260923/download-extract-reuse-20260922T2347Z.json`.
+
 ## 2026-09-22 23:37 UTC — current fixed Gate 4/20
 
 One bounded existing-observer read shows ARMED, no pause/hold, Gate ACTIVE

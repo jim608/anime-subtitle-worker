@@ -1,5 +1,17 @@
 # Incremental Delivery Plan
 
+## 2026-09-22 23:46 UTC — separate historical download/extract from new Gate output
+
+Sep12's real download/extraction publication remains one reusable historical
+target: both original final-language files and manifest still hash-match,
+parse351 events each, and pass current hard QC. Current cf82 changes do not
+alter this official-extraction path, but no fresh source checksum or new
+publication was produced by the read-only check. Do not recount download1 +
+extraction1 as two deliveries, or transfer that target into the fixed current
+Gate. The last sampled current-baseline new formal delivery was0;
+24h/all20/two-new
+strict outputs and canonical publication still determine M2 acceptance.
+
 ## 2026-09-22 23:37 UTC — automatic continuation, not acceptance
 
 Read-only existing observer: same Gate ACTIVE4/20,4 settled/0 strict,

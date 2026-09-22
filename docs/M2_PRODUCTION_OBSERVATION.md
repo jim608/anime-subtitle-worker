@@ -1,5 +1,16 @@
 # M2 Production Observation
 
+## 2026-09-22 23:46 UTC — prior download/extraction publication remains intact
+
+The exact Sep12 historical obligation's manifest and both final TC/SC files
+still match their original hashes; each file still has 351 parsed dialogue
+events and current hard-QC PASS. No download, extraction, replay or publish
+was performed. This is **one historical target** whose download and extraction
+path proofs may be reused; it contributes **zero** new outputs to current
+cf82/Gate221442 observation. Current target-source checksum was not rehashed.
+See `docs/RELIABILITY_ACCEPTANCE_20260920.md` and server evidence
+`logs/laya-20260923/download-extract-reuse-20260922T2347Z.json`.
+
 ## 2026-09-22 23:37 UTC — bounded admission and fixed-cohort snapshot
 
 One indexed, read-only existing-observer snapshot after the third review
