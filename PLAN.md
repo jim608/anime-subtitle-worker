@@ -13,6 +13,12 @@ At23:01:11UTC samecf82/ef5, ARMED,106holds, Gate221442:2 enrolled/2 settled/0str
 3 distinct terminal->claim cycles+2 same-task resumptions,0new qualified outputs.
 M2 remains WAITING_FOR_EVIDENCE: >=24h, all frozen20 outcomes,2 new strict publications,
 canonical live output proof and targeted ASR repeated-quality budget/checkpoint review.
+The latter two-task review is now complete (23:08UTC): both valid manifests,
+selective repair already attempted, one revision-bound full fallback each,
+same revision after second quality review, no duplicate command. Both remain
+review; next distinct job was automatically claimed and entered transcription.
+Gate3 enrolled/2 settled/0 strict; four distinct terminal-next-claim cycles,
+no new qualifying subtitle. No shared defect or Worker deployment from this audit.
 Do not repeat Laya deployment/evaluation or widen its framework. OOM model-container
 injection unverified, not a Production hold. Continue the same Goal; no M3.
 

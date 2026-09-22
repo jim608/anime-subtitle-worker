@@ -825,5 +825,11 @@ samecf82/ef5, ARMED,106 holds, sameGate2214422 enrolled/2 settled/0strict,3 dist
 continuations+2 same-task resumptions,0new qualified outputs,0.775h observed.
 Still WAITING_FOR_EVIDENCE for >=24h/all20/>=2strict new publications and real canonical
 publication boundary. No M2 acceptance. Do not use model success, rules-only results,
-review/resumption or existing subtitles as new delivery. Follow up only the exact
-ASR repair-budget/checkpoint evidence already identified, without re-running jobs.
+review/resumption or existing subtitles as new delivery. The exact two-task ASR
+repair-budget/checkpoint follow-up is now recorded in
+`docs/LAYA_DIAGNOSTICS_20260923.md` and
+`logs/laya-20260923/asr-budget-evidence-1790118636067764775.json`: manifest hashes
+match, selective repair was already attempted, each full fallback was queued once,
+and unchanged failure revisions block duplicate remediation. Both remain review.
+At23:08:39UTC the same Gate was3 enrolled/2 settled/0 strict, fourth distinct
+terminal-to-next-claim sequence entered transcription. No new formal subtitle.

@@ -61,10 +61,30 @@ terminal-to-next-claim cycles, plus two separate same-task resumptions. Latest t
 claim1790117772.2825096, still running. No qualifying new formal subtitle (**0**).
 Only0.775h observed: still need >=24h, fixed20 outcomes, >=2 new strict outputs and
 actual canonical Production publication proof. Same-ASR quality retry/checkpoint
-budget review remains targeted follow-up, not a proven system defect or unsafe release.
+budget follow-up is now evidenced below. No unsafe release was performed.
 No M2 acceptance. The first read-only closeout used an incorrect report-root argument;
 that failed log is retained, then only the snapshot/absence checks resumed successfully
 (`bounded-check/finish.exit=0`); no cleanup/deployment was repeated.
+
+At **2026-09-22T23:08:39Z**, one additional bounded existing-ledger snapshot
+(`observation-check-1790118520317812715.json`; exact file in
+`asr-followup-20260922T230839Z.log`) confirmed the same Worker, ARMED,106 holds,
+Gate **3 enrolled/2 settled/0 strict**, four distinct terminal-to-next-claim
+continuations and two same-obligation resumptions. The next distinct task
+`m2ai_7b9e10dd83a0c07b4b23` had claimed and entered transcription.
+This is continued processing evidence, not a formal subtitle delivery.
+
+The two repeated ASR reviews were checked by exact path against read-only
+control/queue state, not re-run. Evidence:
+`asr-budget-evidence-1790118636067764775.json`. Both checkpoint manifests exist
+and match their SHA256; both review diagnoses say `repair_attempted=true` and
+offer only `ai.retranscribe`. Each has exactly one completed, revision-bound
+full-retranscription command. After its second quality failure, the recorded
+failure revision is unchanged, so the existing idempotency key blocks that same
+remediation from being queued again. Both obligations are paused in review with
+`deterministic_asr_quality`; neither is published or counted as success. This
+behavior matches the existing bounded fallback policy. No Worker code or Gate
+change was justified by these two cases. Continued observation remains necessary.
 
 PARTIAL / WAITING_FOR_EVIDENCE: independent diagnostics and the current controlled
 Production recovery are deployed. Classification quality is poor and grants no
