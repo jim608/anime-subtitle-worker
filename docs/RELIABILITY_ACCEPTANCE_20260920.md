@@ -1,5 +1,17 @@
 # Full-flow reliability acceptance — 2026-09-20
 
+## 2026-09-22 23:37 UTC — current fixed Gate 4/20
+
+One bounded existing-observer read shows ARMED, no pause/hold, Gate ACTIVE
+4 enrolled/4 settled/0 strict (all review), 106 source holds intact. The
+fourth Gate task was claimed at23:26:14Z and reached review at23:35:52Z;
+five distinct terminal-to-next-claim transitions are now evidenced. The
+next claim is not yet due to be judged stalled from a snapshot only 102
+seconds after the last terminal result. Observed window1.381h, no formal
+new strict subtitle. Continue server-owned observation; do not fill the
+four review slots with later successes or call M2 complete. Raw report:
+`logs/laya-20260923/observation-check-1790120309184330837.json`.
+
 ## 2026-09-22 23:32 UTC — current ASS source candidates remain blocked
 
 Read-only, hash-verified inspection of three exact Gate zh-TW ASS sidecars

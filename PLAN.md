@@ -1,5 +1,15 @@
 # Incremental Delivery Plan
 
+## 2026-09-22 23:37 UTC — automatic continuation, not acceptance
+
+Read-only existing observer: same Gate ACTIVE4/20,4 settled/0 strict,
+Breaker ARMED,106 holds, no pause. Five distinct terminal-to-next-claim
+transitions confirmed; latest task claimed23:26:14Z and reached review
+23:35:52Z. Current window1.381h and all four formal outcomes are review.
+No admission stall proved by the subsequent 102-second gap, and no reason
+to deploy or reset Gate. Keep >=24h/all fixed20/>=2 new strict publications
+and canonical output proof as the remaining acceptance conditions.
+
 ## 2026-09-22 23:32 UTC — ASS source overlap safety boundary
 
 The three frozen Gate jobs' candidate sidecars retain matching hashes but

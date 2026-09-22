@@ -1,5 +1,23 @@
 # M2 Production Observation
 
+## 2026-09-22 23:37 UTC — bounded admission and fixed-cohort snapshot
+
+One indexed, read-only existing-observer snapshot after the third review
+confirmed the unchanged Gate `m2-gate-20260922T221442778928Z-bfe39573b4`
+ACTIVE, **4 enrolled/4 settled/0 strict**; all four are `NEEDS_REVIEW`,
+not replaced. Breaker remains `ARMED/runtime_baseline_match`, provider
+`VERIFIED`, no operator pause or reconciliation hold, and all 106 source
+holds remain. Nine in-window attempts (sample not truncated) are reviews;
+five distinct terminal-to-next-claim transitions and three same-obligation
+resumptions are separately recorded. The fourth distinct Gate task was
+claimed 23:26:14Z, entered transcription, and reached review 23:35:52Z;
+the 23:37:34Z snapshot is too soon after that terminal state to call a new
+admission stall. Scheduler reported idle/ready with no retry hold at that
+instant. Elapsed observation time was only 1.381 hours. Evidence:
+`logs/laya-20260923/observation-check-1790120309184330837.json` and
+`observation-followup-20260922T2337Z.log`. No Worker deployment, Gate
+mutation, Queue polling or formal subtitle publication from this read.
+
 ## 2026-09-22 23:32 UTC — bounded ASS overlap check
 
 The three current Gate reviews' best zh-TW ASS sidecars were read once,
