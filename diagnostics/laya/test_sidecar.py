@@ -4,9 +4,9 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
-from sidecar import Advisor, CRITERIA, validate_answer, validate_incident
+from sidecar import Advisor, CRITERIA, atomic_json, validate_answer, validate_incident
 from events import consume, envelope
 
 
@@ -159,6 +159,89 @@ class AdvisoryTests(unittest.TestCase):
     def test_event_old_runtime_not_mixed(self):
         with self.assertRaisesRegex(ValueError, "predates"):
             envelope({"state": "NEEDS_REVIEW", "timestamp": "2026-08-01"}, "e", {"armed_at": "2026-09-01"})
+
+    def test_disabled_inference_keeps_rules_and_does_not_fabricate_unknown(self):
+        advisor = Advisor(self.root, self.model, inference_enabled=False)
+        for code in ('worker_unknown', 'subtitle_parse_failed', 'incorrect_completion'):
+            item = incident(); item.update(event_id=code, error_code=code, evaluation_only=True)
+            result = advisor.analyze(item)
+            self.assertEqual(result['status'], 'MODEL_DISABLED')
+            self.assertEqual(result['reason'], 'MODEL_QUALITY_NOT_ACCEPTED')
+            self.assertNotIn('model', result)
+            self.assertFalse(result['inference_enabled'])
+            self.assertEqual(result['operational_actions'], [])
+            self.assertTrue(advisor.analyze(item)['replay'])
+        item = incident(); item.update(event_id='known', error_code='subtitle_parse_failed')
+        self.assertEqual(advisor.analyze(item)['status'], 'RULE_ONLY')
+        self.model.predict.assert_not_called()
+
+    def test_disabling_does_not_replay_old_advisory(self):
+        old = self.advisor.analyze(incident())
+        new = Advisor(self.root, self.model, inference_enabled=False).analyze(incident())
+        self.assertNotEqual(old['record_id'], new['record_id'])
+        self.assertEqual(new['status'], 'MODEL_DISABLED')
+        self.assertEqual(json.loads((self.root/'results'/f"{old['record_id']}.json").read_text()), old)
+
+    def event_fixture(self):
+        path = self.root/'pipeline-events.jsonl'; path.touch()
+        runtime = self.root/'runtime.json'
+        runtime.write_text(json.dumps({'armed_at':'2026-09-01','baseline':{'worker_commit_sha':'a'*40}}))
+        advisor = Advisor(self.root, self.model, inference_enabled=False)
+        consume(path, runtime, self.root, advisor)
+        event = {'timestamp':'2026-09-23', 'event':'STAGE_FAILED', 'state':'RETRYING',
+                 'stage':'QC', 'attempt':1, 'reason_code':'subtitle_parse_failed', 'job_id':'j',
+                 'evidence':{'message':'SrtFormatError'}}
+        return path, runtime, advisor, (json.dumps(event)+'\n').encode()
+
+    def test_oversized_event_bounded_drain_restart_and_following_valid_event(self):
+        import base64
+        path, runtime, advisor, valid = self.event_fixture()
+        oversized = b'x'*(32769*35)+b'\n'
+        path.write_bytes(oversized+valid)
+        self.assertEqual(consume(path, runtime, self.root, advisor), 32)
+        cursor = json.loads((self.root/'event-cursor.json').read_text())
+        self.assertEqual(cursor['offset'], 32769*32)
+        self.assertIn('discarding_line', cursor)
+        restarted = Advisor(self.root, self.model, inference_enabled=False)
+        self.assertEqual(consume(path, runtime, self.root, restarted), 5)
+        chunks = [json.loads(p.read_text()) for p in (self.root/'rejected-event-chunks').glob('*.json')]
+        restored = b''.join(base64.b64decode(c['chunk_base64']) for c in sorted(chunks, key=lambda c:c['start']))
+        self.assertEqual(restored, oversized)
+        self.assertEqual(len(list((self.root/'results').glob('*.json'))), 1)
+        self.assertEqual(consume(path, runtime, self.root, restarted), 0)
+        self.model.predict.assert_not_called()
+
+    def test_partial_oversized_line_cannot_swallow_or_reinterpret_next_event(self):
+        path, runtime, advisor, valid = self.event_fixture()
+        path.write_bytes(b'x'*40000)
+        self.assertEqual(consume(path, runtime, self.root, advisor), 2)
+        self.assertEqual(consume(path, runtime, self.root, advisor), 0)
+        with path.open('ab') as stream: stream.write(b'end\n'+valid)
+        self.assertEqual(consume(path, runtime, self.root, advisor), 2)
+        self.assertEqual(json.loads((self.root/'event-cursor.json').read_text())['offset'], path.stat().st_size)
+        self.assertEqual(len(list((self.root/'results').glob('*.json'))), 1)
+
+    def test_malformed_events_preserved_and_next_valid_event_processed(self):
+        path, runtime, advisor, valid = self.event_fixture()
+        path.write_bytes(b'not json\n[]\n{"state":"FAILED","evidence":[1]}\n\xff\n'+valid)
+        self.assertEqual(consume(path, runtime, self.root, advisor), 5)
+        self.assertEqual(len(list((self.root/'unavailable').glob('*.json'))), 4)
+        self.assertEqual(len(list((self.root/'results').glob('*.json'))), 1)
+        self.assertEqual(consume(path, runtime, self.root, advisor), 0)
+
+    def test_chunk_journal_survives_cursor_commit_interruption(self):
+        path, runtime, advisor, valid = self.event_fixture()
+        path.write_bytes(b'x'*40000+b'\n'+valid)
+        def interrupt(path, value):
+            if Path(path).name == 'event-cursor.json': raise OSError('simulated interruption')
+            return atomic_json(path, value)
+        with patch('events.atomic_json', side_effect=interrupt):
+            with self.assertRaises(OSError): consume(path, runtime, self.root, advisor)
+        first_chunk = next((self.root/'rejected-event-chunks').glob('*.json'))
+        before = first_chunk.read_bytes()
+        self.assertEqual(consume(path, runtime, self.root, advisor), 3)
+        self.assertEqual(first_chunk.read_bytes(), before)
+        self.assertEqual(len(list((self.root/'results').glob('*.json'))), 1)
 
 
 if __name__ == "__main__":

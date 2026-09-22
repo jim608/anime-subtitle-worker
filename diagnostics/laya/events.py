@@ -1,4 +1,5 @@
 """Consume the existing post-commit JSONL via filesystem notifications, never Queue scans."""
+import base64
 import hashlib
 import json
 from pathlib import Path
@@ -8,6 +9,8 @@ from sidecar import atomic_json, digest
 
 
 def envelope(event, evidence_id, runtime):
+    if not isinstance(event, dict) or not isinstance(event.get("evidence") or {}, dict):
+        raise ValueError("event_must_be_object_with_object_evidence")
     ev = event.get("evidence") or {}
     if event.get("state") not in ("NEEDS_REVIEW", "FAILED", "RETRYING", "QUARANTINED") and "FAILED" not in event.get("event", ""):
         return None
@@ -55,16 +58,33 @@ def consume(path, runtime_path, state_root, advisor):
             raw = stream.readline(32769)
             if not raw:
                 break
+            if cursor.get("discarding_line") or (len(raw) == 32769 and not raw.endswith(b"\n")):
+                # Preserve each bounded chunk before advancing, including across restart.
+                # Never interpret a tail of an oversized line as a separate JSON event.
+                discard = cursor.get("discarding_line") or {"start": start, "bytes": 0}
+                end = stream.tell()
+                atomic_json(state_root / "rejected-event-chunks" / f"{stat.st_ino}-{start}-{end}.json",
+                            {"reason": "event_line_over_limit", "inode": stat.st_ino,
+                             "line_start": discard["start"], "start": start, "end": end,
+                             "chunk_sha256": hashlib.sha256(raw).hexdigest(),
+                             "chunk_base64": base64.b64encode(raw).decode(),
+                             "line_ended": raw.endswith(b"\n")})
+                cursor = {"inode": stat.st_ino, "offset": end}
+                if not raw.endswith(b"\n"):
+                    cursor["discarding_line"] = {"start": discard["start"], "bytes": discard["bytes"] + len(raw)}
+                atomic_json(state_root / "event-consumer-warning.json", {"reason": "event_line_over_limit",
+                            "inode": stat.st_ino, "offset": discard["start"], "at": time.time()})
+                atomic_json(cursor_path, cursor)
+                processed += 1
+                continue
             if not raw.endswith(b"\n"):
                 if len(raw) < 32769:
                     break  # Writer has not committed a whole line yet.
-                # Do not feed a partial event; bounded defer, no infinite model retries.
-                atomic_json(state_root / "event-consumer-warning.json", {"reason": "event_line_over_limit",
-                            "inode": stat.st_ino, "offset": start, "at": time.time()})
-                return processed
             evidence_id = "raw:" + hashlib.sha256(raw).hexdigest()
             try:
                 event = json.loads(raw)
+                if not isinstance(event, dict):
+                    raise ValueError("event_not_object")
                 # A repeated timestamp/log location is not new diagnostic evidence.
                 semantic = {key: value for key, value in event.items() if key != "timestamp"}
                 semantic_sha = digest(semantic)
@@ -83,10 +103,11 @@ def consume(path, runtime_path, state_root, advisor):
                     if not result.get("record_id"):
                         atomic_json(state_root / "unavailable" / (hashlib.sha256(raw).hexdigest() + ".json"),
                                     dict(result, evidence_id=evidence_id, at=time.time()))
-            except (ValueError, OSError, TypeError) as exc:
+            except (ValueError, OSError, TypeError, RecursionError) as exc:
                 atomic_json(state_root / "unavailable" / (hashlib.sha256(raw).hexdigest() + ".json"),
                             {"reason": "event_evidence_unavailable", "error_type": type(exc).__name__,
-                             "evidence_id": evidence_id, "at": time.time()})
+                             "evidence_id": evidence_id, "at": time.time(),
+                             "raw_base64": base64.b64encode(raw).decode(), "offset": start})
             cursor = {"inode": stat.st_ino, "offset": stream.tell()}
             atomic_json(cursor_path, cursor)
             processed += 1
@@ -98,12 +119,13 @@ def watch(path, runtime_path, root, advisor):
     with INotify() as notify:
         notify.add_watch(str(Path(path).parent), flags.MODIFY | flags.MOVED_TO | flags.CREATE)
         while True:
+            processed = 0
             try:
-                while consume(path, runtime_path, root, advisor) == 32:
-                    pass
+                processed = consume(path, runtime_path, root, advisor)
             except OSError as exc:
                 atomic_json(Path(root) / "event-consumer-warning.json",
                             {"reason": "event_source_unavailable", "error_type": type(exc).__name__, "at": time.time()})
             # Blocking OS notification; timeout is bounded recovery after lost notification,
             # never an SQL/Queue/media/log-history scan.
-            notify.read(timeout=60000)
+            # One drain is <=32 bounded records/chunks. Yield between backlog batches.
+            notify.read(timeout=1000 if processed == 32 else 60000)

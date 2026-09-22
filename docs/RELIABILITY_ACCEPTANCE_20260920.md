@@ -812,3 +812,18 @@ Status **WAITING_FOR_EVIDENCE** on the repaired baseline. Full Goal and M2
 Production acceptance remain incomplete. No M3. Recovery/ARMED and one real
 continuation are not sustained acceptance; do not declare the24-hour or output
 requirements satisfied before their durable evidence exists.
+# 2026-09-23 bounded diagnostic closeout
+
+Latest authoritative details: docs/LAYA_DIAGNOSTICS_20260923.md, final bounded SDK
+audit section. Laya inference disabled/MODEL_QUALITY_NOT_ACCEPTED; fixed7 cases0/7
+in original and reversed order; no SDK/adapter mapping or truncation defect. Separate
+collector oversized-line defect fixed and24 tests+actual Docker restart PASS.
+Three archived old diagnostic containers removed, all5 current temporary IDs absent,
+one E rollback retained; no Worker/WebUI/Gate/backup/source/output changes.
+23:01:11UTC existing observer evidence observation-check-1790118071734932065.json:
+samecf82/ef5, ARMED,106 holds, sameGate2214422 enrolled/2 settled/0strict,3 distinct
+continuations+2 same-task resumptions,0new qualified outputs,0.775h observed.
+Still WAITING_FOR_EVIDENCE for >=24h/all20/>=2strict new publications and real canonical
+publication boundary. No M2 acceptance. Do not use model success, rules-only results,
+review/resumption or existing subtitles as new delivery. Follow up only the exact
+ASR repair-budget/checkpoint evidence already identified, without re-running jobs.

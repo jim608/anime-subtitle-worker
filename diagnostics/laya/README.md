@@ -1,5 +1,21 @@
 # Laya read-only diagnostic sidecar
 
+Current status: **MODEL_QUALITY_NOT_ACCEPTED; automatic inference disabled**.
+The fixed7 incident SDK/adapter audit found no integration mapping/truncation defect;
+original and reversed options both scored0/7. Do not tune prompts or re-enable by
+claiming these examples represent general accuracy. `deploy.sh` pins
+`LAYA_INFERENCE_ENABLED=0`; the service also defaults to disabled. It retains exact
+rules, immutable evidence and the existing event cursor without loading the model.
+Unknown/mixed events are MODEL_DISABLED, not re-labelled UNKNOWN successes.
+Model cache, SDK and model revisions remain retained. Historical inference behavior
+below describes the disabled optional path, not an enabled Production classifier.
+
+Oversized events are saved as bounded base64 chunks with source offsets/hash before
+durable cursor advancement; discard-until-newline survives restart. A drain is at
+most32 bounded chunks/records; malformed events cannot hide subsequent valid events.
+The actual Docker restart test and24 targeted tests passed; actual model-container
+OOM injection is still unverified and separate from this model quality rejection.
+
 This is an optional consumer of the **existing post-commit pipeline-events.jsonl**.
 It never participates in Worker admission, publication, recovery, QC or Gate decisions.
 The Worker Dockerfile copies root Python files, not this directory; its dependencies

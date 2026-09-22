@@ -1,5 +1,21 @@
 # Incremental Delivery Plan
 
+## 2026-09-23 — bounded Laya audit finished; return to Production observation
+
+MODEL_QUALITY_NOT_ACCEPTED: fixed SDK/model, seven frozen incidents, original/reversed
+option order0/7 each; raw SDK and adapter mappings identical, no token truncation.
+Automatic model inference disabled; rules/evidence collector remains, no operational
+authority. Only diagnosed oversized-line/non-object collector defects repaired;
+24 tests and actual Docker restart PASS. Three old b/c/d containers archived/removed,
+five current temporary IDs absent, one E rollback explicitly retained. Full artifacts
+in logs/laya-20260923/bounded-check; no Worker/WebUI deployment or Gate change.
+At23:01:11UTC samecf82/ef5, ARMED,106holds, Gate221442:2 enrolled/2 settled/0strict,
+3 distinct terminal->claim cycles+2 same-task resumptions,0new qualified outputs.
+M2 remains WAITING_FOR_EVIDENCE: >=24h, all frozen20 outcomes,2 new strict publications,
+canonical live output proof and targeted ASR repeated-quality budget/checkpoint review.
+Do not repeat Laya deployment/evaluation or widen its framework. OOM model-container
+injection unverified, not a Production hold. Continue the same Goal; no M3.
+
 ## 2026-09-23 — Laya sidecar and current publication-path incident
 
 Same reliability Goal; WAITING_FOR_EVIDENCE, NOT COMPLETE. See `docs/LAYA_DIAGNOSTICS_20260923.md`.

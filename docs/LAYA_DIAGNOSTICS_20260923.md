@@ -1,5 +1,71 @@
 # Laya diagnostic-only acceptance — 2026-09-23
 
+## Final bounded SDK audit: MODEL_QUALITY_NOT_ACCEPTED
+
+This section supersedes the inference-enabled E status below. The same seven
+immutable incident inputs and pinned SDK/model were tested once offline, original
+and reversed option order (14 calls total). Official `Agent.predict` raw logits,
+rendered question/options, index mapping, serialized incident, every request token,
+probabilities and adapter output are retained in
+`bounded-check/offline/sdk-audit.json`. Original SDK/adapter output matches all seven
+previous results exactly. No mapping/rendering/truncation defect was found. Complete
+requests are 385–408 tokens; reversing moves RESOURCE from index2 to index4, yet
+both orders choose RESOURCE for all7, **0/7 correct in each order**. This rules out
+that fixed-position explanation for these inputs, not a general model evaluation.
+No model, label, example, prompt or dependency revision changed; no tuning/retry-to-pass.
+
+Automatic inference is now **disabled**, explicitly `MODEL_QUALITY_NOT_ACCEPTED`.
+The independent rules/evidence collector starts no model subprocess and defaults to
+disabled even when the environment variable is absent. Known rules remain intact;
+unknown/mixed inputs record MODEL_DISABLED, not fabricated UNKNOWN successes.
+Original predictions/inputs remain immutable. The optional WebUI reader reports
+`MODEL_DISABLED`, `category:null`, advisory-only and the quality rejection reason;
+no incorrect old advice is presented as the current cause.
+
+Only diagnostic image changed to
+`sha256:7ede1d2036d4d78f156c0d90b6c3215272a3c17ad2d78dec9c19134845877ca9`,
+container `4d3a5b690f2916b128676c02de6a40ef88faeec1a216d095f01eea2268282dc9`,
+started **2026-09-22T22:58:29.697044536Z**. Worker/WebUI IDs, images and start times
+are byte-identical before/after; no Worker deployment, restart or Gate recreation.
+Rules-only sample: **28MiB/4GiB,0.01%CPU**, no network; only init/main Python, no model.
+
+A separate reproduced collector defect was fixed: an oversized JSONL line previously
+kept the cursor stationary; non-object JSON could also terminate the consumer thread.
+Each rejected chunk is now durably preserved before the cursor advances, with an
+explicit cross-restart discard state through newline. Each drain reads at most32
+bounded records/chunks (~1MiB), yielding between batches. Malformed JSON is retained,
+not fed to inference; subsequent valid events continue. **24 targeted tests PASS**
+and actual isolated Docker restart PASS:1.2MB bad line, malformed inputs, partial
+oversized line across restart,2 subsequent unique rule results and duplicate replay.
+Evidence: `bounded-check/{targeted-tests.log,collector-proof/collector-proof.json}`.
+Actual model-container OOM injection remains **UNVERIFIED**, separate from model
+quality rejection and the now-PASS oversized-line/restart behavior. None creates
+a Production hold. Existing timeout/offline/invalid SDK tests remain historical PASS.
+
+Cleanup: the three explicitly requested stopped diagnostic revisions b/c/d were
+re-inspected, archived and removed **3/3 by exact full ID, non-force**. Read-only
+roots contain only engine mount points/docker-init changes; their unique persistent
+state was archived and checksum-verified, original bind data and immutable rollback
+images/configuration retained. Full inspect/logs/image metadata and receipts are in
+`bounded-check/{retired-cleanup-proof.json,retired-removed.txt,retired-absence.txt}`.
+All **5 current temporary test containers** are confirmed absent after teardown.
+One stopped E replacement container is explicitly retained as the immediate rollback;
+its evidence/image/state remain preserved, not classified as temporary trash.
+No prune, volumes, image deletion, backup deletion or Production service operation.
+
+Final bounded Production snapshot **2026-09-22T23:01:11.361991Z**:
+`observation-check-1790118071734932065.json`, samecf82/ef5, ARMED/runtime_baseline_match,
+sameGate221442 **2 enrolled/2 settled/0 strict**,106 holds. Three distinct automatic
+terminal-to-next-claim cycles, plus two separate same-task resumptions. Latest task
+`m2ai_59302cdd6af13a21f12b` quality review1790117391.8321404 -> bounded resumption
+claim1790117772.2825096, still running. No qualifying new formal subtitle (**0**).
+Only0.775h observed: still need >=24h, fixed20 outcomes, >=2 new strict outputs and
+actual canonical Production publication proof. Same-ASR quality retry/checkpoint
+budget review remains targeted follow-up, not a proven system defect or unsafe release.
+No M2 acceptance. The first read-only closeout used an incorrect report-root argument;
+that failed log is retained, then only the snapshot/absence checks resumed successfully
+(`bounded-check/finish.exit=0`); no cleanup/deployment was repeated.
+
 PARTIAL / WAITING_FOR_EVIDENCE: independent diagnostics and the current controlled
 Production recovery are deployed. Classification quality is poor and grants no
 operational authority. Full-flow sustained Production acceptance is NOT complete.

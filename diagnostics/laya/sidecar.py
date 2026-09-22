@@ -20,6 +20,7 @@ SDK_REVISION = "c7527708f9f5220c669d8aa385077cd28d04708a"
 MODEL_REVISION = "1c5edc17a7acd8701df6fc341c0d179f1c62c982"
 MODEL_ID = "convaiinnovations/laya/multilingual"
 CONTRACT = "laya-advisory-v1"
+MODEL_QUALITY_STATUS = "MODEL_QUALITY_NOT_ACCEPTED"
 ADAPTER_REVISION = hashlib.sha256(b"".join(
     (Path(__file__).parent / name).read_bytes() for name in ("sidecar.py", "events.py"))).hexdigest()
 CRITERIA = {
@@ -237,8 +238,9 @@ class ModelProcess:
 
 
 class Advisor:
-    def __init__(self, root, model):
+    def __init__(self, root, model, *, inference_enabled=True):
         self.root, self.model = Path(root), model
+        self.inference_enabled = inference_enabled
         self.lock = threading.Lock()
 
     def analyze(self, item):
@@ -254,6 +256,7 @@ class Advisor:
             except (ValueError, TypeError) as invalid:
                 return {"status": "UNAVAILABLE", "reason": str(invalid)}
         key = digest({"contract": CONTRACT, "adapter": ADAPTER_REVISION,
+                      "inference_enabled": self.inference_enabled,
                       "sdk": SDK_REVISION, "model": MODEL_REVISION, "incident": item})
         target = self.root / "results" / (key + ".json")
         if not self.lock.acquire(blocking=False):
@@ -267,13 +270,17 @@ class Advisor:
             if evidence_error:
                 result = {"status": "UNAVAILABLE", "reason": evidence_error, "checks": CHECKS["UNKNOWN"]}
             elif rule == "UNKNOWN" or item.get("mixed_evidence") is True or item.get("evaluation_only") is True:
-                result = dict(self.model.predict(item))
+                if self.inference_enabled:
+                    result = dict(self.model.predict(item))
+                else:
+                    result = {"status": "MODEL_DISABLED", "reason": MODEL_QUALITY_STATUS}
             result.update(record_id=key, contract=CONTRACT, created_at=time.time(),
                           event_id=item["event_id"], evidence_ids=item["evidence_ids"],
                           raw_reason=item["raw_reason"], input_sha256=digest(item), rule_category=rule,
                           model_id=MODEL_ID, model_revision=MODEL_REVISION, sdk_revision=SDK_REVISION,
                           adapter_revision=ADAPTER_REVISION, adapter_image=os.environ.get("LAYA_IMAGE_ID", "NOT_RECORDED"),
                           runtime=item["runtime"], model_runtime=self.model.metadata,
+                          inference_enabled=self.inference_enabled, model_quality_status=MODEL_QUALITY_STATUS,
                           advisory_only=True, operational_actions=[], replay=False)
             atomic_json(target, result)
             atomic_json(self.root / "latest.json", result)
@@ -317,18 +324,31 @@ def serve(root, model_root):
             if not stat.S_ISSOCK(sock.lstat().st_mode):
                 raise RuntimeError("socket_path_is_not_socket")
             sock.unlink()
+        # Fail closed for diagnostic inference only. Never alters Worker admission.
+        inference_enabled = os.environ.get("LAYA_INFERENCE_ENABLED", "0") == "1"
         model = ModelProcess(model_root)
-        advisor = Advisor(root, model)
+        advisor = Advisor(root, model, inference_enabled=inference_enabled)
         with socketserver.ThreadingUnixStreamServer(str(sock), Handler) as server:
             os.chmod(sock, 0o660)
             server.advisor = advisor
             server.daemon_threads = True
             try:
-                try:
-                    model.start()
-                    health = dict(model.metadata, status="READY")
-                except (RuntimeError, TimeoutError, OSError):
-                    health = {"status": "UNAVAILABLE", "reason": "model_start_failed"}
+                health = {"status": MODEL_QUALITY_STATUS, "inference_enabled": False,
+                          "reason": "fixed_seven_incident_evaluation_no_benefit"}
+                if inference_enabled:
+                    try:
+                        model.start()
+                        health = dict(model.metadata, status="READY", inference_enabled=True,
+                                      model_quality_status=MODEL_QUALITY_STATUS)
+                    except (RuntimeError, TimeoutError, OSError):
+                        health = {"status": "UNAVAILABLE", "reason": "model_start_failed"}
+                else:
+                    # Do not leave an old incorrect prediction displayed as current.
+                    # Immutable original result/input records remain untouched.
+                    atomic_json(root / "latest.json", dict(health, created_at=time.time(),
+                        advisory_only=True, operational_actions=[], raw_reason=MODEL_QUALITY_STATUS,
+                        evidence_ids=["bounded-check/offline/sdk-audit.json"],
+                        model_revision=MODEL_REVISION, adapter_revision=ADAPTER_REVISION))
                 atomic_json(root / "health.json", dict(health, at=time.time(), model_revision=MODEL_REVISION))
                 if os.environ.get("LAYA_EVENT_PATH"):
                     from events import watch

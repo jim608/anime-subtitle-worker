@@ -40,6 +40,7 @@ docker run -d --name "$NAME" --restart unless-stopped --init \
   --mount type=bind,src="$ROOT/work",dst=/runtime,readonly \
   --mount type=bind,src="$ROOT/logs",dst=/events,readonly \
   -e LAYA_EVENT_PATH=/events/pipeline-events.jsonl \
+  -e LAYA_INFERENCE_ENABLED=0 \
   -e LAYA_RUNTIME_PATH=/runtime/m2_guardrail_runtime.json -e LAYA_IMAGE_ID="$IMAGE" "$IMAGE" > "$LOG/service.cid"
 docker inspect "$NAME" > "$LOG/service-inspect.json"
 echo 'DEPLOYED_DIAGNOSTIC_ONLY; model health and acceptance still required'
