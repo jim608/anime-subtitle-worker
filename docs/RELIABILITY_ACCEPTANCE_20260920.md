@@ -3,11 +3,15 @@
 ## 2026-09-23 superseding checkpoint
 
 The earlier healthy snapshots below are historical, not current acceptance.
-Worker f52118c is now TRIPPED: Sep21 normalizer rename -> absent manifested output
-path -> incorrect_completion. Exact source unchanged, old receipt remains invalid.
-Gate014830 settled20/20,1 strict/19 review/FAIL. Laya advisory-only deployed with poor
-0/7 historical matches; it cannot recover Production. Minimal path/recovery candidate
-113 tests PASS but not deployed yet. See `LAYA_DIAGNOSTICS_20260923.md`.
+Sep21 normalizer rename -> absent manifested output -> incorrect_completion repaired
+by actual Worker cf82fc27 / WebUI ef5c20e6 safe deployment and exact controlled recovery.
+201 actual-image tests + real restart +7 fresh breakers PASS,106holds/all57backups
+retained. At22:26Z ARMED,2real terminal->nextclaim continuations, thirdtaskASR.
+OldGate014830 remains20/20,1strict/19review/FAIL; new221442 Gate1enrolled/0settled/0strict.
+Old invalid receipt not rewritten. Laya E remains advice only (0/7 historical matches),
+18tests+4real faults PASS; generic missing cause markedUNAVAILABLE. No Worker/Gate
+change for sidecar E. Formal new0 and sustained24h/2new outputs still pending.
+See `LAYA_DIAGNOSTICS_20260923.md`; NOT full-flow acceptance.
 
 Active Goal replaces the previous one-claim recovery closeout. Overall NOT COMPLETE.
 No M3, full-library rescan, broad Queue retry, QC relaxation, source/valid-output

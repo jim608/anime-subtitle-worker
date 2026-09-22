@@ -2,12 +2,15 @@
 
 ## 2026-09-23 — current evidence supersedes earlier running-window notes
 
-Production f52118c is TRIPPED after the Sep21 external subtitle rename broke the
-exact-path completion receipt. Old014830 Gate SETTLED20/20:1 strict,19 review,FAIL.
-Laya CPU sidecar deployed; 0/7 historical classification matches, diagnostic-only.
-Publication-path candidate113 related tests PASS; Worker/WebUI changes are not yet
-deployed. Current incident controlled recovery and sustained acceptance remain open.
-See `LAYA_DIAGNOSTICS_20260923.md`; no additional formal subtitle counted.
+Worker cf82fc27 / WebUI ef5c20e6 deployed; actual image201 tests+Docker restart+fresh
+7/7 breakers PASS, current incident controlled recovery complete, ARMED at22:26Z.
+Original invalid receipt retained,106 holds and all57 backups preserved. Two real
+terminal->distinct automatic claims proven; third task in ASR. Old014830 Gate stays
+20/20:1 strict,19 review,FAIL. New221442 Gate startedSep22 22:14:42.778928Z;1enrolled,
+0settled/strict. Historical resumptions excluded, no member replacement.
+Laya E sidecar18tests+4real fault tests PASS,0/7 historical matches, diagnostic-only.
+Source naming repair's new formal output and full24h/2-new-output acceptance remain
+WAITING_FOR_EVIDENCE. See `LAYA_DIAGNOSTICS_20260923.md`; formal new count0, M2 not accepted.
 
 ## 2026-09-20 03:36 UTC — actual new publication, sustained window pending
 

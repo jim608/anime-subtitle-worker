@@ -1,5 +1,23 @@
 # M2 Circuit Breaker Test Results
 
+## 2026-09-23 actual publication repair deployment
+
+Worker `cf82fc27d28b0ed69c33ce95ef0f72e0492a53bf`, image
+`sha256:2733529ad6c8d56b9edab7e8facccc1c4df43843aa70a8a9098a4130dcf3537f`:
+201 related tests PASS plus real Docker interrupted-publication/restart/review-to-next
+claim proof. Fresh isolated breaker suite `m2-guardrail-fi-20260922T221435914696Z-7b9ff909`:
+7/7 PASS, Production resources affected false. Exact Sep21 event recovery
+`m2-recon-publication-path-20260923` succeeded; ARMED at22:26Z with two real distinct
+terminal->claim continuations,106 holds and all57 backups retained.
+Logs: `/logs/laya-20260923/{actual-image-tests.log,actual-image-restart.log,actual-image-proof.json,recovery-closeout.json}`.
+Old014830 FAIL unchanged; current221442 Gate1enrolled/0settled/0strict, formal new0.
+These tests/recovery do not establish 24-hour Production acceptance.
+
+Separate final Laya image `sha256:bbf475827326efcd8348b357d6e3e94de61e53da309415821d98e8fad7f79e20`:
+18 adapter tests and4 actual model-unavailability/invalid-output/token-limit cases PASS;
+seven historical classifications0/7 correct, so diagnostic-only. No operational
+permission or Worker/Gate change from its input-validation patch. See Laya closeout.
+
 ## 2026-09-20 actualf52118c report-export/admission regression —386 and fresh7/7 PASS
 
 Workerf52118c564e9aebca89d52b336e2156d2ba095cd,

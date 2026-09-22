@@ -75,6 +75,24 @@ class AdvisoryTests(unittest.TestCase):
     def test_wrapper_reason_alone_is_insufficient(self):
         item = incident(); item['raw_reason'] = 'm2_guardrail_not_armed'
         self.assertEqual(self.advisor.analyze(item)['reason'], 'insufficient_evidence:original_reason_missing')
+
+    def test_parent_review_without_original_reason_never_reaches_model(self):
+        # Actual post-deploy pipeline_job_transition supplied only this wrapper;
+        # its missing cache-lineage cause must not be guessed as TRANSIENT.
+        for reason in ('quality_blocked_requires_review', 'source_selection_needs_review', 'worker_unknown'):
+            item = incident(); item['raw_reason'] = reason
+            result = self.advisor.analyze(item)
+            self.assertEqual(result['reason'], 'insufficient_evidence:original_reason_missing')
+            self.assertTrue((self.root / 'results' / (result['record_id'] + '.json')).is_file())
+            self.assertEqual(json.loads((self.root / 'latest.json').read_text())['status'], 'UNAVAILABLE')
+            self.assertEqual(self.advisor.analyze(item)['record_id'], result['record_id'])
+        self.model.predict.assert_not_called()
+
+    def test_missing_stage_or_attempt_never_reaches_model(self):
+        for key in ('stage', 'attempt'):
+            item = incident(); item[key] = 'NOT_RECORDED'
+            self.assertEqual(self.advisor.analyze(item)['reason'], 'insufficient_evidence:stage_or_attempt_missing')
+        self.model.predict.assert_not_called()
         self.model.predict.assert_not_called()
 
     def test_byte_limit_no_silent_truncation(self):

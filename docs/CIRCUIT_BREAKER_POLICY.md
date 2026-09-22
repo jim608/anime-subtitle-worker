@@ -1,5 +1,23 @@
 # M2 Circuit Breaker Policy
 
+## 2026-09-23 publication-path incident recovery and advisory boundary
+
+`publication_path_normalization` is a typed mode of the existing authorized
+reconciliation entry, not an alternate Queue or latch-clear API. It requires the
+exact preserved incorrect_completion attempt/obligation/trip/old-Gate binding,
+durable source hold, current runtime identity, complete classified membership and
+actual-image `m2-publication-path-regression-v1` evidence. Legacy manifests remain
+exact-path/hash-bound; a renamed legacy receipt is never silently made valid.
+Normal CN/Hant conversion now publishes directly at the observed canonical name.
+Unverified outputs, source UNKNOWN, missing proof and later unrelated safety events
+still refuse recovery. The original failed receipt and historical UNPROVEN remain.
+
+Laya is a separate read-only advice consumer. Its model result, absence, timeout,
+invalid input/output or poor accuracy has no admission, QC or recovery authority.
+Generic parent review without its underlying cause is explicitly UNAVAILABLE.
+Laya-only deployment is not a Worker baseline change and does not recreate a Gate.
+See `LAYA_DIAGNOSTICS_20260923.md` for the exact deployed evidence and open acceptance.
+
 ## 2026-09-20 derived report access failure is not a safety latch
 
 After verifying the immutable SQLite summary journal/hash, only the derived report

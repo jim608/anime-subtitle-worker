@@ -85,7 +85,7 @@ def atomic_json(path, value):
             os.unlink(temp)
 
 
-def validate_incident(item):
+def validate_incident(item, *, allow_incomplete_evidence=False):
     if not isinstance(item, dict):
         raise ValueError("incident_not_object")
     missing = [key for key in REQUIRED if item.get(key) in (None, "", [], {})]
@@ -93,8 +93,11 @@ def validate_incident(item):
         raise ValueError("insufficient_evidence:" + ",".join(missing))
     if not isinstance(item["runtime"], dict) or not item["runtime"].get("worker_sha"):
         raise ValueError("insufficient_evidence:worker_sha")
-    if item["raw_reason"] in ("m2_guardrail_not_armed", "circuit_breaker_tripped"):
+    if not allow_incomplete_evidence and item["raw_reason"] in ("m2_guardrail_not_armed", "circuit_breaker_tripped",
+                             "quality_blocked_requires_review", "source_selection_needs_review", "worker_unknown"):
         raise ValueError("insufficient_evidence:original_reason_missing")
+    if not allow_incomplete_evidence and (item["stage"] == "NOT_RECORDED" or item["attempt"] == "NOT_RECORDED"):
+        raise ValueError("insufficient_evidence:stage_or_attempt_missing")
     if not isinstance(item["evidence_ids"], list) or len(item["evidence_ids"]) > 20:
         raise ValueError("invalid_evidence_ids")
     if len(canonical(item).encode()) > 32768:
@@ -239,10 +242,17 @@ class Advisor:
         self.lock = threading.Lock()
 
     def analyze(self, item):
+        evidence_error = ""
         try:
             validate_incident(item)
         except (ValueError, TypeError) as exc:
-            return {"status": "UNAVAILABLE", "reason": str(exc)}
+            evidence_error = str(exc)
+            if evidence_error not in ("insufficient_evidence:original_reason_missing", "insufficient_evidence:stage_or_attempt_missing"):
+                return {"status": "UNAVAILABLE", "reason": evidence_error}
+            try:
+                validate_incident(item, allow_incomplete_evidence=True)
+            except (ValueError, TypeError) as invalid:
+                return {"status": "UNAVAILABLE", "reason": str(invalid)}
         key = digest({"contract": CONTRACT, "adapter": ADAPTER_REVISION,
                       "sdk": SDK_REVISION, "model": MODEL_REVISION, "incident": item})
         target = self.root / "results" / (key + ".json")
@@ -254,7 +264,9 @@ class Advisor:
             atomic_json(self.root / "inputs" / (key + ".json"), item)
             rule = RULES.get(item.get("error_code"), "UNKNOWN")
             result = {"status": "RULE_ONLY"}
-            if rule == "UNKNOWN" or item.get("mixed_evidence") is True or item.get("evaluation_only") is True:
+            if evidence_error:
+                result = {"status": "UNAVAILABLE", "reason": evidence_error, "checks": CHECKS["UNKNOWN"]}
+            elif rule == "UNKNOWN" or item.get("mixed_evidence") is True or item.get("evaluation_only") is True:
                 result = dict(self.model.predict(item))
             result.update(record_id=key, contract=CONTRACT, created_at=time.time(),
                           event_id=item["event_id"], evidence_ids=item["evidence_ids"],

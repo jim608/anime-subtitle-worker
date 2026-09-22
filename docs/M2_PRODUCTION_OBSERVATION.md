@@ -2,11 +2,14 @@
 
 ## 2026-09-23 current checkpoint
 
-Effective guardrail TRIPPED on the Sep21 incorrect_completion incident, not on Gate
-settlement alone. Actual Worker f52118c; Gate014830021232Z-8147e39531 SETTLED20/20,
-1 strict/19 review/FAIL, original evidence preserved. Laya diagnostic-only service
-does not change this runtime baseline or grant admission. No Gate rebuilt by reads.
-See `LAYA_DIAGNOSTICS_20260923.md` for current incident and separate candidate evidence.
+The Sep21 normalizer/manifest incident was repaired in Worker cf82fc27, WebUI ef5c20e6;
+controlled recovery ARMED,106holds/all57backups retained. OldGate014830 remains
+SETTLED20/20,1 strict/19 review/FAIL. New runtime Gate221442778928Z-bfe39573b4 starts
+Sep22 22:14:42.778928Z, baseline81505164f40ba0636a2a52c6; at22:26Z1enrolled/0settled,
+0strict, two historical resumptions excluded. Two real terminal->distinct claim
+continuations; third taskASR. New formal subtitle0,24h acceptance unfinished.
+Laya-only E update did not change this baseline/Gate. No Gate rebuilt by reads.
+See `LAYA_DIAGNOSTICS_20260923.md` for exact receipts, versions and evidence.
 
 ## 2026-09-20 05:30 UTC — continued automatic claims, source preservation corroborated
 

@@ -2,13 +2,18 @@
 
 ## 2026-09-23 — Laya sidecar and current publication-path incident
 
-Same reliability Goal; NOT COMPLETE. See `docs/LAYA_DIAGNOSTICS_20260923.md`.
-CPU-only Laya is deployed diagnostic-only (0/7 historical matches; no operational
-authority). Production still f52118c/TRIPPED, canonical publication-path candidate
-and exact incident recovery await safe deployment; 113 related isolated tests PASS.
-The Sep21 normalizer rename invalidates an exact-path manifest; preserve its original
-receipt and all105 holds. Old014830 Gate is SETTLED20/20,1 strict/19 review/FAIL.
-No new formal subtitle, no query-driven Gate reset, no M3.
+Same reliability Goal; WAITING_FOR_EVIDENCE, NOT COMPLETE. See `docs/LAYA_DIAGNOSTICS_20260923.md`.
+Worker cf82fc27 / WebUI ef5c20e6 safely deployed; actual image201 tests, real restart,
+fresh7/7 breakers and exact Sep21 controlled recovery PASS. Breaker ARMED at22:26Z;
+two distinct terminal->automatic claim/Stage continuations, third job doing ASR.
+106 holds, all57 backups retained; original invalid receipt unchanged. Old014830
+Gate remains20/20,1strict/19review/FAIL. New221442 Gate:1 enrolled/20,0settled/strict;
+the two historical resumptions do not fill its cohort. Formal new subtitle count0.
+CPU-only Laya E imagebbf4758,18 adapter tests+4 actual failure tests PASS, but historical
+classification0/7: diagnostic-only/no authority. Generic parent reason now explicitly
+UNAVAILABLE. Laya-only update did not change Worker/WebUI identities or Gate.
+24h minimum pointSep23 22:14:42.778928Z; all fixed outcomes and2 new qualified outputs
+still needed. No M3; no more Codex polling or full-library/Queue scans.
 
 ## Active full-flow reliability Goal — 2026-09-20
 

@@ -36,6 +36,9 @@ Known exact reason codes retain deterministic rule classification. Only unknown 
 mixed evidence invokes Laya (historical evaluation explicitly runs both). Returned
 categories/checks are allowlisted; model scores are uncalibrated and are NOT accuracy.
 UNKNOWN is permitted. Model text cannot become a command or change any safety state.
+Generic parent review/worker_unknown labels without the original cause, or missing
+Stage/attempt, are journaled as UNAVAILABLE with evidence IDs and replay identity;
+they never reach inference and never silently keep an older advisory as the new result.
 
 The adapter compares the **entire SDK-generated token sequence** with the non-truncated
 request, including instructions, options, evidence IDs and state. Any SDK truncation,
