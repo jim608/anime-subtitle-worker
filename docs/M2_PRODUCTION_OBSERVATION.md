@@ -1,5 +1,27 @@
 # M2 Production Observation
 
+## 2026-09-22 23:24 UTC — three-member source-choice check
+
+Read-only exact-job SQLite evidence (`pipeline_source_decisions`) confirms that
+the first three frozen Gate members each persisted one source decision before
+ASR. All three decision and input-identity SHA-256 digests match. Subtitle and
+audio inventories were marked complete. Their 6/4/3 subtitle candidates
+(13 total) had **zero eligible** under the existing source hard QC. Every
+candidate failed `timing_overlap`; some also failed invalid timing, CPS,
+repetition or completeness checks. The selected Japanese audio tracks had
+language confidence 0.96/0.91/0.91, and each decision recorded
+`ASR_JA_AUDIO / trusted_japanese_audio_no_usable_subtitle`. Thus the durable
+record shows no verified eligible zh-TW, zh-CN or ja subtitle skipped in
+favor of ASR. It does **not** prove the sidecars are irreparable; repairing
+timing overlap would require separate content- and QC-preserving evidence.
+
+Full decision rows and candidate reasons are preserved on the server at
+`logs/laya-20260923/source-choice-gate3-20260922T2325Z.json` (generated
+23:24:35Z). This check made no media, subtitle, runtime, breaker or Gate
+change. The latest *Gate* count cited below remains the 23:13 UTC snapshot,
+not a newly sampled or completed Gate. Continue server-owned 24-hour/frozen
+20 observation without backfilling review members or weakening QC.
+
 ## 2026-09-22 23:13 UTC — fixed cohort, bounded ASR review evidence
 
 Same Worker cf82fc27 and WebUI ef5c20e6, Breaker ARMED,106 source holds.

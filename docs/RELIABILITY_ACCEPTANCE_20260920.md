@@ -1,5 +1,18 @@
 # Full-flow reliability acceptance — 2026-09-20
 
+## 2026-09-22 23:24 UTC — source path of three current Gate reviews
+
+An exact-three, read-only audit found intact persisted source decisions:
+6/4/3 subtitle candidates, zero eligible after existing hard QC, complete
+source inventories, and trusted Japanese audio chosen for ASR in each case.
+`timing_overlap` occurs in all 13 rejected candidates. The current
+deterministic-ASR-quality reviews therefore have no evidence of a skipped
+*verified* subtitle route. Timing repair remains unproven; no QC exception,
+Worker deployment, Gate change or new formal subtitle resulted. Raw bounded
+evidence: `logs/laya-20260923/source-choice-gate3-20260922T2325Z.json`.
+The existing 24-hour window, all fixed-20 outcomes and two new strict
+publications remain outstanding; M2 is NOT COMPLETE.
+
 ## 2026-09-23 superseding checkpoint
 
 The earlier healthy snapshots below are historical, not current acceptance.

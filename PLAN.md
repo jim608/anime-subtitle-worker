@@ -1,5 +1,17 @@
 # Incremental Delivery Plan
 
+## 2026-09-22 23:24 UTC — source choice of current Gate ASR reviews
+
+Three exact, immutable source decisions passed hash checks. Their 13 subtitle
+candidates had zero eligible under hard QC (`timing_overlap` in all 13);
+inventories were complete and Japanese audio was trusted. No evidence that
+the source priority bridge bypassed a verified usable subtitle. Do not turn
+these Gate reviews into successes or weaken QC. No shared repair or Worker
+deployment justified by this read-only check. Same frozen Gate and existing
+server observer continue; M2 remains WAITING_FOR_EVIDENCE for >=24h, all 20
+fixed outcomes, two newly published strict subtitles and canonical output
+proof. See `docs/M2_PRODUCTION_OBSERVATION.md` and the server evidence file.
+
 ## 2026-09-22 23:13 UTC — current Gate ASR quality assessment
 
 Current baseline unchanged/ARMED. Fixed Gate221442 now3 enrolled/3 settled,
