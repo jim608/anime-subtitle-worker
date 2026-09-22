@@ -1,5 +1,15 @@
 # Incremental Delivery Plan
 
+## 2026-09-22 23:32 UTC — ASS source overlap safety boundary
+
+The three frozen Gate jobs' candidate sidecars retain matching hashes but
+have 8/120/30 real timeline overlaps; one has eight same-style/same-layer
+conflicts, and others have additional QC faults. This does not justify a
+global ASS exemption or automatic promotion to COMPLETED. No Worker code or
+deployment change. Keep server-owned observation running and retain the
+original fixed cohort; M2 still awaits the >=24h/20-result/two-new-output
+acceptance evidence.
+
 ## 2026-09-22 23:24 UTC — source choice of current Gate ASR reviews
 
 Three exact, immutable source decisions passed hash checks. Their 13 subtitle

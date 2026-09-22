@@ -1,5 +1,15 @@
 # Full-flow reliability acceptance — 2026-09-20
 
+## 2026-09-22 23:32 UTC — current ASS source candidates remain blocked
+
+Read-only, hash-verified inspection of three exact Gate zh-TW ASS sidecars
+found 8/120/30 overlaps above current tolerance. One has only same-style,
+same-layer overlaps; the other two include additional QC failures or mixed
+overlay patterns. An unconditional ASS overlap waiver is not a safe repair.
+Their existing reviews remain genuine quality holds pending content-preserving
+evidence. No new formal output or runtime change. See the timestamped overlap
+report in `logs/laya-20260923/` and `docs/M2_PRODUCTION_OBSERVATION.md`.
+
 ## 2026-09-22 23:24 UTC — source path of three current Gate reviews
 
 An exact-three, read-only audit found intact persisted source decisions:

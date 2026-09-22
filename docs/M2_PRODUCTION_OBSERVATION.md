@@ -1,5 +1,22 @@
 # M2 Production Observation
 
+## 2026-09-22 23:32 UTC — bounded ASS overlap check
+
+The three current Gate reviews' best zh-TW ASS sidecars were read once,
+without modifying them or the media. Each file's SHA-256 still matches its
+persisted source decision. Under the current 0.10-second overlap tolerance,
+they contain **8/120/30** overlapping event pairs, with maximum overlap
+**2.89/9.32/11.31 seconds**. The first sidecar's eight pairs are all in the
+same layer and same style (`Default`), so blanket ASS-layer exemption would be
+unsafe. The second has 44 same-style overlaps and separately fails CPS,
+repetition and minimum duration. The third has cross-style song events but
+also fails invalid timing. These are not shown to be a benign parser-only
+artifact, and no existing bounded repair has been shown to preserve meaning
+and pass unchanged hard QC. Keep the source candidates ineligible and the
+Gate reviews unchanged. Evidence:
+`logs/laya-20260923/ass-overlap-gate3-20260922T2332Z.json`.
+No Worker deployment, Gate rebuild, source write or subtitle publication.
+
 ## 2026-09-22 23:24 UTC — three-member source-choice check
 
 Read-only exact-job SQLite evidence (`pipeline_source_decisions`) confirms that
