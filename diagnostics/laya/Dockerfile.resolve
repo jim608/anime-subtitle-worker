@@ -1,0 +1,5 @@
+FROM python:3.11-slim-bookworm
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 HF_HUB_DISABLE_TELEMETRY=1 DO_NOT_TRACK=1
+COPY requirements.in /tmp/requirements.in
+RUN python -m pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu -r /tmp/requirements.in && python -m pip check && python -m pip freeze > /requirements.lock
+LABEL io.subtitle.project="anime-subtitle-worker" io.subtitle.purpose="laya-dependency-resolution"

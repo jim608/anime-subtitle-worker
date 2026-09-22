@@ -1,5 +1,15 @@
 # Incremental Delivery Plan
 
+## 2026-09-23 — Laya sidecar and current publication-path incident
+
+Same reliability Goal; NOT COMPLETE. See `docs/LAYA_DIAGNOSTICS_20260923.md`.
+CPU-only Laya is deployed diagnostic-only (0/7 historical matches; no operational
+authority). Production still f52118c/TRIPPED, canonical publication-path candidate
+and exact incident recovery await safe deployment; 113 related isolated tests PASS.
+The Sep21 normalizer rename invalidates an exact-path manifest; preserve its original
+receipt and all105 holds. Old014830 Gate is SETTLED20/20,1 strict/19 review/FAIL.
+No new formal subtitle, no query-driven Gate reset, no M3.
+
 ## Active full-flow reliability Goal — 2026-09-20
 
 Latest meaningful evidence03:36UTC: unchangedf52118c has its first genuinely new

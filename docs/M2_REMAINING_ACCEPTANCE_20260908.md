@@ -1,5 +1,14 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-23 — current evidence supersedes earlier running-window notes
+
+Production f52118c is TRIPPED after the Sep21 external subtitle rename broke the
+exact-path completion receipt. Old014830 Gate SETTLED20/20:1 strict,19 review,FAIL.
+Laya CPU sidecar deployed; 0/7 historical classification matches, diagnostic-only.
+Publication-path candidate113 related tests PASS; Worker/WebUI changes are not yet
+deployed. Current incident controlled recovery and sustained acceptance remain open.
+See `LAYA_DIAGNOSTICS_20260923.md`; no additional formal subtitle counted.
+
 ## 2026-09-20 03:36 UTC — actual new publication, sustained window pending
 
 Unchangedf52118c runtime and014830 Gate:03:30 snapshot ARMED,9 enrolled/9 settled,

@@ -1632,7 +1632,9 @@ class VideoWorker:
     ) -> ProcessOutcome:
         """Normalize generic Hant into a verified Taiwan-Traditional output."""
 
-        destination = video.with_name(f"{video.stem}.zh-TW.ass")
+        from subtitle_paths import chinese_publication_path
+
+        destination = chinese_publication_path(video)
         self._set_stage(
             video,
             "opencc_source",
@@ -1745,7 +1747,9 @@ class VideoWorker:
         video: Path,
         decision: SubtitleSourceDecision,
     ) -> ProcessOutcome:
-        destination = video.with_name(f"{video.stem}.zh-TW.ass")
+        from subtitle_paths import chinese_publication_path
+
+        destination = chinese_publication_path(video)
         self._set_stage(
             video,
             "opencc_source",

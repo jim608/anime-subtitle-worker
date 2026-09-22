@@ -35,7 +35,7 @@ class SourceFormatDispatchTest(unittest.TestCase):
         self.config = _config(self.root / 'work', source_integrity_sha256_enabled=True)
         self.config.work_path.mkdir()
         self.worker = self.new_worker()
-        self.output = self.video.with_name('episode.zh-TW.ass')
+        self.output = self.video.with_name('episode.繁體中文.zh-TW.ass')
 
     def new_worker(self):
         worker = VideoWorker.__new__(VideoWorker)
@@ -130,6 +130,27 @@ class SourceFormatDispatchTest(unittest.TestCase):
         with patch('worker.write_output_manifest', side_effect=AssertionError('duplicate manifest')):
             self.convert(worker=self.new_worker())
         self.assertEqual(before, (self.signature(self.output), self.signature(output_manifest_path(self.video, self.config))))
+
+    def test_publication_uses_observed_normalizer_canonical_name(self):
+        self.convert()
+        self.assertEqual(self.output.name, 'episode.繁體中文.zh-TW.ass')
+        self.assertFalse(self.video.with_name('episode.zh-TW.ass').exists())
+        self.assertTrue(validate_output_manifest(self.video, self.config, verify_hashes=True,
+                                                require_publication_semantics=True))
+
+    def test_legacy_manifest_remains_exact_path_bound(self):
+        legacy = self.video.with_name('episode.zh-TW.ass')
+        # Generate the whole old receipt, including its path-bound QC snapshot.
+        with patch('subtitle_paths.chinese_publication_path', return_value=legacy):
+            self.convert()
+        manifest = output_manifest_path(self.video, self.config)
+        receipt = self.signature(manifest)
+        self.assertTrue(validate_output_manifest(self.video, self.config, verify_hashes=True,
+                                                require_publication_semantics=True))
+        legacy.rename(self.output)
+        self.assertFalse(validate_output_manifest(self.video, self.config, verify_hashes=True,
+                                                 require_publication_semantics=True))
+        self.assertEqual(receipt, self.signature(manifest))
 
     def test_manifest_commit_interruption_resumes_without_duplicate_publish(self):
         with patch.object(self.worker, '_commit_output_publication', side_effect=RuntimeError('interrupt')):

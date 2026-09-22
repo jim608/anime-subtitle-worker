@@ -1,0 +1,8 @@
+# Isolated diagnostic image only; never installed in the Worker.
+torch==2.8.0+cpu
+transformers==4.57.6
+huggingface-hub==0.36.0
+safetensors==0.6.2
+numpy==2.2.6
+inotify-simple==2.0.1
+laya @ https://github.com/NandhaKishorM/laya/archive/c7527708f9f5220c669d8aa385077cd28d04708a.zip

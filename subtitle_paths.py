@@ -232,6 +232,17 @@ def ai_finished_subtitle_mtime(video_path: str | Path, config: AppConfig) -> flo
     return max(mtimes) if mtimes else None
 
 
+def chinese_publication_path(video: str | Path) -> Path:
+    """Publish at the existing normalizer's stable Traditional-Chinese name.
+
+    A bare .zh-TW.ass is renamed asynchronously by the deployed normalizer;
+    publishing it would invalidate the exact-path manifest after successful QC.
+    This does not move existing files or reinterpret old manifests.
+    """
+    video = Path(video)
+    return video.with_name(f"{video.stem}.繁體中文.zh-TW.ass")
+
+
 def _with_video_suffix(video: Path, suffix: str) -> Path:
     return video.with_name(f"{video.stem}{suffix}")
 

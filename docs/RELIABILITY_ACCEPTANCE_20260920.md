@@ -1,5 +1,14 @@
 # Full-flow reliability acceptance — 2026-09-20
 
+## 2026-09-23 superseding checkpoint
+
+The earlier healthy snapshots below are historical, not current acceptance.
+Worker f52118c is now TRIPPED: Sep21 normalizer rename -> absent manifested output
+path -> incorrect_completion. Exact source unchanged, old receipt remains invalid.
+Gate014830 settled20/20,1 strict/19 review/FAIL. Laya advisory-only deployed with poor
+0/7 historical matches; it cannot recover Production. Minimal path/recovery candidate
+113 tests PASS but not deployed yet. See `LAYA_DIAGNOSTICS_20260923.md`.
+
 Active Goal replaces the previous one-claim recovery closeout. Overall NOT COMPLETE.
 No M3, full-library rescan, broad Queue retry, QC relaxation, source/valid-output
 overwrite, backup deletion, or ASR-budget reset. Server must own the eventual

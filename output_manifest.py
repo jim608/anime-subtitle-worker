@@ -465,9 +465,13 @@ def _publication_outputs_match_policy(
                 str(source_transcript_paths_for_video(video, config, language).ass.resolve())
             ]
         else:
-            expected = [
-                str(Path(video).with_name(f"{Path(video).stem}.zh-TW.ass").resolve())
-            ]
+            from subtitle_paths import chinese_publication_path
+
+            # Legacy receipts remain exact-path/hash bound. Do not silently
+            # follow a renamed legacy output or mutate historical evidence.
+            legacy = str(Path(video).with_name(f"{Path(video).stem}.zh-TW.ass").resolve())
+            canonical = str(chinese_publication_path(video).resolve())
+            return manifested in ([legacy], [canonical])
         return manifested == expected
     except (AttributeError, KeyError, OSError, TypeError, ValueError):
         return False

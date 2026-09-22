@@ -1379,6 +1379,7 @@ _RECONCILIATION_INCIDENT_KINDS = frozenset({
     'asr_cache_acceptance_unproven',
     'source_srt_parse_classification',
     'source_transcript_evidence_bridge',
+    'publication_path_normalization',
 })
 
 
@@ -1416,7 +1417,9 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
     asr_cache = root_cause.get('incident_kind') == 'asr_cache_acceptance_unproven'
     source_parse = root_cause.get('incident_kind') == 'source_srt_parse_classification'
     source_transcript = root_cause.get('incident_kind') == 'source_transcript_evidence_bridge'
-    contract = ('m2-source-transcript-evidence-regression-v1' if source_transcript else
+    publication_path = root_cause.get('incident_kind') == 'publication_path_normalization'
+    contract = ('m2-publication-path-regression-v1' if publication_path else
+                'm2-source-transcript-evidence-regression-v1' if source_transcript else
                 'm2-source-srt-parse-regression-v1' if source_parse else
                 'm2-asr-cache-admission-regression-v1' if asr_cache else
                 'm2-owned-publication-regression-v1' if owned_publication else
@@ -1476,6 +1479,12 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
         'original_incident_preserved', 'unchanged_strict_predicates',
     )):
         raise RuntimeContractError('owned_publication_recovery_regression_unproven')
+    if publication_path and any(report.get(key) is not True for key in (
+        'normalizer_rename_reproduced', 'canonical_publication_verified',
+        'legacy_receipt_exact_path_required', 'valid_existing_output_preserved',
+        'original_incident_preserved', 'terminal_next_claim',
+    )):
+        raise RuntimeContractError('publication_path_recovery_regression_unproven')
     if not isinstance(logs, list) or len(logs) != 2:
         raise RuntimeContractError('postprocess_recovery_logs_missing')
     for item in logs:
@@ -1484,7 +1493,9 @@ def _validate_postprocess_recovery_proof(config: Any, evidence: Mapping[str, Any
             or 'sha256:' + sha256_file(log) != item.get('sha256')):
             raise RuntimeContractError('postprocess_recovery_logs_invalid')
     code = report.get('code_sha256')
-    names = (('m2_strict_runtime_evidence.py', 'm2_strict_observation.py', 'output_manifest.py',
+    names = (('worker.py', 'subtitle_paths.py', 'output_manifest.py', 'subtitle_quality.py',
+              'm2_strict_runtime_evidence.py', 'main.py', 'm2_guardrail_runtime.py') if publication_path else
+             ('m2_strict_runtime_evidence.py', 'm2_strict_observation.py', 'output_manifest.py',
               'm2_guardrail_runtime.py', 'main.py', 'worker.py') if source_transcript else
              ('source_inventory.py', 'source_analyzer.py', 'srt_utils.py',
               'subtitle_quality.py', 'worker.py', 'm2_guardrail_runtime.py',
@@ -1938,7 +1949,8 @@ def _planned_change_incident(
                                                root_cause=root_cause, breaker=breaker)
         elif root_cause.get('incident_kind') in _RECONCILIATION_INCIDENT_KINDS:
             _validate_postprocess_recovery_proof(config, evidence, root_cause)
-            incident_key = ('source_transcript_incident' if root_cause.get('incident_kind') == 'source_transcript_evidence_bridge' else
+            incident_key = ('publication_path_incident' if root_cause.get('incident_kind') == 'publication_path_normalization' else
+                            'source_transcript_incident' if root_cause.get('incident_kind') == 'source_transcript_evidence_bridge' else
                             'asr_cache_incident' if root_cause.get('incident_kind') == 'asr_cache_acceptance_unproven' else
                             'owned_publication_incident' if root_cause.get('incident_kind') == 'owned_publication_identity_mismatch' else
                             'language_vote_incident' if root_cause.get('incident_kind') == 'source_language_vote_mismatch' else
@@ -2959,7 +2971,8 @@ def recover_runtime_local(
             raise RuntimeContractError("planned_change_signature_invalid")
         if root_cause.get('incident_kind') in _RECONCILIATION_INCIDENT_KINDS:
             _validate_postprocess_recovery_proof(config, evidence, root_cause)
-        category = ("SOURCE_SRT_PARSE_CLASSIFICATION_REPAIR" if root_cause.get('incident_kind') == 'source_srt_parse_classification' else
+        category = ("PUBLICATION_PATH_NORMALIZATION_REPAIR" if root_cause.get('incident_kind') == 'publication_path_normalization' else
+                    "SOURCE_SRT_PARSE_CLASSIFICATION_REPAIR" if root_cause.get('incident_kind') == 'source_srt_parse_classification' else
                     "OWNED_PUBLICATION_IDENTITY_REPAIR" if root_cause.get('incident_kind') == 'owned_publication_identity_mismatch' else
                     "SUBTITLE_FORMAT_DISPATCH_REPAIR" if root_cause.get('incident_kind') == 'subtitle_format_dispatch' else
                     "SOURCE_LANGUAGE_VOTE_REPAIR" if root_cause.get('incident_kind') == 'source_language_vote_mismatch' else

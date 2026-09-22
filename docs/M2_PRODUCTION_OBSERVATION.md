@@ -1,5 +1,13 @@
 # M2 Production Observation
 
+## 2026-09-23 current checkpoint
+
+Effective guardrail TRIPPED on the Sep21 incorrect_completion incident, not on Gate
+settlement alone. Actual Worker f52118c; Gate014830021232Z-8147e39531 SETTLED20/20,
+1 strict/19 review/FAIL, original evidence preserved. Laya diagnostic-only service
+does not change this runtime baseline or grant admission. No Gate rebuilt by reads.
+See `LAYA_DIAGNOSTICS_20260923.md` for current incident and separate candidate evidence.
+
 ## 2026-09-20 05:30 UTC — continued automatic claims, source preservation corroborated
 
 Samef52118c runtime/ARMED/fresh provider VERIFIED,105 holds, no pause or new trip.
