@@ -1,5 +1,34 @@
 # M2 Production Observation
 
+## 2026-09-22 23:13 UTC — fixed cohort, bounded ASR review evidence
+
+Same Worker cf82fc27 and WebUI ef5c20e6, Breaker ARMED,106 source holds.
+Gate `m2-gate-20260922T221442778928Z-bfe39573b4` remains ACTIVE on its
+original baseline: **3 enrolled/3 settled/0 strict**, all three final
+`NEEDS_REVIEW` for `deterministic_asr_quality`. They remain fixed members;
+no replacement or historical completion was counted. Four distinct
+terminal-to-next-claim cycles were already proved in the bounded window.
+Elapsed0.982h and new qualified formal subtitles0; M2 is not accepted.
+
+Read-only checkpoint audit covered exactly these three obligations. Each
+rejected SRT and manifest hash matched. They contain476/471/403 cues and
+7/14/9 flagged fragments respectively, all aligned with the review ranges.
+The shared pattern is single-character Japanese fragments; the middle item
+also contains punctuation-only fragments. Existing selective repair was
+attempted; the first two each used one revision-bound full fallback, with
+the same failure revision after its second review. The third had one such
+command queued after its first review. Existing duration, character and CPS
+limits make only **1 flagged fragment per item numerically eligible** to
+merge with its previous cue; the remainder cannot be safely cleared by a
+simple deterministic join.
+Do not relax QC or mark these reviews successful. Source checksum remains
+unproven in each strict Gate record; this read-only audit did not modify
+source media. Evidence:
+`logs/laya-20260923/observation-check-1790118818897578800.json`,
+`asr-budget-evidence-1790118882276705203.json`, and
+`asr-fragment-audit-1790119071729085344.json`.
+No Worker/WebUI deployment or Gate mutation resulted from this audit.
+
 ## 2026-09-23 current checkpoint
 
 The Sep21 normalizer/manifest incident was repaired in Worker cf82fc27, WebUI ef5c20e6;

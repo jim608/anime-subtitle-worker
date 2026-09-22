@@ -814,6 +814,16 @@ continuation are not sustained acceptance; do not declare the24-hour or output
 requirements satisfied before their durable evidence exists.
 # 2026-09-23 bounded diagnostic closeout
 
+At23:13UTC the same Gate had3 enrolled/3 settled/0 strict: three distinct
+ASR obligations ended NEEDS_REVIEW. Immutable rejected SRT checksums match
+their manifests; each has7/14/9 short-fragment ranges in476/471/403 cues.
+Only1 per obligation is numerically eligible to join its predecessor under existing max duration,
+max characters and fail CPS. The others include isolated/punctuation-only
+or over-limit fragments; an automatic join cannot safely resolve them all.
+This is a quality limitation, not evidence to relax QC. Source checksum is
+unproven in the strict records; the audit made no media changes. Full bounded
+evidence and fixed-cohort treatment: docs/M2_PRODUCTION_OBSERVATION.md.
+
 Latest authoritative details: docs/LAYA_DIAGNOSTICS_20260923.md, final bounded SDK
 audit section. Laya inference disabled/MODEL_QUALITY_NOT_ACCEPTED; fixed7 cases0/7
 in original and reversed order; no SDK/adapter mapping or truncation defect. Separate

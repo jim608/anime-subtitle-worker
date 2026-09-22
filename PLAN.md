@@ -1,5 +1,17 @@
 # Incremental Delivery Plan
 
+## 2026-09-22 23:13 UTC — current Gate ASR quality assessment
+
+Current baseline unchanged/ARMED. Fixed Gate221442 now3 enrolled/3 settled,
+all NEEDS_REVIEW,0 strict; four distinct terminal-to-next-claim sequences.
+Three verified rejected ASR SRTs contain7/14/9 flagged fragments in
+476/471/403 cues. Existing duration/character/CPS limits make only1 numerically
+eligible for an adjacent join per item; no join has passed semantic/audio QC.
+No common bounded repair resolves the remaining quality failures. No QC
+relaxation or result-affecting deploy. Continue the
+same server-owned frozen Gate/24h observation;0 new qualifying subtitles.
+See docs/M2_PRODUCTION_OBSERVATION.md for hashes and scope.
+
 ## 2026-09-23 — bounded Laya audit finished; return to Production observation
 
 MODEL_QUALITY_NOT_ACCEPTED: fixed SDK/model, seven frozen incidents, original/reversed
