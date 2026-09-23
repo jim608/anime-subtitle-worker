@@ -39,7 +39,7 @@ SIMPLIFIED_ONLY_RE = re.compile(
 )
 REPEATED_PUNCTUATION_RE = re.compile(r"([!?！？。．])\1{3,}")
 QUALITY_REPORT_DIRECTORY = "subtitle_quality_reports"
-ASS_DISJOINT_VERTICAL_QC_VERSION = "ass-disjoint-vertical-v1"
+ASS_DISJOINT_VERTICAL_QC_VERSION = "ass-disjoint-vertical-v2"
 _STANDARD_ASS_EVENT_FIELDS = (
     "layer", "start", "end", "style", "name", "marginl", "marginr", "marginv", "effect", "text",
 )
@@ -288,7 +288,7 @@ def analyze_subtitle_lines(
             SubtitleQualityIssue(
                 code="ass_disjoint_vertical_overlap",
                 severity="warn",
-                message="ASS top and bottom single-line events have verified disjoint render regions.",
+                message="ASS single-line events have conservatively disjoint vertical render regions.",
                 count=len(verified_disjoint),
                 samples=[
                     f"#{previous.index}->#{current.index} {seconds:.3f}s"
@@ -555,11 +555,12 @@ def _ass_lines_from_text(content: str) -> list[SubtitleLine]:
 def _ass_disjoint_vertical_overlap_pairs(
     content: str, lines: list[SubtitleLine], tolerance: float,
 ) -> set[tuple[int, int]]:
-    """Prove a narrow ASS top/bottom exception; ambiguous layout stays a hard overlap.
+    """Prove narrow ASS vertical-layout exceptions; ambiguity stays a hard overlap.
 
     The normal quality parser deliberately strips ASS layout. Here we only
     exempt single-line, untransformed dialogue at style alignment 2 versus an
-    otherwise identical event whose sole override is a leading ``{\\an8}``.
+    otherwise identical event whose sole override is a leading ``{\\an8}``,
+    or two plain bottom-aligned styles with widely separated margin envelopes.
     Missing/malformed script, style, event, or geometry evidence fails closed.
     """
     section = ""
@@ -659,6 +660,72 @@ def _ass_disjoint_vertical_overlap_pairs(
             for visible, _top in (first, second)
         )
 
+    def _safe_distinct_bottom_margins(left: dict[str, str], right: dict[str, str]) -> bool:
+        # A different-style Title over bottom dialogue is not a timing error
+        # if generous style envelopes remain apart. Keep this independent of
+        # the existing same-style top/bottom rule so its bounds do not widen.
+        if left["style"] == right["style"] or left["layer"] != "0" or right["layer"] != "0":
+            return False
+        if any(event[field] != "0" for event in (left, right) for field in ("marginl", "marginr", "marginv")):
+            return False
+        if any(event["effect"] or event["name"] for event in (left, right)):
+            return False
+        plain = [_plain_single_line(event) for event in (left, right)]
+        if any(value is None or value[1] for value in plain):
+            return False
+        regions: list[tuple[float, float]] = []
+        fonts: list[float] = []
+        for event, (visible, _top) in zip((left, right), plain, strict=True):
+            style = styles.get(event["style"])
+            if not style or style.get("alignment") != "2" or style.get("borderstyle") != "1":
+                return False
+            if style.get("bold") not in ("0", "-1") or any(
+                style.get(field) != "0" for field in ("italic", "underline", "strikeout")
+            ):
+                return False
+            try:
+                font = float(style["fontsize"])
+                scale_x = float(style["scalex"])
+                scale_y = float(style["scaley"])
+                spacing = float(style["spacing"])
+                angle = float(style["angle"])
+                outline = float(style["outline"])
+                shadow = float(style["shadow"])
+                margin_v = int(style["marginv"])
+                margin_l = int(style["marginl"])
+                margin_r = int(style["marginr"])
+            except (KeyError, TypeError, ValueError):
+                return False
+            if not all(math.isfinite(item) for item in (
+                font, scale_x, scale_y, spacing, angle, outline, shadow,
+            )):
+                return False
+            if not (
+                max(12.0, height * 0.02) <= font <= height * 0.15
+                and scale_x == scale_y == 100
+                and 0 <= spacing <= font * 0.2
+                and angle == shadow == 0
+                and 0 <= outline <= font * 0.2
+                and margin_v >= 0 and margin_l >= 0 and margin_r >= 0
+            ):
+                return False
+            available_width = width - margin_l - margin_r
+            if available_width <= 0 or (
+                len(visible) * font * 2
+                + max(0, len(visible) - 1) * spacing + 2 * outline
+            ) >= available_width:
+                return False
+            top = height - margin_v - 3 * font - 2 * outline
+            bottom = height - margin_v
+            if not (0 <= top < bottom <= height):
+                return False
+            regions.append((top, bottom))
+            fonts.append(font)
+        gap = max(regions[1][0] - regions[0][1], regions[0][0] - regions[1][1])
+        # Subpixel font/margin arithmetic is not a reliable proxy for libass
+        # rasterization. Require at least a full-font and 12-pixel gap.
+        return gap >= max(fonts[0], fonts[1], 12.0)
+
     def _isolated_pair(previous: SubtitleLine, current: SubtitleLine) -> bool:
         # The generic sweep reports the longest preceding event. A third
         # simultaneous line could conceal a same-position collision, so only
@@ -673,7 +740,12 @@ def _ass_disjoint_vertical_overlap_pairs(
     return {
         (previous.index, current.index)
         for previous, current, _seconds in _overlapping_lines(lines, tolerance)
-        if _safe_pair(events[previous.index - 1], events[current.index - 1])
+        if (
+            _safe_pair(events[previous.index - 1], events[current.index - 1])
+            or _safe_distinct_bottom_margins(
+                events[previous.index - 1], events[current.index - 1],
+            )
+        )
         and _isolated_pair(previous, current)
     }
 

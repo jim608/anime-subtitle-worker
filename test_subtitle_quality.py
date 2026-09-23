@@ -163,6 +163,41 @@ class SubtitleQualityTest(unittest.TestCase):
             self.assertEqual(1, codes["ass_disjoint_vertical_overlap"].count)
             self.assertEqual([1, 2], codes["ass_disjoint_vertical_overlap"].indexes)
 
+    def test_distinct_bottom_styles_with_proven_margin_gap_are_warned(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "Episode.zh-TW.ass"
+            _write_distinct_margin_ass(path)
+
+            report = analyze_subtitle_file(path, _config(), role="unknown")
+            codes = {issue.code: issue for issue in report.issues}
+
+            self.assertFalse(report.has_failures)
+            self.assertNotIn("timing_overlap", codes)
+            self.assertEqual(1, codes["ass_disjoint_vertical_overlap"].count)
+            self.assertEqual([1, 2], codes["ass_disjoint_vertical_overlap"].indexes)
+
+    def test_distinct_bottom_style_ambiguity_remains_hard_overlap(self) -> None:
+        cases = (
+            ("close_margins", {"title_margin_v": 100}),
+            ("possible_wrap", {"title_text": "繁" * 80}),
+            ("position_override", {"title_text": r"{\pos(960,600)}作品標題"}),
+            ("multiline", {"title_text": r"作品\N標題"}),
+            ("tiny_font_subpixel_gap", {"default_font_size": 10}),
+            ("style_shadow", {"title_shadow": 1}),
+            ("style_angle", {"title_angle": 5}),
+            ("event_margin_override", {"title_event_margin_v": 1}),
+            ("third_simultaneous", {"third_event": True}),
+            ("missing_title_style", {"title_style": False}),
+            ("missing_playres", {"playres": False}),
+        )
+        for name, options in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temp_dir:
+                path = Path(temp_dir) / "Episode.zh-TW.ass"
+                _write_distinct_margin_ass(path, **options)
+
+                report = analyze_subtitle_file(path, _config(), role="unknown")
+                self.assertIn("timing_overlap", {issue.code for issue in report.issues})
+
     def test_ass_dialogue_and_layout_use_one_source_read(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "Episode.zh-TW.ass"
@@ -491,6 +526,46 @@ def _write_positioned_ass(
         f"Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,{bottom}",
         f"Dialogue: 0,0:00:01.50,0:00:03.50,Default,,0,0,0,,{top}",
     ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_distinct_margin_ass(
+    path: Path, *, title_margin_v: int = 380,
+    title_text: str = "作品標題", title_style: bool = True,
+    playres: bool = True, third_event: bool = False,
+    default_font_size: int = 70, title_font_size: int = 120,
+    title_shadow: int = 0, title_angle: int = 0,
+    title_event_margin_v: int = 0,
+) -> None:
+    """A real-layout-shaped Default/Title fixture, without production text."""
+    lines = ["[Script Info]", "ScriptType: v4.00+"]
+    if playres:
+        lines += ["PlayResX: 1920", "PlayResY: 1080"]
+    lines += [
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+        "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding",
+        f"Style: Default,Arial,{default_font_size},"
+        "&H00FFFFFF,&H000000FF,&H00000000,&H00000000,"
+        "0,0,0,0,100,100,0,0,1,3,0,2,10,10,25,1",
+    ]
+    if title_style:
+        lines.append(
+            f"Style: Title,Arial,{title_font_size},"
+            "&H00FFFFFF,&H000000FF,&H00000000,&H00000000,"
+            f"-1,0,0,0,100,100,15,{title_angle},1,1,{title_shadow},"
+            f"2,10,10,{title_margin_v},1"
+        )
+    lines += [
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+        "Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,完整繁體字幕",
+        f"Dialogue: 0,0:00:01.50,0:00:03.50,Title,,0,0,{title_event_margin_v},,{title_text}",
+    ]
+    if third_event:
+        lines.append("Dialogue: 0,0:00:02.00,0:00:03.40,Default,,0,0,0,,第三句繁體字幕")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

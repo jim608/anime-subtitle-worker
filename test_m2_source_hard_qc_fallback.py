@@ -9,7 +9,7 @@ from source_analyzer import (analyze_sources, ASR_JA_AUDIO, CONVERT_ZH_CN,
     TRANSLATE_JA_SUBTITLE, USE_EXISTING_ZH_TW)
 from source_inventory import build_source_input_identity, inventory_sources
 from test_m2_review_source_regressions import srt_text, JA, CN, TW
-from test_subtitle_quality import _write_positioned_ass
+from test_subtitle_quality import _write_distinct_margin_ass, _write_positioned_ass
 
 
 class SourceHardQcFallbackTest(unittest.TestCase):
@@ -95,6 +95,35 @@ class SourceHardQcFallbackTest(unittest.TestCase):
             self.assertEqual(first.candidate_fingerprint, replay.candidate_fingerprint)
             self.assertEqual(USE_EXISTING_ZH_TW, analyze_sources(**first.analyzer_arguments()).strategy)
             self.assertEqual((), first.subtitle_candidates[0].hard_qc_failures)
+            self.assertEqual(before, {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in before})
+
+    def test_verified_distinct_margin_ass_routes_to_existing_zh_tw_without_mutation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            video = root / 'episode.mkv'
+            video.write_bytes(b'immutable-source')
+            sidecar = root / 'episode.zh-TW.ass'
+            _write_distinct_margin_ass(sidecar)
+            # Source eligibility also needs episode coverage, not only two
+            # geometrically separate lines in an otherwise empty sample.
+            with sidecar.open('a', encoding='utf-8') as stream:
+                for index in range(3, 24):
+                    second = index * 2
+                    stream.write(
+                        f'Dialogue: 0,0:00:{second:02d}.00,0:00:{second + 1:02d}.50,'
+                        f'Default,,0,0,0,,第{index}句完整繁體字幕\n'
+                    )
+            before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in (video, sidecar)}
+            config = SimpleNamespace(work_path=root / 'work', subtitle_quality_check_enabled=True)
+            job = build_source_input_identity(video, 'test-job', config=config).media_job_identity
+            probe = {'format': {'duration': '48'}, 'streams': []}
+            with patch('source_inventory._probe_media', return_value=probe):
+                first = inventory_sources(video, job, config=config, sidecar_paths=[sidecar])
+                replay = inventory_sources(video, job, config=config, sidecar_paths=[sidecar])
+
+            self.assertEqual((), first.subtitle_candidates[0].hard_qc_failures)
+            self.assertEqual(first.candidate_fingerprint, replay.candidate_fingerprint)
+            self.assertEqual(USE_EXISTING_ZH_TW, analyze_sources(**first.analyzer_arguments()).strategy)
             self.assertEqual(before, {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in before})
 
     def test_ass_layout_qc_version_invalidates_old_source_context(self):
