@@ -391,6 +391,59 @@ class M2FrozenObservationTests(unittest.TestCase):
         )
         self.assertEqual(len(members), 1)
 
+    def test_08b_post_terminal_result_after_handoff_preserves_old_gate(self) -> None:
+        obligation = "reviewed-before-runtime-handoff"
+        self._claim(0, job_identity=obligation, claim_identity="original-attempt")
+        with observation_store.immediate_transaction(self.connection):
+            observation_store.record_terminal_evidence(
+                self.connection,
+                gate_job_identity=obligation,
+                claim_identity="original-attempt",
+                outcome={"terminal_status": "NEEDS_REVIEW"},
+                qualification=self._strict_qualification(qualified=False),
+                now=self.GATE_START + 2,
+            )
+            observation_store.invalidate_active_gate(
+                self.connection,
+                observation_store.INVALIDATED_RUNTIME,
+                evidence={"reason_code": "verified_runtime_change"},
+                now=self.GATE_START + 100,
+            )
+            next_runtime = self._runtime_state(worker_sha="9" * 40)
+            next_runtime["gate_start_epoch"] = self.GATE_START + 101
+            next_runtime["gate_start_at"] = "2024-09-04T11:48:21Z"
+            next_runtime["gate_baseline_version"] = "m2-guardrail-v1:next-baseline"
+            next_gate = observation_store.create_gate(
+                self.connection,
+                next_runtime,
+                now=self.GATE_START + 101,
+            )
+            later = observation_store.reserve_result_event(
+                self.connection,
+                gate_job_identity=obligation,
+                claim_identity="later-attempt",
+                observed_state="FAILED",
+                event_payload={"outcome": {"source_mutation_incident": True}},
+                now=self.GATE_START + 102,
+            )
+
+        self.assertTrue(later["reserved"])
+        self.assertTrue(later["post_terminal_attempt"])
+        self.assertEqual(later["gate_id"], next_gate["gate_id"])
+        old_events = self.connection.execute(
+            "SELECT count(*) FROM m2_observation_result_events WHERE gate_id=?",
+            (self.gate["gate_id"],),
+        ).fetchone()[0]
+        new_events = self.connection.execute(
+            "SELECT count(*) FROM m2_observation_result_events WHERE gate_id=?",
+            (next_gate["gate_id"],),
+        ).fetchone()[0]
+        self.assertEqual((old_events, new_events), (0, 1))
+        self.assertEqual(
+            observation_store.gate_by_id(self.connection, self.gate["gate_id"])["status"],
+            observation_store.INVALIDATED_RUNTIME,
+        )
+
     def test_09_concurrent_workers_enroll_exactly_twenty_unique_members(self) -> None:
         database_path = Path(self.config.scanner_state_path)
         barrier = threading.Barrier(32)

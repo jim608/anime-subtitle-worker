@@ -1060,6 +1060,191 @@ class M2ProductionObservationTests(unittest.TestCase):
             [item["reason_code"] for item in breaker["reasons"]],
         )
 
+    def test_later_distinct_attempt_keeps_review_slot_but_trips_source_mutation(self) -> None:
+        config = self._config("review-then-source-mutation")
+        obligation = "stable-reviewed-obligation"
+        first = "reviewed-attempt"
+        second = "remediation-attempt"
+        observation.record_job_claim(
+            config,
+            job_identity=first,
+            gate_job_identity=obligation,
+            claimed_at=time.time(),
+        )
+        reviewed = observation.record_job_result(
+            config,
+            job_identity=first,
+            gate_job_identity=obligation,
+            outcome={
+                "terminal_status": "NEEDS_REVIEW",
+                "stage": "transcription_review",
+                "error_code": "deterministic_asr_quality",
+                "reason_code": "deterministic_asr_quality_review",
+                "processing_strategy": "ASR_JA_AUDIO",
+            },
+            strict_evidence=strict_evidence_template(passed=False),
+        )
+        self.assertFalse(reviewed["circuit_breaker_tripped"])
+        retry_claim = observation.record_job_claim(
+            config,
+            job_identity=second,
+            gate_job_identity=obligation,
+            claimed_at=time.time(),
+        )
+        self.assertTrue(retry_claim["duplicate_claim_ignored"])
+
+        result = observation.record_job_result(
+            config,
+            job_identity=second,
+            gate_job_identity=obligation,
+            outcome={
+                "terminal_status": "FAILED",
+                "stage": "source_verification",
+                "error_code": "source_mutation",
+                "source_mutation_incident": True,
+                "failed": True,
+                "processing_strategy": "ASR_JA_AUDIO",
+            },
+            strict_evidence=strict_evidence_template(passed=False),
+        )
+
+        self.assertTrue(result["circuit_breaker_tripped"])
+        self.assertTrue(result["post_terminal_attempt"])
+        replay = observation.record_job_result(
+            config,
+            job_identity=second,
+            gate_job_identity=obligation,
+            outcome={
+                "terminal_status": "FAILED",
+                "stage": "source_verification",
+                "error_code": "source_mutation",
+                "source_mutation_incident": True,
+                "failed": True,
+                "processing_strategy": "ASR_JA_AUDIO",
+            },
+            strict_evidence=strict_evidence_template(passed=False),
+        )
+        self.assertTrue(replay["duplicate_result_ignored"])
+        breaker = self._read(Path(config.m2_server_canary_circuit_breaker_state_path))
+        self.assertIn("source_mutation", [item["reason_code"] for item in breaker["reasons"]])
+        gate = self._database_rows(
+            config,
+            "SELECT enrolled_count, settled_count FROM m2_observation_gates",
+        )[0]
+        self.assertEqual(gate, (1, 1))
+        member = self._database_rows(
+            config,
+            "SELECT final_state, strict_verified FROM m2_observation_gate_jobs",
+        )[0]
+        self.assertEqual(member, ("NEEDS_REVIEW", 0))
+        self.assertEqual(
+            self._database_rows(
+                config,
+                "SELECT count(*) FROM m2_observation_result_events",
+            )[0][0],
+            2,
+        )
+
+    def test_later_valid_attempt_does_not_backfill_reviewed_gate_member(self) -> None:
+        config = self._config("review-then-valid-remediation")
+        obligation = "stable-review-then-success"
+        first = "review-attempt"
+        second = "valid-remediation-attempt"
+        observation.record_job_claim(
+            config,
+            job_identity=first,
+            gate_job_identity=obligation,
+            claimed_at=time.time(),
+        )
+        observation.record_job_result(
+            config,
+            job_identity=first,
+            gate_job_identity=obligation,
+            outcome={
+                "terminal_status": "NEEDS_REVIEW",
+                "stage": "transcription_review",
+                "error_code": "deterministic_asr_quality",
+                "processing_strategy": "ASR_JA_AUDIO",
+            },
+            strict_evidence=strict_evidence_template(passed=False),
+        )
+        observation.record_job_claim(
+            config,
+            job_identity=second,
+            gate_job_identity=obligation,
+            claimed_at=time.time(),
+        )
+        result = observation.record_job_result(
+            config,
+            job_identity=second,
+            gate_job_identity=obligation,
+            outcome={**self._verified(), "processing_strategy": "ASR_JA_AUDIO"},
+            strict_evidence=strict_evidence_template(passed=True),
+        )
+        self.assertTrue(result["recorded"])
+        self.assertTrue(result["post_terminal_attempt"])
+        self.assertFalse(result["strictly_qualified"])
+        self.assertFalse(result["circuit_breaker_tripped"])
+        self.assertEqual(
+            self._database_rows(
+                config,
+                "SELECT enrolled_count, settled_count FROM m2_observation_gates",
+            )[0],
+            (1, 1),
+        )
+        self.assertEqual(
+            self._database_rows(
+                config,
+                "SELECT final_state, strict_verified FROM m2_observation_gate_jobs",
+            )[0],
+            ("NEEDS_REVIEW", 0),
+        )
+
+    def test_later_false_completion_still_trips_after_review(self) -> None:
+        config = self._config("review-then-false-completion")
+        obligation = "reviewed-before-false-completion"
+        observation.record_job_claim(
+            config,
+            job_identity="initial-review-attempt",
+            gate_job_identity=obligation,
+            claimed_at=time.time(),
+        )
+        observation.record_job_result(
+            config,
+            job_identity="initial-review-attempt",
+            gate_job_identity=obligation,
+            outcome={
+                "terminal_status": "NEEDS_REVIEW",
+                "stage": "transcription_review",
+                "error_code": "deterministic_asr_quality",
+            },
+            strict_evidence=strict_evidence_template(passed=False),
+        )
+        observation.record_job_claim(
+            config,
+            job_identity="unsafe-followup-attempt",
+            gate_job_identity=obligation,
+            claimed_at=time.time(),
+        )
+        result = observation.record_job_result(
+            config,
+            job_identity="unsafe-followup-attempt",
+            gate_job_identity=obligation,
+            outcome=self._verified(),
+            strict_evidence={},
+        )
+        self.assertTrue(result["post_terminal_attempt"])
+        self.assertTrue(result["circuit_breaker_tripped"])
+        breaker = self._read(Path(config.m2_server_canary_circuit_breaker_state_path))
+        self.assertIn("incorrect_completion", [item["reason_code"] for item in breaker["reasons"]])
+        self.assertEqual(
+            self._database_rows(
+                config,
+                "SELECT final_state, strict_verified FROM m2_observation_gate_jobs",
+            )[0],
+            ("NEEDS_REVIEW", 0),
+        )
+
     def test_completed_safety_incidents_keep_specific_breaker_reason(self) -> None:
         cases = {
             "source_mutation": {"source_mutation_incident": True},

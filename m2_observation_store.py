@@ -1158,7 +1158,8 @@ def reserve_result_event(
     Queue/result callbacks can be replayed after a process crash.  The attempt
     identity is therefore the idempotency key for breaker streaks and terminal
     observation side effects.  Membership remains keyed by the stable delivery
-    obligation so later attempts can settle the same frozen slot.
+    obligation so later attempts can settle the same frozen slot before its
+    first terminal verdict. Later safety events stay journaled without backfill.
     """
 
     timestamp = time.time() if now is None else float(now)
@@ -1200,6 +1201,7 @@ def reserve_result_event(
         return {
             "reserved": False,
             "duplicate_result_ignored": True,
+            "post_terminal_attempt": stored_payload.get("post_terminal_attempt") is True,
             "gate_id": str(existing[0]),
             "enrolled": member is not None,
             "settled": bool(member and member.get("terminal_at") is not None),
@@ -1218,21 +1220,22 @@ def reserve_result_event(
         (job_id,),
     )
     member = _fetch_dict(member_row)
-    gate = gate_by_id(connection, str(member["gate_id"])) if member is not None else latest_gate(connection)
+    gate = active_gate(connection) or latest_gate(connection)
     if gate is None:
         raise ObservationStoreError("observation_gate_missing")
     gate_id = str(gate["gate_id"])
-    if member is not None and member.get("terminal_at") is not None:
-        return {
-            "reserved": False,
-            "duplicate_result_ignored": True,
-            "member_already_terminal": True,
-            "gate_id": gate_id,
-            "enrolled": True,
-            "settled": True,
-            "ordinal": int(member["ordinal"]),
-            "emission_pending": _summary_pending(connection, gate_id),
-        }
+    member_in_current_gate = bool(member and str(member["gate_id"]) == gate_id)
+    post_terminal_attempt = bool(
+        member and (member.get("terminal_at") is not None or not member_in_current_gate)
+    )
+    if post_terminal_attempt:
+        # A new attempt may follow a terminal review or runtime handoff.  It
+        # still runs breaker policy, but cannot replace or append to an older
+        # frozen Gate member after a new baseline has started.
+        payload_text = _json(
+            _bounded_mapping({**event_payload, "post_terminal_attempt": True})
+        )
+        digest = hashlib.sha256(payload_text.encode("utf-8")).hexdigest()
 
     connection.execute(
         """
@@ -1254,11 +1257,16 @@ def reserve_result_event(
     return {
         "reserved": True,
         "duplicate_result_ignored": False,
+        "post_terminal_attempt": post_terminal_attempt,
         "gate_id": gate_id,
-        "enrolled": member is not None,
-        "settled": False,
-        "ordinal": int(member["ordinal"]) if member is not None else None,
-        "emission_pending": False,
+        "enrolled": member_in_current_gate,
+        "settled": bool(
+            member_in_current_gate and member.get("terminal_at") is not None
+        ),
+        "ordinal": int(member["ordinal"]) if member_in_current_gate else None,
+        "emission_pending": (
+            _summary_pending(connection, gate_id) if post_terminal_attempt else False
+        ),
     }
 
 

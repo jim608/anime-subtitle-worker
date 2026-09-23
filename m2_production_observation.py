@@ -765,18 +765,32 @@ def record_job_result(
                         },
                         logger=logger,
                     )
-                result = record_terminal_evidence(
-                    connection,
-                    gate_job_identity=gate_job_identity or job_identity,
-                    claim_identity=job_identity,
-                    outcome=persisted_outcome,
-                    qualification=qualification,
-                    breaker_evidence={
-                        "tripped": bool(breaker_reason),
-                        "reason_code": breaker_reason,
-                        "tripped_at": breaker_payload.get("tripped_at"),
-                    },
-                )
+                if event_reservation.get("post_terminal_attempt"):
+                    # The attempt is real and safety-relevant, but the first
+                    # terminal verdict owns the immutable frozen Gate slot.
+                    result = {
+                        "recorded": True,
+                        "enrolled": bool(event_reservation["enrolled"]),
+                        "settled": bool(event_reservation["settled"]),
+                        "post_terminal_attempt": True,
+                        "strictly_qualified": False,
+                        "gate_id": event_reservation["gate_id"],
+                        "ordinal": event_reservation["ordinal"],
+                        "emission_pending": event_reservation["emission_pending"],
+                    }
+                else:
+                    result = record_terminal_evidence(
+                        connection,
+                        gate_job_identity=gate_job_identity or job_identity,
+                        claim_identity=job_identity,
+                        outcome=persisted_outcome,
+                        qualification=qualification,
+                        breaker_evidence={
+                            "tripped": bool(breaker_reason),
+                            "reason_code": breaker_reason,
+                            "tripped_at": breaker_payload.get("tripped_at"),
+                        },
+                    )
             summary = sqlite_status_summary(connection)
     except ObservationStoreError as exc:
         trip_circuit_breaker(
