@@ -1,6 +1,60 @@
 # Full-flow reliability acceptance — 2026-09-20
 
-## 2026-09-23 02:56 UTC — post-terminal safety and owned-hold recovery
+## 2026-09-23 05:39 UTC — ASS source QC v2 deployed; sustained acceptance open
+
+The verified ASS candidate for the former Gate's ordinal 4 was rendered in
+isolation at its overlapping midpoint: Title and Default subtitle regions
+had no intersecting pixels and a 298 px vertical gap. Hash/mtime-pinned
+source data remained unchanged. A narrowly bounded disjoint-vertical ASS
+hard-QC v2 rule passed that 296-dialogue candidate with no hard failures;
+unsafe or under-specified overlaps still fail. This is not retrospective
+strict verification of the former Gate and not a formal publication.
+
+Worker `fd9f8886c47510950de49a47a652293ce22c08a7` was safely deployed
+as `20260923T052456Z-2348037`, image
+`sha256:d4eb86a5b7e2a10881cec98429e3a2e510f458ea19e450a0d278053210536dec`;
+WebUI remains `ef5c20e699f1e5a639eb1207f02ce254274c2a73`.
+Pre-deployment source/ASS regressions passed 175/175. The final safe updater
+ran 2438 Worker tests, OK (8 skipped), and 235 WebUI tests, PASS; the fresh
+image passed isolated breakers 7/7. A preceding pre-live-replacement attempt
+failed two stale example-version assertions; it remains recorded rather than
+reported as PASS. No backup or existing source hold was discarded. Logs:
+`logs/m2-source-id-20260923/ass-margin-candidate-20260923T050651Z.log`,
+`ass-margin-safe-deploy-20260923T051642Z.log`,
+`ass-margin-safe-deploy-20260923T052456Z.log`, and
+`ass-margin-fresh-fault-20260923T053122Z.log`.
+
+Runtime validation invalidated the prior Gate
+`m2-gate-20260923T025449876085Z-6d5682c2c1` at 8/20, preserving its frozen
+members and evidence. Controlled recovery
+`m2breakerrec_c44c21f4d3594fb0a948458c04f0895d` restored `ARMED`,
+released only the owned deployment hold, and left 107 source holds intact.
+The replacement frozen Gate `m2-gate-20260923T053731768753Z-cd4d61bdbe`
+started at `2026-09-23T05:37:31.768753Z`, baseline
+`m2-guardrail-v1:2b3f2298b1f884d00611722a`, initially 0/20. The one
+bounded post-recovery snapshot was 1/20, one safe review, zero strict and
+zero newly published formal targets on this baseline. An actual autonomous
+claim, source-selection Stage and heartbeat were seen, not a full
+terminal-to-next-distinct-claim cycle for this new baseline at that snapshot.
+A later bounded snapshot recorded 2/20 enrolled: the first task settled as
+review and a distinct second task was automatically claimed, entered
+transcription, and had a fresh heartbeat. This proves one such cycle, not
+repeated cycles or a new formal subtitle. Recovery and
+snapshot evidence:
+`logs/m2-source-id-20260923/ass-margin-postdeploy-drift-20260923T0535Z.log`,
+`ass-margin-controlled-recovery-20260923T053726Z.log`, and
+`post-owned-release-snapshot-1790141943434116161.json`, and
+`post-owned-release-snapshot-1790142104776411113.json`.
+
+Acceptance stays **WAITING_FOR_EVIDENCE**: earliest 24-hour boundary
+`2026-09-24T05:37:31.768753Z`; all fixed 20 results, repeated autonomous
+continuation, two newly delivered strict targets, and current-baseline
+AI and download/extraction publication receipts remain outstanding. Prior
+Gate outputs and historical route receipts are not transferred or recounted.
+The initial review cannot be replaced to achieve 20/20 strict PASS. A
+documentation-only update must not redeploy or recreate the Gate.
+
+## 2026-09-23 02:56 UTC — prior post-terminal safety and owned-hold recovery
 
 The deployed Worker is `e30d3c61117508e1c88d47f40c72ce279d7aa2d0`
 (`sha256:0ace552cfe597f5028bb90aff2a8c10dacc7ef6bd062d238a8891edee2e7546f`);

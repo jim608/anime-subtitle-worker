@@ -1,6 +1,66 @@
 # M2 Production Observation
 
-## Current handoff — 2026-09-23 02:56 UTC
+## Current handoff — 2026-09-23 05:39 UTC (bounded snapshot)
+
+Worker `fd9f8886c47510950de49a47a652293ce22c08a7`, image
+`sha256:d4eb86a5b7e2a10881cec98429e3a2e510f458ea19e450a0d278053210536dec`;
+WebUI `ef5c20e699f1e5a639eb1207f02ce254274c2a73`. The isolated
+ordinal-4 zh-TW ASS source was hash/mtime-bound to its source decision.
+A pinned-image libass render at the actual overlap midpoint showed its
+Title and Default events separated vertically (298 px gap, no intersecting
+pixels). The narrow ASS disjoint-vertical QC v2 rule therefore accepts this
+296-dialogue candidate with no hard-QC failures; ambiguous, same-style,
+wrapped or otherwise unsafe overlaps remain hard failures. This is source-
+candidate evidence only: the old frozen review is not rewritten, no old Gate
+member is backfilled, and no new formal subtitle was published by this check.
+Evidence: `logs/m2-source-id-20260923/ordinal4-ass-libass-20260923T045143Z.log`
+and `ordinal4-ass-candidate-qc-20260923T050711Z.log` in the same directory.
+
+The result-affecting correction was safely deployed as deployment
+`20260923T052456Z-2348037`. The deployed Worker suite ran 2438 tests, OK
+(8 skipped); WebUI passed 235 tests; fresh isolated breaker injection passed
+7/7 without Production source/output mutation. The first pre-deploy attempt
+had stopped before live replacement on two stale example-version assertions;
+that failed log is retained, and only `config.example.yaml`'s source analyzer
+version was corrected before the successful deployment. The normal runtime
+validation then invalidated the previous Gate
+`m2-gate-20260923T025449876085Z-6d5682c2c1` at 8/20, retaining all eight
+frozen members and its original evidence. Receipt-bound controlled recovery
+`m2breakerrec_c44c21f4d3594fb0a948458c04f0895d` returned Breaker to
+`ARMED` and released only this deployment's owned hold; 107 source holds
+remain. Evidence is under `logs/m2-source-id-20260923/`:
+`ass-margin-safe-deploy-20260923T051642Z.log` (failed preflight),
+`ass-margin-safe-deploy-20260923T052456Z.log`,
+`ass-margin-fresh-fault-20260923T053122Z.log`,
+`ass-margin-postdeploy-drift-20260923T0535Z.log`, and
+`ass-margin-controlled-recovery-20260923T053726Z.log`.
+
+New immutable Gate `m2-gate-20260923T053731768753Z-cd4d61bdbe`, baseline
+`m2-guardrail-v1:2b3f2298b1f884d00611722a`, began
+`2026-09-23T05:37:31.768753Z` at 0/20. A single bounded snapshot afterward
+recorded 1/20 enrolled and settled review, 0 strict, `ARMED` and no pause.
+The first baseline-bound task was automatically claimed, entered source
+selection and had a heartbeat before its safe review; it is not a new formal
+subtitle or sustained-operation proof. No previous cohort result transfers.
+Snapshot: `logs/m2-source-id-20260923/post-owned-release-snapshot-1790141943434116161.json`.
+
+One further bounded snapshot at `2026-09-23T05:41:44Z` recorded 2/20 enrolled,
+one settled review and a distinct second task claimed at `05:39:41Z` with
+transcription running and a fresh heartbeat. This is one autonomous
+terminal-to-next-claim cycle, not a second completed task, not a new formal
+subtitle and not the 24-hour acceptance. Evidence:
+`logs/m2-source-id-20260923/post-owned-release-snapshot-1790142104776411113.json`.
+
+M2 remains **WAITING_FOR_EVIDENCE**, not Production accepted. The earliest
+24-hour boundary for this baseline is `2026-09-24T05:37:31.768753Z`;
+all 20 fixed outcomes, further distinct terminal-to-next-claim cycles,
+at least two newly published strict formal zh-TW targets on this exact
+baseline, and continued safety/admission evidence remain to be established.
+New formal subtitles on this baseline so far: **0**. The already reviewed
+first member cannot be replaced to make the 20/20 strict Gate pass. Existing
+server observation continues without Codex polling; no M3 is started.
+
+## Prior handoff — 2026-09-23 02:56 UTC (superseded by runtime change)
 
 Worker `e30d3c61117508e1c88d47f40c72ce279d7aa2d0`, image
 `sha256:0ace552cfe597f5028bb90aff2a8c10dacc7ef6bd062d238a8891edee2e7546f`;

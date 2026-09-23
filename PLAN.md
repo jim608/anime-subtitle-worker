@@ -1,6 +1,51 @@
 # Incremental Delivery Plan
 
-## 2026-09-23 03:31 UTC — M2 continuing, current Gate not accepted
+## 2026-09-23 05:39 UTC — M2 source QC v2 deployed, acceptance pending
+
+The hash-bound ordinal-4 zh-TW ASS candidate's overlapping Title/Default
+events rendered into vertically separated regions; isolated 296-dialogue
+hard QC passed after the narrow disjoint-vertical v2 correction. This was
+candidate validation, not a new formal subtitle or retrospective Gate PASS.
+Worker `fd9f8886c47510950de49a47a652293ce22c08a7` was safely deployed
+(`20260923T052456Z-2348037`); WebUI remains
+`ef5c20e699f1e5a639eb1207f02ce254274c2a73`. Deployment ran 2438
+Worker tests, OK (8 skipped), 235 WebUI tests PASS, and fresh 7/7 isolated
+breakers PASS. The previous 8/20 Gate was preserved as
+`INVALIDATED_BY_RUNTIME_CHANGE`; controlled recovery restored `ARMED`
+without releasing 107 source holds or transferring prior members.
+
+New fixed Gate `m2-gate-20260923T053731768753Z-cd4d61bdbe` started at
+`2026-09-23T05:37:31.768753Z`, baseline
+`m2-guardrail-v1:2b3f2298b1f884d00611722a`. Its first bounded snapshot
+is 1/20, one terminal safe review, zero strict and zero new formal subtitles.
+A later bounded snapshot recorded 2/20 enrolled, one settled review and
+one successor in transcription with a fresh heartbeat. This establishes one
+terminal-to-next-distinct-claim cycle, not sustained operation. The
+24-hour observation, repeated distinct terminal-to-next-claim cycles and
+two new strict outputs on this baseline are not yet established. Existing
+server observation owns further progress; no high-frequency polling or M3.
+
+- [x] Preserve the old cohort; safely deploy only the verified shared ASS
+      source-QC correction and its example-version alignment.
+- [x] Re-attest runtime, pass fresh breaker injection, and complete exact
+      receipt-bound recovery without bypassing source isolation.
+- [ ] Keep the new first-20 cohort fixed, including reviews; assess all
+      results after at least 24 hours (earliest
+      `2026-09-24T05:37:31.768753Z`), without backfill or version mixing.
+- [ ] Prove repeated terminal-to-next-distinct-claim cycles and at least two
+      newly published strict formal zh-TW targets on the new baseline.
+- [ ] Close current-baseline AI and download/extraction final-publication
+      evidence, and confirm no false completion, source damage, duplicate
+      publish, unbounded retry or unexplained admission stop.
+
+Status **WAITING_FOR_EVIDENCE**; M2 Production accepted **NO**. The current
+fixed cohort's first review already prevents a 20/20 strict Gate PASS; it
+must not be replaced to manufacture acceptance. See the current section in
+`docs/M2_PRODUCTION_OBSERVATION.md` and
+`docs/RELIABILITY_ACCEPTANCE_20260920.md` for server evidence. Documentation
+alone does not change Worker, breaker or Gate.
+
+## 2026-09-23 03:31 UTC — prior M2 handoff, Gate later invalidated
 
 The two reproduced shared-boundary defects (post-terminal breaker bypass and
 owned planned-change hold release) were fixed on Worker
