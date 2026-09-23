@@ -1,5 +1,57 @@
 # Full-flow reliability acceptance — 2026-09-20
 
+## 2026-09-23 02:56 UTC — post-terminal safety and owned-hold recovery
+
+The deployed Worker is `e30d3c61117508e1c88d47f40c72ce279d7aa2d0`
+(`sha256:0ace552cfe597f5028bb90aff2a8c10dacc7ef6bd062d238a8891edee2e7546f`);
+WebUI remains `ef5c20e699f1e5a639eb1207f02ce254274c2a73`.
+Isolated regressions reproduced two defects: a later attempt after a frozen
+member's terminal review was ignored before the breaker, and a planned
+runtime-change recovery could arm a Gate but not release this run's own
+reconciliation hold. The first repair journals distinct attempts without
+changing frozen outcomes or invalidated old Gates. The release repair checks
+the exact hold ID, immutable planned receipt, hashed recovery record, runtime
+identity and old Gate; wrong owner or receipt remains fail-closed.
+
+The first safe deployment (`20260923T022626Z-141902`) used receipt
+`m2-postterminal-20260923`; 324 relevant isolated tests and fresh 7/7 breaker
+tests passed. Controlled recovery reached a new ARMED 0/20 Gate but refused
+`resume-local` with `reconciliation_release_record_missing`. That failure
+remains in `logs/m2-source-id-20260923/postterminal-controlled-recovery.log`;
+the hold was not cleared directly. The second minimal patch passed 395 related
+tests in UNRAID isolation and 395 again in the actual deployed image. Its
+safe deployment (`20260923T024939Z-423517`) retained the hold, all backups
+and source holds. Receipt
+`/logs/m2-planned-runtime-change-m2-owned-release-20260923.json` has digest
+`sha256:05ef3135968d711e34171bc52b13f7291d7f2e6ab64041c1c0e6bef305946a73`.
+The final image's fresh 7/7 fault suite affected no Production resource.
+Receipt-bound controlled recovery
+`m2breakerrec_3b05273fc89c4f8cb4530721580a241d` returned Breaker ARMED,
+released only hold `m2-recon-postterminal-20260923`, and resumed claims.
+All 107 source holds and 60 deployment backups remain.
+
+The old Gate at 3/20 and intermediate Gate at 0/20 were invalidated by their
+actual runtime changes, with no backfill. Current Gate
+`m2-gate-20260923T025449876085Z-6d5682c2c1`, baseline
+`m2-guardrail-v1:b148a1eb90c1dc7ba65363f1`, began
+`2026-09-23T02:54:49.876085Z`. One bounded read-only snapshot records 1/20,
+one correctly reviewed claim with preflight/source-selection stages, 0 strict,
+and no new formal subtitle. This proves admission resumed, not sustained
+terminal-to-next-distinct-claim operation. The deployment/test/fault/recovery
+logs are under `logs/m2-source-id-20260923/`; the immutable Gate snapshot is
+`post-owned-release-snapshot-1790132182183456481.json` there. The full-suite
+preflight still has two unrelated `config.example.yaml` v1/v2 expectation
+failures; this work did not change example config or count that suite as PASS.
+
+Status: **WAITING_FOR_EVIDENCE**. The existing server observer must still
+establish at least 24 hours from the current Gate start, all fixed first 20
+outcomes, repeated terminal-to-next-claim cycles, at least two newly
+published strict zh-TW targets on this version, and no unresolved safety
+incident. Earlier download/extraction and AI proofs remain separate,
+version-labelled history; they do not fill new Gate slots or the two-new-
+output requirement. Laya remains disabled for automatic inference and does
+not gate subtitle admission. No M3 or M2 Production acceptance.
+
 ## 2026-09-22 23:52 UTC — current-image settled-Gate admission boundary
 
 Worker cf82fc27 image

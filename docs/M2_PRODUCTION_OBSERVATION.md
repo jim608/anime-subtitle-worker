@@ -1,6 +1,49 @@
 # M2 Production Observation
 
-Current bounded observation (2026-09-23 01:52 UTC): the verified canonical-output/source
+## Current handoff — 2026-09-23 02:56 UTC
+
+Worker `e30d3c61117508e1c88d47f40c72ce279d7aa2d0`, image
+`sha256:0ace552cfe597f5028bb90aff2a8c10dacc7ef6bd062d238a8891edee2e7546f`;
+WebUI `ef5c20e699f1e5a639eb1207f02ce254274c2a73`. Breaker is
+`ARMED/runtime_baseline_match`, the owned deployment hold is released, and
+the server is responsible for subsequent admission. The current immutable
+Gate is `m2-gate-20260923T025449876085Z-6d5682c2c1`, baseline
+`m2-guardrail-v1:b148a1eb90c1dc7ba65363f1`, started
+`2026-09-23T02:54:49.876085Z`. One bounded read-only snapshot at 02:56 UTC
+recorded **1/20 enrolled, 1 settled NEEDS_REVIEW, 0 strict** and 107 source
+holds. The first post-recovery attempt was genuinely claimed at
+`2026-09-23T02:56:02.865352Z`, ran preflight and source selection, and
+correctly ended in review at `02:56:11.545679Z`; this is not a new subtitle
+or terminal-to-next-distinct-claim proof. Evidence:
+`logs/m2-source-id-20260923/post-owned-release-snapshot-1790132182183456481.json`.
+
+This handoff repaired two shared safety/recovery boundaries: a distinct
+post-terminal attempt previously bypassed breaker evaluation, and an
+operator-owned pause used for a planned runtime change could not be released
+by its exact controlled-recovery receipt. The first repair journals subsequent
+attempts without changing a frozen member or appending to an invalidated Gate;
+the second requires the named owner, immutable receipt, hashed recovery log,
+matching new runtime, and preserved old Gate. No foreign pause is released.
+The original 3/20 Gate and intermediate 0/20 Gate remain
+`INVALIDATED_BY_RUNTIME_CHANGE`; neither contributes members or outcomes to
+the current cohort. Both changes used the existing safe updater at idle with
+online backups retained. The final deployed image passed 395 relevant
+isolated tests and fresh 7/7 breaker injection; controlled recovery record
+`m2breakerrec_3b05273fc89c4f8cb4530721580a241d` returned ARMED and
+resumed claims. See `docs/RELIABILITY_ACCEPTANCE_20260920.md` for the exact
+receipts/log locations and the failed intermediate resume, which was not
+relabelled successful.
+
+M2 remains **WAITING_FOR_EVIDENCE**. The earliest 24-hour boundary is
+`2026-09-24T02:54:49.876085Z`; elapsed time alone is insufficient. All
+first 20 fixed outcomes, multiple distinct terminal-to-next-claim cycles,
+at least two new strict formal zh-TW subtitle targets on this exact baseline,
+and the remaining safety/admission observations must still be proven by the
+existing server observer. New formal subtitles in this handoff: **0**.
+No M3 or M2 Production acceptance is claimed. Historical sections below are
+retained as versioned evidence, not current status.
+
+Historical bounded observation (2026-09-23 01:52 UTC): the verified canonical-output/source
 identity repair is deployed on Worker
 `12599631ba7f79d7e7b26b8b42b18993b8f213db`. The old 8/20 Gate is
 preserved as `INVALIDATED_BY_RUNTIME_CHANGE`; controlled recovery returned

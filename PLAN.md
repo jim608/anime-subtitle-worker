@@ -1,5 +1,36 @@
 # Incremental Delivery Plan
 
+## 2026-09-23 02:56 UTC — M2 continuing, current Gate not accepted
+
+The two reproduced shared-boundary defects (post-terminal breaker bypass and
+owned planned-change hold release) were fixed on Worker
+`e30d3c61117508e1c88d47f40c72ce279d7aa2d0`, safely deployed, and
+verified with 395 actual-image related tests plus fresh 7/7 breaker injection.
+Controlled recovery record `m2breakerrec_3b05273fc89c4f8cb4530721580a241d`
+returned ARMED and resumed automatic admission without clearing another
+owner's pause. The current frozen Gate
+`m2-gate-20260923T025449876085Z-6d5682c2c1` began
+`2026-09-23T02:54:49.876085Z`; the bounded snapshot is 1/20, 1 safe review,
+0 strict. The earlier 3/20 and intermediate 0/20 Gates remain invalidated
+and do not contribute results. All 107 source holds and 60 backups remain.
+
+- [x] Reproduce, repair, isolate-test and safely deploy the two shared defects.
+- [x] Use exact receipts for runtime handoffs; recover ARMED and verify a real
+      post-recovery claim reached preflight/source-selection and a safe terminal.
+- [ ] Observe repeated distinct terminal-to-next-claim cycles on this baseline.
+- [ ] Retain and assess all first 20 immutable Gate outcomes after at least 24
+      hours of existing server-side observation (earliest
+      `2026-09-24T02:54:49.876085Z`).
+- [ ] Prove at least two newly published strict formal zh-TW targets on this
+      baseline, without counting historical download/extraction or AI outputs.
+- [ ] Confirm no unresolved false completion, source damage, duplicate publish,
+      unbounded retry or unexplained admission stop across that window.
+
+Status **WAITING_FOR_EVIDENCE**, M2 Production accepted **NO**. No M3. See
+`docs/M2_PRODUCTION_OBSERVATION.md` and
+`docs/RELIABILITY_ACCEPTANCE_20260920.md` for exact server evidence. A
+document-only update does not redeploy or replace the Gate.
+
 ## 2026-09-23 01:39 UTC — canonical output/source identity recovery, acceptance open
 
 Worker `12599631ba7f79d7e7b26b8b42b18993b8f213db` is deployed after the
