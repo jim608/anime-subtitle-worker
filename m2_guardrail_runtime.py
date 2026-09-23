@@ -3473,11 +3473,84 @@ def resolve_model_request_local(config: Any, evidence: Mapping[str, Any], *,
             'recovery_record_id': recovery['recovery_record_id']}
 
 
+def _validate_owned_planned_change_release(
+    config: Any, connection: sqlite3.Connection, state: Mapping[str, Any],
+    control: Mapping[str, Any], *, owned_reconciliation_id: str,
+    planned_change_receipt: str, planned_change_receipt_sha256: str,
+) -> None:
+    """Release an explicitly named hold only after its planned recovery is durable.
+
+    A reconciliation hold without a reconciliation record is never implicitly
+    released. This path is for an operator-owned hold used during a separately
+    receipted planned runtime change, not for an unexplained or foreign pause.
+    """
+    if (not owned_reconciliation_id or control.get('reconciliation_id') != owned_reconciliation_id
+        or control.get('paused') is not True
+        or control.get('requested_by') != 'm2_controlled_breaker_recovery'
+        or not planned_change_receipt or not planned_change_receipt_sha256):
+        raise RuntimeContractError('reconciliation_release_record_missing')
+    from m2_production_observation import circuit_breaker_state_path
+    from m2_observation_store import gate_by_id, INVALIDATED_RUNTIME
+
+    breaker = _read_json(circuit_breaker_state_path(config)) or {}
+    recovery = breaker.get('recovery_record') or {}
+    recovery_id = str(recovery.get('recovery_record_id') or '')
+    if (breaker.get('tripped') is not False or recovery.get('contract') != BREAKER_RECOVERY_CONTRACT
+        or not recovery_id.startswith('m2breakerrec_')
+        or float(control.get('updated_at') or 0) != float(recovery.get('recovered_at_epoch') or 0)):
+        raise RuntimeContractError('planned_release_recovery_not_bound')
+    log_root = Path(str(getattr(config, 'log_path', config.work_path)))
+    logs = list(log_root.glob(f'm2-production-recovery-*-{recovery_id[-8:]}.json'))
+    if (len(logs) != 1 or 'sha256:' + sha256_file(logs[0]) != recovery.get('log_sha256')):
+        raise RuntimeContractError('planned_release_recovery_log_invalid')
+    log = _read_json(logs[0]) or {}
+    if (log.get('contract') != BREAKER_RECOVERY_CONTRACT
+        or log.get('recovery_record_id') != recovery_id
+        or log.get('recovery_mode') != 'planned_runtime_change'
+        or log.get('planned_change_receipt_sha256') != planned_change_receipt_sha256
+        or log.get('production_resources_affected') is not False
+        or log.get('old_gate_id') != recovery.get('old_gate_id')
+        or log.get('new_worker_sha') != recovery.get('new_worker_sha')):
+        raise RuntimeContractError('planned_release_recovery_log_mismatch')
+    receipt = _planned_change_receipt(config, {
+        'mode': 'planned_runtime_change',
+        'expected_old_gate_id': log['old_gate_id'],
+        'planned_change_receipt': planned_change_receipt,
+        'planned_change_receipt_sha256': planned_change_receipt_sha256,
+    })
+    baseline = state.get('baseline') or {}
+    completion = log.get('completion_runtime') or {}
+    if (receipt.get('expected_new_worker_sha') != baseline.get('worker_commit_sha')
+        or receipt.get('expected_new_worker_sha') != log.get('new_worker_sha')
+        or any(completion.get(key) != baseline.get(key) for key in (
+            'worker_commit_sha', 'worker_container_id', 'worker_image_id',
+            'worker_source_revision', 'worker_runtime_code_revision',
+            'worker_runtime_instance_fingerprint', 'webui_commit_sha',
+            'webui_source_revision', 'configuration_fingerprint'))
+        or completion.get('decision') != {
+            'schema_version': baseline.get('decision_schema_version'),
+            'version': baseline.get('decision_version'),
+            'contract': baseline.get('decision_contract'),
+        }):
+        raise RuntimeContractError('planned_release_runtime_mismatch')
+    pause = receipt.get('durable_claim_pause') or {}
+    if (pause.get('paused') is not True
+        or not 0 < float(pause.get('updated_at') or 0) < float(recovery['recovered_at_epoch'])):
+        raise RuntimeContractError('planned_release_pause_not_bound')
+    old_gate = gate_by_id(connection, log['old_gate_id'])
+    if (not old_gate or (old_gate.get('status') != INVALIDATED_RUNTIME
+        and not _receipt_preserves_settled_gate(old_gate, receipt))):
+        raise RuntimeContractError('planned_release_old_gate_not_preserved')
+
+
 def resume_claims_local(
     config: Any,
     *,
     source_revision_file: str | Path = "/app/.source-revision",
     state_path_override: str | Path | None = None,
+    owned_reconciliation_id: str = "",
+    planned_change_receipt: str = "",
+    planned_change_receipt_sha256: str = "",
     now: float | None = None,
 ) -> dict[str, Any]:
     """Release the durable operator pause only after the new Gate is ARMED."""
@@ -3512,6 +3585,10 @@ def resume_claims_local(
     control_path = Path(config.work_path) / 'ai_control.json'
     prior_control = _read_json(control_path) or {}
     release_reconciliation = prior_control.get('reconciliation_hold') is True
+    if owned_reconciliation_id and (
+        not release_reconciliation or prior_control.get('reconciliation_id') != owned_reconciliation_id
+    ):
+        raise RuntimeContractError('planned_release_hold_owner_mismatch')
     if release_reconciliation:
         from scan_state import ScanStateStore
         store = ScanStateStore.from_config(config)
@@ -3522,25 +3599,31 @@ def resume_claims_local(
                 (prior_control.get('reconciliation_id'),),
             ).fetchone()
             if not row:
-                raise RuntimeContractError('reconciliation_release_record_missing')
-            record = json.loads(row[0])
-            if state.get('baseline', {}).get('worker_commit_sha') != record['request'].get('expected_new_worker_sha'):
-                raise RuntimeContractError('reconciliation_release_runtime_mismatch')
-            holds = [list(row) for row in connection.execute(
-                'SELECT * FROM m2_recovery_source_holds ORDER BY canonical_path')]
-            if holds != record['hold_inventory']:
-                raise RuntimeContractError('reconciliation_release_holds_changed')
-            current = _durable_recovery_snapshot(connection)
-            if any(record['snapshot'].get(key) != value for key, value in current.items()):
-                raise RuntimeContractError('reconciliation_release_new_difference')
-            recovery_events = connection.execute(
-                "SELECT payload_json FROM m2_recovery_events WHERE recovery_id='__circuit_breaker__' "
-                "AND event_type='CONTROLLED_BREAKER_RECOVERY' AND created_at>=? ORDER BY created_at DESC LIMIT 10",
-                (record['created_at_epoch'],),
-            ).fetchall()
-            if not any(json.loads(row[0]).get('incident', {}).get('reconciliation_id') == record['reconciliation_id']
-                       for row in recovery_events):
-                raise RuntimeContractError('reconciliation_controlled_recovery_not_recorded')
+                _validate_owned_planned_change_release(
+                    config, connection, state, prior_control,
+                    owned_reconciliation_id=owned_reconciliation_id,
+                    planned_change_receipt=planned_change_receipt,
+                    planned_change_receipt_sha256=planned_change_receipt_sha256,
+                )
+            else:
+                record = json.loads(row[0])
+                if state.get('baseline', {}).get('worker_commit_sha') != record['request'].get('expected_new_worker_sha'):
+                    raise RuntimeContractError('reconciliation_release_runtime_mismatch')
+                holds = [list(row) for row in connection.execute(
+                    'SELECT * FROM m2_recovery_source_holds ORDER BY canonical_path')]
+                if holds != record['hold_inventory']:
+                    raise RuntimeContractError('reconciliation_release_holds_changed')
+                current = _durable_recovery_snapshot(connection)
+                if any(record['snapshot'].get(key) != value for key, value in current.items()):
+                    raise RuntimeContractError('reconciliation_release_new_difference')
+                recovery_events = connection.execute(
+                    "SELECT payload_json FROM m2_recovery_events WHERE recovery_id='__circuit_breaker__' "
+                    "AND event_type='CONTROLLED_BREAKER_RECOVERY' AND created_at>=? ORDER BY created_at DESC LIMIT 10",
+                    (record['created_at_epoch'],),
+                ).fetchall()
+                if not any(json.loads(row[0]).get('incident', {}).get('reconciliation_id') == record['reconciliation_id']
+                           for row in recovery_events):
+                    raise RuntimeContractError('reconciliation_controlled_recovery_not_recorded')
         finally:
             store.close()
     control = _set_durable_claim_control(
@@ -3580,6 +3663,7 @@ def recover_runtime_on_host(
     root_cause_evidence: Mapping[str, Any] | None = None,
     model_provider_container: str = "",
     model_request_token: str = "",
+    owned_reconciliation_id: str = "",
     runner: CommandRunner | None = None,
 ) -> dict[str, Any]:
     """Attest, recover, re-arm, and seed one recovery canary without waiting."""
@@ -3787,6 +3871,15 @@ def recover_runtime_on_host(
     ]
     if runtime_state_path_override:
         resume_command.extend(["--state-path", runtime_state_path_override])
+    if owned_reconciliation_id:
+        root = root_cause_evidence or {}
+        if root.get('mode') != 'planned_runtime_change':
+            raise RuntimeContractError('planned_release_mode_invalid')
+        resume_command.extend([
+            '--owned-reconciliation-id', owned_reconciliation_id,
+            '--planned-change-receipt', str(root.get('planned_change_receipt') or ''),
+            '--planned-change-receipt-sha256', str(root.get('planned_change_receipt_sha256') or ''),
+        ])
     claim_resume = _run_json(
         resume_command,
         run,
@@ -4489,6 +4582,7 @@ def _parser() -> argparse.ArgumentParser:
     recover.add_argument("--state-path", default="")
     recover.add_argument("--planned-change-receipt", default="")
     recover.add_argument("--planned-change-receipt-sha256", default="")
+    recover.add_argument("--owned-reconciliation-id", default="")
     recover.add_argument('--reconciliation-record', default='')
     recover.add_argument('--reconciliation-record-sha256', default='')
 
@@ -4538,6 +4632,9 @@ def _parser() -> argparse.ArgumentParser:
     resume_local.add_argument("--config", required=True)
     resume_local.add_argument("--source-revision-file", required=True)
     resume_local.add_argument("--state-path", default="")
+    resume_local.add_argument("--owned-reconciliation-id", default="")
+    resume_local.add_argument("--planned-change-receipt", default="")
+    resume_local.add_argument("--planned-change-receipt-sha256", default="")
     return parser
 
 
@@ -4595,6 +4692,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 runtime_state_path_override=args.state_path,
                 root_cause_evidence=planned,
                 model_request_token=args.model_request_token,
+                owned_reconciliation_id=args.owned_reconciliation_id,
             )
         elif args.command == 'provider-refresh':
             result = refresh_provider_observation_on_host(docker_binary=args.docker,
@@ -4640,6 +4738,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 load_config(args.config),
                 source_revision_file=args.source_revision_file,
                 state_path_override=args.state_path or None,
+                owned_reconciliation_id=args.owned_reconciliation_id,
+                planned_change_receipt=args.planned_change_receipt,
+                planned_change_receipt_sha256=args.planned_change_receipt_sha256,
             )
         else:
             from config import load_config

@@ -842,6 +842,25 @@ class M2GuardrailRuntimeTests(unittest.TestCase):
         recovery_case = None
         flow.clear()
         commands.clear()
+        runtime.recover_runtime_on_host(**{
+            **recovery_args, 'model_request_token': '',
+            'root_cause_evidence': {
+                'mode': 'planned_runtime_change',
+                'planned_change_receipt': '/logs/m2-planned-runtime-change-owned.json',
+                'planned_change_receipt_sha256': 'sha256:' + 'b' * 64,
+            },
+            'owned_reconciliation_id': 'm2-owned-fixture',
+        })
+        resume_command = next(command for command in commands if 'resume-local' in command)
+        self.assertEqual('m2-owned-fixture', resume_command[
+            resume_command.index('--owned-reconciliation-id') + 1])
+        self.assertEqual('/logs/m2-planned-runtime-change-owned.json', resume_command[
+            resume_command.index('--planned-change-receipt') + 1])
+        self.assertEqual('sha256:' + 'b' * 64, resume_command[
+            resume_command.index('--planned-change-receipt-sha256') + 1])
+        recovery_case = None
+        flow.clear()
+        commands.clear()
         result = runtime.refresh_provider_observation_on_host(docker_binary='docker',
             worker_container='anime-subtitle-worker', model_provider_container='fixture-ollama',
             worker_config_path='/app/config.yaml', runner=runner)

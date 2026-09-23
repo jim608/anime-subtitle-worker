@@ -240,6 +240,36 @@ class PlannedRuntimeChangeTests(unittest.TestCase):
         self.assertEqual(2, self.connection.execute("SELECT COUNT(*) FROM m2_observation_gates").fetchone()[0])
         self.assertEqual(self.before_files, {p: p.read_bytes() for p in self.before_files})
 
+    def test_owned_hold_from_planned_change_requires_exact_recovery_receipt(self):
+        """A planned handoff may release its own pause, never an unknown hold."""
+        hold_id = 'm2-recon-planned-test'
+        runtime.pause_reconciliation_admission(self.config, hold_id, now=self.now - 1)
+        self.deploy()
+        self.recover()
+        runtime.initialize_gate(self.config, self.evidence,
+                                source_revision_file=self.fixture.revision, now=self.now + 11)
+        control_path = self.fixture.work / 'ai_control.json'
+        held = control_path.read_bytes()
+        kwargs = dict(source_revision_file=self.fixture.revision,
+                      owned_reconciliation_id=hold_id,
+                      planned_change_receipt=self.prepared['receipt_path'],
+                      planned_change_receipt_sha256=self.prepared['receipt_sha256'])
+        for changed, reason in (
+            ({'owned_reconciliation_id': ''}, 'reconciliation_release_record_missing'),
+            ({'owned_reconciliation_id': 'foreign-hold'}, 'planned_release_hold_owner_mismatch'),
+            ({'planned_change_receipt_sha256': 'sha256:' + '0' * 64}, 'planned_release_recovery_log_mismatch'),
+        ):
+            with self.subTest(changed=changed), self.assertRaisesRegex(runtime.RuntimeContractError, reason):
+                runtime.resume_claims_local(self.config, **{**kwargs, **changed})
+            self.assertEqual(held, control_path.read_bytes())
+        resumed = runtime.resume_claims_local(self.config, **kwargs)
+        self.assertTrue(resumed['claims_resumed'])
+        control = json.loads(control_path.read_text())
+        self.assertFalse(control['paused'])
+        self.assertFalse(control['reconciliation_hold'])
+        self.assertEqual(hold_id, control['reconciliation_id'])
+        self.assertEqual(self.before_files, {p: p.read_bytes() for p in self.before_files})
+
     def test_completed_change_cannot_be_replayed_with_another_receipt(self):
         other = self.prepare(receipt_id="another-prepared-receipt")
         self.deploy()
