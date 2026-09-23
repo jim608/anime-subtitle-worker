@@ -49,6 +49,17 @@ cycle, not the required repeated sustained evidence. The full-suite
 preflight still has two unrelated `config.example.yaml` v1/v2 expectation
 failures; this work did not change example config or count that suite as PASS.
 
+A further bounded 03:12 UTC snapshot is ACTIVE 2/20, **both settled review**,
+0 strict, ARMED/no pause, 107 holds. The second reviewed obligation's
+`deterministic_asr_quality` terminal at 03:05:03Z was followed by its own
+bounded transcription retry claim at 03:11:00Z (the normal 300-second
+scheduler cadence). It is **not** a third Gate member or another distinct-
+obligation continuation. Evidence:
+`logs/m2-source-id-20260923/post-owned-release-snapshot-1790133177616909111.json`.
+An earlier same-time snapshot's stage/heartbeat fields were not bounded to
+each attempt's end; it is retained, marked superseded for those fields in
+`post-owned-release-snapshot-correction.txt`, and not used for attempt proof.
+
 Status: **WAITING_FOR_EVIDENCE**. The existing server observer must still
 establish at least 24 hours from the current Gate start, all fixed first 20
 outcomes, repeated terminal-to-next-claim cycles, at least two newly
@@ -57,6 +68,10 @@ incident. Earlier download/extraction and AI proofs remain separate,
 version-labelled history; they do not fill new Gate slots or the two-new-
 output requirement. Laya remains disabled for automatic inference and does
 not gate subtitle admission. No M3 or M2 Production acceptance.
+The existing outbox automatically emits the fixed-20 report at settlement;
+there is no separate automatic 24-hour PASS flag. At the window end, assess
+the same-baseline durable claim/stage/terminal journals and server machine
+reports once, without Codex polling or replacing Gate members.
 
 ## 2026-09-22 23:52 UTC — current-image settled-Gate admission boundary
 

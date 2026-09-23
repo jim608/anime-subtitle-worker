@@ -23,6 +23,19 @@ at `02:57:24.259512Z`, entered transcription and had a fresh heartbeat at
 manual dispatch or Retry occurred between them. This proves **one** current-
 baseline terminal-to-next-distinct-claim cycle, not sustained operation.
 Evidence: `logs/m2-source-id-20260923/post-owned-release-snapshot-1790132421559620201.json`.
+At 03:12 UTC, an additional bounded snapshot kept the same Gate ACTIVE
+**2/20, 2 settled NEEDS_REVIEW, 0 strict**, runtime ARMED and all 107 holds.
+The second distinct obligation ended `deterministic_asr_quality` review at
+03:05:03 UTC. After the normal 300-second scheduler cadence, it resumed the
+*same* obligation at 03:11:00 UTC and entered transcription with a fresh
+heartbeat; this is a bounded remediation attempt, **not** a third frozen
+member or second distinct terminal-to-next-job cycle. The corrected
+attempt-time-bounded evidence is
+`logs/m2-source-id-20260923/post-owned-release-snapshot-1790133177616909111.json`.
+The preceding 03:12 snapshot remains preserved but its per-attempt stage/
+heartbeat fields must not be used because they could associate the newer
+same-path event with the older attempt; see
+`logs/m2-source-id-20260923/post-owned-release-snapshot-correction.txt`.
 
 This handoff repaired two shared safety/recovery boundaries: a distinct
 post-terminal attempt previously bypassed breaker evaluation, and an

@@ -11,11 +11,15 @@ returned ARMED and resumed automatic admission without clearing another
 owner's pause. The current frozen Gate
 `m2-gate-20260923T025449876085Z-6d5682c2c1` began
 `2026-09-23T02:54:49.876085Z`; the latest bounded snapshot is 2/20,
-1 safe review, 0 strict. A different obligation was automatically claimed
+2 safe reviews, 0 strict. A different obligation was automatically claimed
 after that review and reached transcription with a fresh heartbeat: one
-terminal-to-next-distinct-claim cycle, not sustained acceptance. The earlier
-3/20 and intermediate 0/20 Gates remain invalidated
-and do not contribute results. All 107 source holds and 60 backups remain.
+terminal-to-next-distinct-claim cycle, not sustained acceptance. After its
+own ASR-quality review, that second obligation resumed itself on the normal
+300-second schedule; its retry is not a new Gate member or distinct cycle.
+The attempt-time-bounded proof is
+`logs/m2-source-id-20260923/post-owned-release-snapshot-1790133177616909111.json`.
+The earlier 3/20 and intermediate 0/20 Gates remain invalidated and do not
+contribute results. All 107 source holds and 60 backups remain.
 
 - [x] Reproduce, repair, isolate-test and safely deploy the two shared defects.
 - [x] Use exact receipts for runtime handoffs; recover ARMED and verify a real
