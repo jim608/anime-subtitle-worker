@@ -37,6 +37,30 @@ heartbeat fields must not be used because they could associate the newer
 same-path event with the older attempt; see
 `logs/m2-source-id-20260923/post-owned-release-snapshot-correction.txt`.
 
+An exact-key, read-only follow-up of those same two obligations (not a new
+Queue/media scan) explains the reviews. The first decision is
+`candidate_analysis_inconclusive`: inventory was complete, but all three
+Traditional-Chinese sidecars shared content that failed hard QC with
+`timing_overlap`; the two other subtitle candidates failed hard QC and had
+unsupported/unknown language. The only audio candidate was tagged English
+with insufficient Japanese-audio confidence. Although the top subtitle score
+was 0.98775, it was explicitly ineligible; this is a safety review, not
+evidence to bypass QC or force ASR. The second obligation's ASR review was
+`short_fragment` across five ranges. Its checkpoint records
+`repair_attempted=true`; one revision-bound automatic `review.resolve_ai`
+command completed, and the same obligation's second attempt also ended
+`deterministic_asr_quality` review at 03:19:04 UTC. It is paused with two
+attempts, not delivered, and did not fill another Gate slot. Existing code
+caps full-ASR automatic remediation at three attempts per review and rejects
+replay of the same failure revision; the exact command and queue record
+support a bounded retry, not an unbounded loop.
+Evidence is retained server-side in
+`logs/m2-source-id-20260923/precise-review-evidence-1790133865425563500.json`
+and `precise-source-decision-1790133982509726860.json`. No reproducible
+shared false-review defect was found, so this follow-up changed neither
+Worker/runtime nor frozen Gate. The current-baseline two-new-output and
+24-hour/first-20 acceptance conditions remain unproved.
+
 This handoff repaired two shared safety/recovery boundaries: a distinct
 post-terminal attempt previously bypassed breaker evaluation, and an
 operator-owned pause used for a planned runtime change could not be released
