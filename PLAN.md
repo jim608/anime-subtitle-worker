@@ -1,6 +1,6 @@
 # Incremental Delivery Plan
 
-## 2026-09-23 02:56 UTC — M2 continuing, current Gate not accepted
+## 2026-09-23 03:31 UTC — M2 continuing, current Gate not accepted
 
 The two reproduced shared-boundary defects (post-terminal breaker bypass and
 owned planned-change hold release) were fixed on Worker
@@ -10,27 +10,31 @@ Controlled recovery record `m2breakerrec_3b05273fc89c4f8cb4530721580a241d`
 returned ARMED and resumed automatic admission without clearing another
 owner's pause. The current frozen Gate
 `m2-gate-20260923T025449876085Z-6d5682c2c1` began
-`2026-09-23T02:54:49.876085Z`; the latest bounded snapshot is 2/20,
-2 safe reviews, 0 strict. A different obligation was automatically claimed
-after that review and reached transcription with a fresh heartbeat: one
-terminal-to-next-distinct-claim cycle, not sustained acceptance. After its
-own ASR-quality review, that second obligation resumed itself on the normal
-300-second schedule; its retry is not a new Gate member or distinct cycle.
-The attempt-time-bounded proof is
-`logs/m2-source-id-20260923/post-owned-release-snapshot-1790133177616909111.json`.
+`2026-09-23T02:54:49.876085Z`. The latest bounded status snapshot is ACTIVE
+4/20, 3 settled (2 review, 1 strict); an exact member read then captured the
+fourth terminal review. Three distinct terminal-to-next-claim cycles are proven,
+but not 24-hour sustained acceptance. The earlier same-obligation ASR retry
+does not count as a distinct cycle. Ordinal 3 newly published one formal
+323-dialogue zh-TW subtitle by converting a verified zh-CN source; final-file
+QC/hash and an exact completed publication journal with `backups=[]` prove a
+new destination rather than mere strict revalidation. This is **1/2** required
+current-baseline new outputs. Evidence is in
+`logs/m2-source-id-20260923/post-owned-release-snapshot-1790134267978741482.json`
+and the exact publication receipts cited in `docs/M2_PRODUCTION_OBSERVATION.md`.
 The earlier 3/20 and intermediate 0/20 Gates remain invalidated and do not
 contribute results. All 107 source holds and 60 backups remain.
 
 - [x] Reproduce, repair, isolate-test and safely deploy the two shared defects.
 - [x] Use exact receipts for runtime handoffs; recover ARMED and verify a real
       post-recovery claim reached preflight/source-selection and a safe terminal.
-- [ ] Observe repeated distinct terminal-to-next-claim cycles on this baseline
-      (one proven in `post-owned-release-snapshot-1790132421559620201.json`).
+- [ ] Observe repeated distinct terminal-to-next-claim cycles throughout the
+      acceptance window (three early cycles proven; duration still short).
 - [ ] Retain and assess all first 20 immutable Gate outcomes after at least 24
       hours of existing server-side observation (earliest
       `2026-09-24T02:54:49.876085Z`).
 - [ ] Prove at least two newly published strict formal zh-TW targets on this
-      baseline, without counting historical download/extraction or AI outputs.
+      baseline (one proven), without counting historical download/extraction
+      or AI outputs.
 - [ ] Confirm no unresolved false completion, source damage, duplicate publish,
       unbounded retry or unexplained admission stop across that window.
 

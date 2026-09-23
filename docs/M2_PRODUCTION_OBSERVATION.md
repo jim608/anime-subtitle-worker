@@ -61,6 +61,34 @@ shared false-review defect was found, so this follow-up changed neither
 Worker/runtime nor frozen Gate. The current-baseline two-new-output and
 24-hour/first-20 acceptance conditions remain unproved.
 
+A later single bounded server snapshot at **03:31:07 UTC** recorded the same
+Gate ACTIVE at **4/20 enrolled, 3 settled (2 review, 1 strict)**, ARMED with no
+pause and 107 source holds. Its durable attempts prove three *distinct*
+terminal-to-next-claim cycles on this baseline: 02:56:11 review → 02:57:24
+claim, 03:19:04 review → 03:20:17 claim, and 03:20:31 success → 03:21:45
+claim with transcription Stage at 03:22:09 and heartbeat at 03:29:12.
+The intervening same-obligation ASR retry is excluded from this count.
+An exact frozen-member read then showed ordinal 4 entering NEEDS_REVIEW at
+03:31:21 without a breaker-trip incident flag; it was not replaced.
+Evidence: `logs/m2-source-id-20260923/post-owned-release-snapshot-1790134267978741482.json`
+and `precise-gate-publication-evidence-1790134371868111997.json`.
+
+Ordinal 3 (`m2ai_23e73312e5fc376fb7d4`) is also **one genuinely new** formal
+zh-TW subtitle on this current baseline, not merely a strict revalidation:
+the recorded strategy is `CONVERT_ZH_CN`, terminal state COMPLETED, strict
+checks (parse, hard QC, hallucination, source checksum, duplication and
+checkpoint/retry) pass. Its final-position file was re-read and classified
+zh-TW with 323 dialogues and no hard-QC failures; manifest and output hashes
+match. The per-target rollback journal was completed within the exact claim,
+has `backups=[]` (destination absent before publication), and its published
+destination/hash matches the final manifest. The output mtime and manifest
+completion also fall within that claim. Server evidence:
+`logs/m2-source-id-20260923/precise-converted-publication-1790134567510493786.json`
+and `precise-publication-journal-1790134684657260176.json`. This is **1/2**
+required newly created current-baseline outputs; it does not complete the
+fixed Gate, 24-hour observation, or M2 Production acceptance. No runtime
+change, deployment, or Gate replacement occurred for these read-only checks.
+
 This handoff repaired two shared safety/recovery boundaries: a distinct
 post-terminal attempt previously bypassed breaker evaluation, and an
 operator-owned pause used for a planned runtime change could not be released

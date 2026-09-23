@@ -60,6 +60,22 @@ An earlier same-time snapshot's stage/heartbeat fields were not bounded to
 each attempt's end; it is retained, marked superseded for those fields in
 `post-owned-release-snapshot-correction.txt`, and not used for attempt proof.
 
+At 03:31:07 UTC, a new bounded read-only snapshot recorded the same Gate
+ACTIVE at 4/20 enrolled, 3 settled (2 review, 1 strict), ARMED/no pause.
+An exact frozen-member read subsequently observed ordinal 4 in review.
+Durable claim/terminal/Stage times now prove three different-job
+terminal-to-next-claim cycles, not the intervening same-job ASR retry.
+Ordinal 3 is **one** newly created formal zh-TW output on this baseline:
+`CONVERT_ZH_CN`, 323 parsed dialogues, final hard QC/manifest/output hash
+PASS, and a within-claim completed publication rollback journal with
+`backups=[]` and the matching published hash. It is not an adopted old file;
+it is also not the second required new output or 20-job/24-hour acceptance.
+Exact server receipts and timestamp caveats are in
+`docs/M2_PRODUCTION_OBSERVATION.md` and
+`logs/m2-source-id-20260923/precise-publication-journal-1790134684657260176.json`.
+No Worker/WebUI/runtime configuration changed for these checks; no Gate
+replacement or deployment occurred.
+
 Status: **WAITING_FOR_EVIDENCE**. The existing server observer must still
 establish at least 24 hours from the current Gate start, all fixed first 20
 outcomes, repeated terminal-to-next-claim cycles, at least two newly
