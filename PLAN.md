@@ -35,6 +35,12 @@ contribute results. All 107 source holds and 60 backups remain.
 - [ ] Prove at least two newly published strict formal zh-TW targets on this
       baseline (one proven), without counting historical download/extraction
       or AI outputs.
+- [ ] Verify current-baseline download/extraction and AI ASR/translation
+      final-publication boundaries separately. Their 351/402-dialogue old
+      receipts remain historical PASS; shared publication/identity/QC code
+      changed before `e30d3c6…`, while the new 323-dialogue Gate result covers
+      `CONVERT_ZH_CN` only. Current-image isolated targeted regression passed
+      40/40 at 2026-09-23T03:54Z; this is not Production path acceptance.
 - [ ] Confirm no unresolved false completion, source damage, duplicate publish,
       unbounded retry or unexplained admission stop across that window.
 

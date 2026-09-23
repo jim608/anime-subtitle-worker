@@ -76,6 +76,34 @@ Exact server receipts and timestamp caveats are in
 No Worker/WebUI/runtime configuration changed for these checks; no Gate
 replacement or deployment occurred.
 
+Version applicability was checked separately for the historical path proofs.
+The Sep12 download/extraction case (one new 351-dialogue formal target on
+Worker `88598848…`) and Sep20 trusted-JA AI case (one new 402-dialogue formal
+target on Worker `f52118c…`) retain their original parse/QC/manifest/source
+checksum receipts. They are **historical PASS**, not fresh e30 outputs.
+Relative to current `e30d3c6…`, shared publication, source identity/path and
+ASS QC modules changed; unchanged qB/Mikan/extraction or translation/ASR
+modules alone do not prove the entire current end-to-end publication boundary.
+Current Gate ordinal 3's new 323-dialogue `CONVERT_ZH_CN` result verifies the
+current conversion/publication route only, not download/extraction or AI
+ASR/translation publication. Those two current-baseline route proofs remain
+**UNVERIFIED** unless a relevant current-image isolated regression plus
+appropriately scoped real final-publication evidence closes the changed
+boundary. Do not count the 351/402 historical outputs toward the two new
+current-baseline deliveries.
+
+A bounded current-image regression on 2026-09-23 used the actual Worker image
+`sha256:0ace552cfe597f5028bb90aff2a8c10dacc7ef6bd062d238a8891edee2e7546f`
+after checking the running container's image ID. The isolated container had no
+Production mounts, network or GPU, and used a read-only root with a temporary
+`/tmp`; `test_m2_download_runtime`, `test_mikan_import_validation`,
+`test_worker_source_format_dispatch`, `test_source_priority` and
+`test_asr_review_integration` passed **40/40**. Full names, command, exit code
+and actual-image attestation are in
+`logs/m2-source-id-20260923/m2-path-regression-20260923T035443Z.{log,exit}`.
+This closes the missing *test-coverage attribution* of the previous quiet
+395-test log, not either current-baseline Production final-publication proof.
+
 Status: **WAITING_FOR_EVIDENCE**. The existing server observer must still
 establish at least 24 hours from the current Gate start, all fixed first 20
 outcomes, repeated terminal-to-next-claim cycles, at least two newly
