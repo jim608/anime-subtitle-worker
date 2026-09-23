@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from subtitle_quality import (
     add_translation_quality_events,
@@ -148,6 +149,63 @@ class SubtitleQualityTest(unittest.TestCase):
             self.assertIn("too_short", codes)
             self.assertIn("cps_too_high", codes)
             self.assertIn("timing_overlap", codes)
+
+    def test_verified_ass_top_bottom_overlap_is_warned_not_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "Episode.zh-TW.ass"
+            _write_positioned_ass(path, "底部繁體字幕", r"{\an8}頂部註記")
+
+            report = analyze_subtitle_file(path, _config(), role="unknown")
+            codes = {issue.code: issue for issue in report.issues}
+
+            self.assertFalse(report.has_failures)
+            self.assertNotIn("timing_overlap", codes)
+            self.assertEqual(1, codes["ass_disjoint_vertical_overlap"].count)
+            self.assertEqual([1, 2], codes["ass_disjoint_vertical_overlap"].indexes)
+
+    def test_ass_dialogue_and_layout_use_one_source_read(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "Episode.zh-TW.ass"
+            _write_positioned_ass(path, "底部繁體字幕", r"{\an8}頂部註記")
+            original_read = Path.read_text
+            reads = 0
+
+            def counted_read(target: Path, *args: object, **kwargs: object) -> str:
+                nonlocal reads
+                if target == path:
+                    reads += 1
+                return original_read(target, *args, **kwargs)
+
+            with patch.object(Path, "read_text", counted_read):
+                analyze_subtitle_file(path, _config(), role="unknown")
+            self.assertEqual(1, reads)
+
+    def test_ambiguous_ass_overlap_remains_hard_failure(self) -> None:
+        cases = (
+            ("same_position", "底部繁體字幕", "另一句繁體字幕", {}),
+            ("position_override", "底部繁體字幕", r"{\an8\pos(960,900)}頂部註記", {}),
+            ("multiline", "底部繁體字幕", r"{\an8}頂部\N註記", {}),
+            ("missing_playres", "底部繁體字幕", r"{\an8}頂部註記", {"playres": False}),
+            ("missing_style", "底部繁體字幕", r"{\an8}頂部註記", {"style": False}),
+            ("large_font", "底部繁體字幕", r"{\an8}頂部註記", {"font_size": 400}),
+        )
+        for name, bottom, top, settings in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temp_dir:
+                path = Path(temp_dir) / "Episode.zh-TW.ass"
+                _write_positioned_ass(path, bottom, top, **settings)
+                report = analyze_subtitle_file(path, _config(), role="unknown")
+                self.assertIn("timing_overlap", {issue.code for issue in report.issues})
+
+    def test_third_simultaneous_ass_line_cannot_hide_bottom_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "Episode.zh-TW.ass"
+            _write_positioned_ass(path, "第一句底部字幕", r"{\an8}頂部註記")
+            with path.open("a", encoding="utf-8") as stream:
+                stream.write(
+                    "Dialogue: 0,0:00:02.00,0:00:03.40,Default,,0,0,0,,第二句底部字幕\n"
+                )
+            report = analyze_subtitle_file(path, _config(), role="unknown")
+            self.assertIn("timing_overlap", {issue.code for issue in report.issues})
 
     def test_exact_hard_cps_boundary_is_not_failed_by_float_rounding(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -406,6 +464,33 @@ def _write_ass(path: Path, dialogues: list[tuple[str, str, str]]) -> None:
     ]
     for start, end, text in dialogues:
         lines.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_positioned_ass(
+    path: Path, bottom: str, top: str, *, playres: bool = True,
+    style: bool = True, font_size: int = 70,
+) -> None:
+    lines = ["[Script Info]", "ScriptType: v4.00+"]
+    if playres:
+        lines += ["PlayResX: 1920", "PlayResY: 1080"]
+    if style:
+        lines += [
+            "[V4+ Styles]",
+            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+            "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+            "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+            "Alignment, MarginL, MarginR, MarginV, Encoding",
+            "Style: Default,Arial," + str(font_size)
+            + ",&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,"
+            "100,100,0,0,1,3,0,2,10,10,25,1",
+        ]
+    lines += [
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+        f"Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,{bottom}",
+        f"Dialogue: 0,0:00:01.50,0:00:03.50,Default,,0,0,0,,{top}",
+    ]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

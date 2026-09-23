@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass, field, replace
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -38,6 +39,10 @@ SIMPLIFIED_ONLY_RE = re.compile(
 )
 REPEATED_PUNCTUATION_RE = re.compile(r"([!?！？。．])\1{3,}")
 QUALITY_REPORT_DIRECTORY = "subtitle_quality_reports"
+ASS_DISJOINT_VERTICAL_QC_VERSION = "ass-disjoint-vertical-v1"
+_STANDARD_ASS_EVENT_FIELDS = (
+    "layer", "start", "end", "style", "name", "marginl", "marginr", "marginv", "effect", "text",
+)
 
 
 class SubtitleQualityError(RuntimeError):
@@ -101,8 +106,20 @@ class SubtitleQualityReport:
 def analyze_subtitle_file(path: str | Path, config: Any | None = None, *, role: str | None = None) -> SubtitleQualityReport:
     subtitle_path = Path(path)
     resolved_role = role or infer_subtitle_role(subtitle_path)
-    lines = _read_subtitle_lines(subtitle_path)
-    return analyze_subtitle_lines(subtitle_path, lines, config, role=resolved_role)
+    disjoint_pairs: set[tuple[int, int]] = set()
+    if subtitle_path.suffix.casefold() == ".ass":
+        # Parse dialogue and positioning from one immutable read. Reading the
+        # source twice could mix revisions during a concurrent source change.
+        content = subtitle_path.read_text(encoding="utf-8-sig", errors="replace")
+        lines = _ass_lines_from_text(content)
+        tolerance = float(getattr(config, "subtitle_quality_max_overlap_seconds", 0.10))
+        disjoint_pairs = _ass_disjoint_vertical_overlap_pairs(content, lines, tolerance)
+    else:
+        lines = _read_subtitle_lines(subtitle_path)
+    return analyze_subtitle_lines(
+        subtitle_path, lines, config, role=resolved_role,
+        _ass_disjoint_pairs=disjoint_pairs,
+    )
 
 
 def analyze_subtitle_lines(
@@ -111,6 +128,7 @@ def analyze_subtitle_lines(
     config: Any | None = None,
     *,
     role: str = "unknown",
+    _ass_disjoint_pairs: set[tuple[int, int]] | None = None,
 ) -> SubtitleQualityReport:
     issues: list[SubtitleQualityIssue] = []
     if not lines:
@@ -169,7 +187,18 @@ def analyze_subtitle_lines(
         if _cps_exceeds(line, warn_cps_limit)
         and not _cps_exceeds(line, fail_cps_limit)
     ]
-    overlaps = _overlapping_lines(lines, max_overlap_limit)
+    all_overlaps = _overlapping_lines(lines, max_overlap_limit)
+    disjoint_pairs = _ass_disjoint_pairs or set()
+    overlaps = [
+        (previous, current, seconds)
+        for previous, current, seconds in all_overlaps
+        if (previous.index, current.index) not in disjoint_pairs
+    ]
+    verified_disjoint = [
+        (previous, current, seconds)
+        for previous, current, seconds in all_overlaps
+        if (previous.index, current.index) in disjoint_pairs
+    ]
     prompt_echo_positions = (
         asr_prompt_echo_line_indexes((line.primary_text for line in lines), config)
         if role in {"japanese", "source"}
@@ -252,6 +281,24 @@ def analyze_subtitle_lines(
                 count=len(overlaps),
                 samples=[f"#{previous.index}->#{current.index} {seconds:.3f}s" for previous, current, seconds in overlaps[:5]],
                 indexes=sorted({line.index for previous, current, _seconds in overlaps for line in (previous, current)}),
+            )
+        )
+    if verified_disjoint:
+        issues.append(
+            SubtitleQualityIssue(
+                code="ass_disjoint_vertical_overlap",
+                severity="warn",
+                message="ASS top and bottom single-line events have verified disjoint render regions.",
+                count=len(verified_disjoint),
+                samples=[
+                    f"#{previous.index}->#{current.index} {seconds:.3f}s"
+                    for previous, current, seconds in verified_disjoint[:5]
+                ],
+                indexes=sorted({
+                    line.index
+                    for previous, current, _seconds in verified_disjoint
+                    for line in (previous, current)
+                }),
             )
         )
     if prompt_echoes:
@@ -478,8 +525,12 @@ def _srt_lines(blocks: Iterable[SrtBlock]) -> list[SubtitleLine]:
 
 
 def _ass_lines(path: Path) -> list[SubtitleLine]:
+    return _ass_lines_from_text(path.read_text(encoding="utf-8-sig", errors="replace"))
+
+
+def _ass_lines_from_text(content: str) -> list[SubtitleLine]:
     lines: list[SubtitleLine] = []
-    for line in path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
+    for line in content.splitlines():
         if not line.startswith(ASS_DIALOGUE_PREFIX):
             continue
         parts = line.split(",", 9)
@@ -499,6 +550,132 @@ def _ass_lines(path: Path) -> list[SubtitleLine]:
             )
         )
     return lines
+
+
+def _ass_disjoint_vertical_overlap_pairs(
+    content: str, lines: list[SubtitleLine], tolerance: float,
+) -> set[tuple[int, int]]:
+    """Prove a narrow ASS top/bottom exception; ambiguous layout stays a hard overlap.
+
+    The normal quality parser deliberately strips ASS layout. Here we only
+    exempt single-line, untransformed dialogue at style alignment 2 versus an
+    otherwise identical event whose sole override is a leading ``{\\an8}``.
+    Missing/malformed script, style, event, or geometry evidence fails closed.
+    """
+    section = ""
+    info: dict[str, str] = {}
+    style_fields: list[str] = []
+    styles: dict[str, dict[str, str]] = {}
+    event_fields: list[str] = []
+    events: list[dict[str, str]] = []
+    for raw in content.splitlines():
+        value = raw.strip()
+        if value.startswith("[") and value.endswith("]"):
+            section = value.casefold()
+            continue
+        if section == "[script info]" and ":" in value:
+            key, content = value.split(":", 1)
+            info[key.strip().casefold()] = content.strip()
+        elif section == "[v4+ styles]" and value.casefold().startswith("format:"):
+            style_fields = [part.strip().casefold() for part in value[7:].split(",")]
+        elif section == "[v4+ styles]" and value.startswith("Style:"):
+            parts = value[6:].split(",", len(style_fields) - 1) if style_fields else []
+            if len(parts) != len(style_fields) or len(set(style_fields)) != len(style_fields):
+                return set()
+            style = dict(zip(style_fields, (part.strip() for part in parts), strict=True))
+            name = style.get("name", "")
+            if not name or name in styles:
+                return set()
+            styles[name] = style
+        elif section == "[events]" and value.casefold().startswith("format:"):
+            event_fields = [part.strip().casefold() for part in value[7:].split(",")]
+        elif raw.startswith(ASS_DIALOGUE_PREFIX):
+            if section != "[events]" or tuple(event_fields) != _STANDARD_ASS_EVENT_FIELDS:
+                return set()
+            parts = raw[len(ASS_DIALOGUE_PREFIX):].split(",", len(event_fields) - 1)
+            if len(parts) != len(event_fields):
+                return set()
+            events.append(dict(zip(event_fields, (part.strip() for part in parts), strict=True)))
+    if len(events) != len(lines):
+        return set()
+    try:
+        width = int(info["playresx"])
+        height = int(info["playresy"])
+    except (KeyError, TypeError, ValueError):
+        return set()
+    if not (640 <= width <= 7680 and 480 <= height <= 4320):
+        return set()
+
+    def _plain_single_line(event: dict[str, str]) -> tuple[str, bool] | None:
+        text = event["text"]
+        top = text.startswith(r"{\an8}")
+        visible = text[len(r"{\an8}"):] if top else text
+        # Other ASS tags, escaped line breaks, drawing commands and wrapping
+        # make the rendered region uncertain. They never get this exemption.
+        if not visible.strip() or any(character in visible for character in "{}\\"):
+            return None
+        return visible, top
+
+    def _safe_pair(left: dict[str, str], right: dict[str, str]) -> bool:
+        if left["style"] != right["style"] or left["layer"] != right["layer"]:
+            return False
+        if any(event[field] != "0" for event in (left, right) for field in ("marginl", "marginr", "marginv")):
+            return False
+        if left["effect"] or right["effect"] or left["name"] or right["name"]:
+            return False
+        first, second = _plain_single_line(left), _plain_single_line(right)
+        if first is None or second is None or first[1] == second[1]:
+            return False
+        style = styles.get(left["style"])
+        if not style or style.get("alignment") != "2" or style.get("borderstyle") != "1":
+            return False
+        try:
+            font = float(style["fontsize"])
+            scale_x = float(style["scalex"])
+            scale_y = float(style["scaley"])
+            spacing = float(style["spacing"])
+            angle = float(style["angle"])
+            outline = float(style["outline"])
+            shadow = float(style["shadow"])
+            margin_v = int(style["marginv"])
+            margin_l = int(style["marginl"])
+            margin_r = int(style["marginr"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        if not all(math.isfinite(item) for item in (font, scale_x, scale_y, spacing, angle, outline, shadow)):
+            return False
+        if not (0 < font <= height * 0.15 and scale_x == scale_y == 100 and spacing == angle == shadow == 0):
+            return False
+        if not (0 <= outline <= font * 0.2 and 0 <= margin_v <= height * 0.1):
+            return False
+        if min(margin_l, margin_r) < 0:
+            return False
+        # A generous three-font-height envelope on each edge must still leave
+        # a gap. Bound width as well so automatic wrapping cannot add lines.
+        if 2 * (margin_v + 3 * font + 2 * outline) >= height:
+            return False
+        return all(
+            len(visible) * font * 1.5 < width - margin_l - margin_r
+            for visible, _top in (first, second)
+        )
+
+    def _isolated_pair(previous: SubtitleLine, current: SubtitleLine) -> bool:
+        # The generic sweep reports the longest preceding event. A third
+        # simultaneous line could conceal a same-position collision, so only
+        # excuse a pair when no third event shares its overlap window.
+        return not any(
+            other.index not in {previous.index, current.index}
+            and min(previous.end, current.end, other.end)
+            - max(previous.start, current.start, other.start) > tolerance
+            for other in lines
+        )
+
+    return {
+        (previous.index, current.index)
+        for previous, current, _seconds in _overlapping_lines(lines, tolerance)
+        if _safe_pair(events[previous.index - 1], events[current.index - 1])
+        and _isolated_pair(previous, current)
+    }
 
 
 def _ass_seconds(value: str) -> float:

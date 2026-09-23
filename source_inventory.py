@@ -1007,7 +1007,10 @@ def _subtitle_candidate(
 def _source_qc_policy_fingerprint(config: object | None) -> str:
     # These are the configuration-dependent hard failures for role="unknown"
     # in the existing quality checker. Warning-only knobs do not admit sources.
+    from subtitle_quality import ASS_DISJOINT_VERTICAL_QC_VERSION
+
     return _canonical_sha256({
+        "ass_layout_qc_version": ASS_DISJOINT_VERTICAL_QC_VERSION,
         "hard_max_primary_chars": int(getattr(config, "subtitle_quality_hard_max_primary_chars", 64)),
         "fail_cps": float(getattr(config, "subtitle_quality_fail_cps", 25.0)),
         "hard_min_duration_seconds": float(getattr(config, "subtitle_quality_hard_min_duration_seconds", 0.12)),
