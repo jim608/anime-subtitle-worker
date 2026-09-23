@@ -1,5 +1,17 @@
 # M2 Production Observation
 
+Current closeout (2026-09-23 01:39 UTC): the verified canonical-output/source
+identity repair is deployed on Worker
+`12599631ba7f79d7e7b26b8b42b18993b8f213db`. The old 8/20 Gate is
+preserved as `INVALIDATED_BY_RUNTIME_CHANGE`; controlled recovery returned
+Breaker ARMED and created frozen Gate
+`m2-gate-20260923T013758379145Z-5c980b0249`. Its one bounded snapshot was
+1/20, 0 settled/strict with an actual new claim, ASR Stage and heartbeat.
+M2 remains unaccepted until the full 24-hour/fixed-20/new-delivery evidence
+is present. Exact preservation, test and runtime evidence:
+`docs/M2_SOURCE_IDENTITY_RECOVERY_20260923.md`. Historical sections below
+remain as originally observed and must not be used as current runtime status.
+
 ## 2026-09-22 23:52 UTC — isolated settled-Gate/report boundary
 
 Current cf82 image passes the full nine-case report-export admission suite

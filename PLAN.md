@@ -1,5 +1,20 @@
 # Incremental Delivery Plan
 
+## 2026-09-23 01:39 UTC — canonical output/source identity recovery, acceptance open
+
+Worker `12599631ba7f79d7e7b26b8b42b18993b8f213db` is deployed after the
+exact converted-output identity fault was reproduced and fixed. The previous
+Gate was preserved as `INVALIDATED_BY_RUNTIME_CHANGE` at 8/20; the new strict
+Gate `m2-gate-20260923T013758379145Z-5c980b0249` started at
+2026-09-23T01:37:58.379145Z. Breaker is ARMED, controlled admission resumed,
+and one post-recovery task reached actual ASR Stage and heartbeat. New Gate was
+1/20, 0 settled/strict in the single bounded snapshot. This is not M2
+acceptance: the >=24-hour autonomous window, fixed-20 outcomes, multiple
+terminal-to-next-claim cycles and two newly delivered strict subtitles remain
+unverified. See `docs/M2_SOURCE_IDENTITY_RECOVERY_20260923.md` for exact
+image, tests, backup/hold preservation and server evidence. Do not start M3 or
+rebuild this Gate for a document-only update.
+
 ## 2026-09-23 00:17 UTC — ASS QC false collision candidate, not deployed
 
 One hash-pinned 495-dialogue zh-TW ASS sidecar from a frozen Gate review has
