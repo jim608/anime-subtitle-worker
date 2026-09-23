@@ -1,5 +1,39 @@
 # M2 remaining acceptance — 2026-09-08
 
+## 2026-09-23 00:19 UTC — bounded Laya closeout and subtitle candidate
+
+Laya SDK and adapter raw scores/options/label indexes match in both option
+orders, but all seven independent historical incidents were classified
+RESOURCE. There is no reproduced integration defect and no accepted model
+benefit: `MODEL_QUALITY_NOT_ACCEPTED`, automatic model inference disabled;
+rules and bounded incident collection remain. The three old diagnostic
+containers were removed only after evidence and rollback preservation; no
+volumes, backups or Production service were removed. Model quality, its OOM
+case and overlong-event-line validation remain separate. See
+`docs/LAYA_DIAGNOSTICS_20260923.md` and `logs/laya-20260923/bounded-check/`.
+
+Returning to subtitles exposed a real, isolated ASS QC false collision:
+one existing 495-dialogue zh-TW source's eight overlaps are disjoint top/bottom
+events, while previous QC ignored layout and hard-failed them. Candidate
+`55f94f6f9518b1e5cbb763518129a6ab2c777c3d` is pushed; 142 focused
+UNRAID tests PASS and exact-source read-only QC reports eight warnings, zero
+hard failures, unchanged source hash/mtime. The fix does not exempt ambiguous
+or same-position overlaps. It has NOT been deployed. At the bounded 00:19Z
+snapshot, Production remains cf82/ef5, ARMED, 106 holds; Gate221442 is
+ACTIVE7/20, 6 settled/0 strict, with an AI task processing. No old member is
+re-run or recounted. See `logs/laya-20260923/ass-qc-final-20260923.log`,
+`ass-qc-real-source-candidate4-20260923.json` and
+`ass-qc-predeploy-observation-20260923.log` in the same log directory.
+
+Remaining: safe, state-preserving deployment and fresh runtime/Gate handoff
+for this result-affecting candidate; proof that a new eligible real task crosses
+the former review point; at least 24 hours of autonomous observation, every
+fixed-20 outcome, at least two new strict official subtitles on one baseline,
+and continued no-false-completion/admission safety evidence. The present Gate
+must stay unchanged until a real deployment. Historical download/extraction
+publication is evidence for that path, not a new current-baseline delivery.
+M2 Production acceptance remains NO.
+
 ## 2026-09-23 — current evidence supersedes earlier running-window notes
 
 Worker cf82fc27 / WebUI ef5c20e6 deployed; actual image201 tests+Docker restart+fresh

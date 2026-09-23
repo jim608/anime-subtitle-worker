@@ -1,5 +1,32 @@
 # Incremental Delivery Plan
 
+## 2026-09-23 00:17 UTC — ASS QC false collision candidate, not deployed
+
+One hash-pinned 495-dialogue zh-TW ASS sidecar from a frozen Gate review has
+eight overlaps that are exclusively isolated top (`{\\an8}`) versus bottom
+events. The existing QC discarded layout and rejected them as hard
+`timing_overlap`; its persisted candidate otherwise had zh-TW confidence
+0.995, coverage 0.995344 and only `source_hard_qc_failed` on the primary copy.
+Worker candidate `55f94f6f9518b1e5cbb763518129a6ab2c777c3d` permits only
+strictly proven disjoint single-line geometry; unknown style, transforms,
+same-position or triple collisions remain hard failures. Source QC policy
+fingerprint changes so old source decisions are not reused. UNRAID isolation:
+142 relevant regressions PASS; one real sidecar remains hash/mtime unchanged,
+eight disjoint warnings, zero hard failures. See
+`logs/laya-20260923/ass-qc-final-20260923.log` and
+`logs/laya-20260923/ass-qc-real-source-candidate4-20260923.json`.
+The candidate is pushed but NOT deployed or counted as a formal delivery.
+One bounded predeploy snapshot at00:19Z kept cf82 Worker/ef5 WebUI ARMED,
+Gate221442 ACTIVE7/20 (6 settled/0 strict), one AI transcription running,
+106 source holds. No pause, restart, Gate change or source write. Before any
+result-affecting deployment, use a safe idle/owned handoff, preserve all old
+Gate evidence and backups, attest the actual image and re-arm a new 0/20 Gate.
+The existing deployment script's default failure branch can restore database
+backups; do not launch that branch while the Goal forbids whole-DB rollback.
+Need a verified state-preserving deployment path or its existing owned
+reconciliation mode, then post-deploy real-task proof and the full 24h/fixed20/
+two-new-output acceptance. M2 remains WAITING_FOR_EVIDENCE, not accepted.
+
 ## 2026-09-22 23:52 UTC — current-image observer/admission regression
 
 UNRAID isolated cf82 image: report-export admission **9/9 PASS** as non-root;
