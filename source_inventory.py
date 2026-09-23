@@ -15,8 +15,8 @@ from typing import Any
 import uuid
 
 
-SOURCE_INPUT_IDENTITY_VERSION = "source-input-identity-v3"
-SOURCE_INVENTORY_VERSION = "source-inventory-v3"
+SOURCE_INPUT_IDENTITY_VERSION = "source-input-identity-v4"
+SOURCE_INVENTORY_VERSION = "source-inventory-v4"
 MATERIALIZED_SUBTITLE_CACHE_VERSION = "materialized-subtitle-v1"
 SIDECAR_SUBTITLE_EXTENSIONS = frozenset({".ass", ".ssa", ".srt", ".vtt"})
 TEXT_SUBTITLE_CODECS = frozenset({"ass", "ssa", "subrip", "srt", "webvtt", "mov_text"})
@@ -1272,23 +1272,30 @@ def _is_verified_generated_publication_sidecar(
     *,
     config: object | None,
 ) -> bool:
-    """Exclude only a verified worker-owned conventional zh-TW output.
+    """Exclude only a verified worker-owned policy-defined zh-TW output.
 
-    A plain ``<video>.zh-TW.ass`` may be an original user sidecar, so its name
-    alone is never enough.  Conversion/normalization outputs are excluded only
-    when the current strict manifest binds that exact file and records the
-    generating strategy.
+    A matching filename may be an original user sidecar, so its name alone is
+    never enough.  The manifest must bind the exact current bytes and the
+    existing publication policy must validate its canonical or legacy path.
     """
 
-    if config is None or path.name.casefold() != f"{video.stem}.zh-tw.ass".casefold():
+    if config is None or path.suffix.casefold() != ".ass":
         return False
     try:
+        from subtitle_paths import chinese_publication_path
         from output_manifest import (
             ADOPTED_ZH_TW_PUBLICATION_KIND,
             CONVERTED_ZH_CN_PUBLICATION_KIND,
             output_manifest_path,
             validate_output_manifest,
         )
+
+        allowed = {
+            video.with_name(f"{video.stem}.zh-TW.ass").resolve(),
+            chinese_publication_path(video).resolve(),
+        }
+        if path.resolve() not in allowed:
+            return False
 
         if not validate_output_manifest(
             video,

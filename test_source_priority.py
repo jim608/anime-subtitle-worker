@@ -26,7 +26,7 @@ from source_decision import (
 )
 from srt_utils import SrtBlock, read_srt, write_srt
 from subtitle_extract import ExtractedSubtitle
-from subtitle_paths import paths_for_video, source_transcript_paths_for_video
+from subtitle_paths import chinese_publication_path, paths_for_video, source_transcript_paths_for_video
 from test_scanner import _config as _scanner_config
 from test_scanner import _logger as _scanner_logger
 from test_worker import _config as _worker_config
@@ -127,7 +127,7 @@ class SubtitleSourcePriorityTest(unittest.TestCase):
             transcribe.assert_not_called()
             translator.assert_not_called()
 
-            output = root / "Anime S01E01.zh-TW.ass"
+            output = chinese_publication_path(video)
             source_event = _dialogue_fields(source)[0]
             output_event = _dialogue_fields(output)[0]
             self.assertEqual(output_event[:9], source_event[:9])

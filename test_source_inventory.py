@@ -19,6 +19,7 @@ from source_inventory import (
     inventory_sources,
     materialize_selected_subtitle,
 )
+from subtitle_paths import chinese_publication_path
 
 
 class SourceInventoryTest(unittest.TestCase):
@@ -136,6 +137,45 @@ class SourceInventoryTest(unittest.TestCase):
             "output_manifest.output_manifest_path", return_value=manifest
         ):
             self.assertEqual((), discover_source_sidecars(self.video, config=config))
+
+    def test_verified_canonical_publication_does_not_mutate_source_identity(self) -> None:
+        source = self._sidecar(".zh-CN.srt", "1\n00:00:01,000 --> 00:00:02,000\nsource\n")
+        config = SimpleNamespace()
+        before = build_source_input_identity(self.video, self.job, config=config)
+        media_before = self.video.read_bytes()
+        source_before = source.read_bytes()
+        output = chinese_publication_path(self.video)
+        output.write_text("validated converted output", encoding="utf-8")
+        manifest = self.root / "manifest.json"
+        manifest.write_text(
+            '{"publication":{"kind":"converted_zh_cn"},"provenance":{}}',
+            encoding="utf-8",
+        )
+        # A policy- and hash-verified exact publication is not a new input.
+        with patch("output_manifest.validate_output_manifest", return_value=True), patch(
+            "output_manifest.output_manifest_path", return_value=manifest
+        ):
+            after = build_source_input_identity(self.video, self.job, config=config)
+            self.assertEqual(before.fingerprint, after.fingerprint)
+            self.assertEqual((source,), discover_source_sidecars(self.video, config=config))
+            self.assertEqual(after.fingerprint, build_source_input_identity(self.video, self.job, config=config).fingerprint)
+        # A receipt whose validation fails cannot hide a source sidecar.
+        with patch("output_manifest.validate_output_manifest", return_value=False):
+            self.assertIn(output, discover_source_sidecars(self.video, config=config))
+        self.assertEqual(media_before, self.video.read_bytes())
+        self.assertEqual(source_before, source.read_bytes())
+
+    def test_verified_publication_cannot_hide_unrelated_source_sidecar(self) -> None:
+        unrelated = self._sidecar(".other.zh-TW.ass", "user sidecar")
+        manifest = self.root / "manifest.json"
+        manifest.write_text(
+            '{"publication":{"kind":"converted_zh_cn"},"provenance":{}}',
+            encoding="utf-8",
+        )
+        with patch("output_manifest.validate_output_manifest", return_value=True), patch(
+            "output_manifest.output_manifest_path", return_value=manifest
+        ):
+            self.assertIn(unrelated, discover_source_sidecars(self.video, config=SimpleNamespace()))
 
     def test_verified_normalization_output_requires_explicit_m2_strategy(self) -> None:
         sidecar = self._sidecar(

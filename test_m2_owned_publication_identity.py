@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 import m2_strict_runtime_evidence as strict
+from source_inventory import SOURCE_INPUT_IDENTITY_VERSION
 
 class OwnedPublicationIdentityTests(unittest.TestCase):
     def setUp(self):
@@ -14,7 +15,7 @@ class OwnedPublicationIdentityTests(unittest.TestCase):
         self.old={'relative_path':self.output.name,'size':len(b'old-rejected-caption'),'mtime_ns':11,
             'sha256':hashlib.sha256(b'old-rejected-caption').hexdigest()}
         self.selected={'relative_path':'episode.zh-CN.srt','size':30,'mtime_ns':12,'sha256':'a'*64}
-        base={'schema_version':'source-input-identity-v3','media_job_identity':{'job_id':'job','media_revision':'b'*64}}
+        base={'schema_version':SOURCE_INPUT_IDENTITY_VERSION,'media_job_identity':{'job_id':'job','media_revision':'b'*64}}
         self.before={**base,'sidecars':[self.old,self.selected]};self.current={**base,'sidecars':[self.selected]}
         payload={'strategy':'CONVERT_ZH_CN','selected_subtitle_track':{'source_reference':self.selected['relative_path']},
             'candidates':[{'source_reference':self.old['relative_path'],'source_sha256':self.old['sha256'],
