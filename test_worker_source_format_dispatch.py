@@ -11,6 +11,7 @@ from output_manifest import output_manifest_path, output_publication_marker_path
 from safe_files import sha256_file
 from source_decision import SubtitleSourceDecision, CONVERT_ZH_CN
 from source_integrity import SourceIntegrityError
+from source_inventory import build_source_input_identity
 from subtitle_extract import classify_subtitle_content_file
 from subtitle_quality import analyze_subtitle_file, SubtitleQualityError
 from test_worker import _config
@@ -137,6 +138,23 @@ class SourceFormatDispatchTest(unittest.TestCase):
         self.assertFalse(self.video.with_name('episode.zh-TW.ass').exists())
         self.assertTrue(validate_output_manifest(self.video, self.config, verify_hashes=True,
                                                 require_publication_semantics=True))
+
+    def test_real_converted_publication_is_not_a_new_source_revision(self):
+        media_before = self.signature(self.video)
+        source_before = self.signature(self.source)
+        before = build_source_input_identity(self.video, 'job-source-identity', config=self.config)
+        self.convert()
+        self.assertTrue(validate_output_manifest(
+            self.video, self.config, verify_hashes=True, require_publication_semantics=True,
+        ))
+        after = build_source_input_identity(self.video, 'job-source-identity', config=self.config)
+        self.assertEqual(before.fingerprint, after.fingerprint)
+        self.assertEqual(media_before, self.signature(self.video))
+        self.assertEqual(source_before, self.signature(self.source))
+        independent_source = self.video.with_name('episode.ja.srt')
+        independent_source.write_text('1\n00:00:01,000 --> 00:00:02,000\nsource changed\n', encoding='utf-8')
+        changed = build_source_input_identity(self.video, 'job-source-identity', config=self.config)
+        self.assertNotEqual(before.fingerprint, changed.fingerprint)
 
     def test_legacy_manifest_remains_exact_path_bound(self):
         legacy = self.video.with_name('episode.zh-TW.ass')
