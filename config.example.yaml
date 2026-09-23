@@ -24,7 +24,7 @@ source_analyzer_tie_margin: 0.025
 
 # Checkpoint invalidation identity.  These values must describe the deployed
 # analyzer implementation and persisted decision schema.
-source_analyzer_version: "m2-source-analyzer-v1"
+source_analyzer_version: "m2-source-analyzer-v2"
 source_decision_schema_version: 1
 source_decision_version: "m2-source-decision-v1"
 
