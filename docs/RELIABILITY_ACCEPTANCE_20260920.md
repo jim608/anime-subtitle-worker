@@ -103,6 +103,24 @@ and actual-image attestation are in
 `logs/m2-source-id-20260923/m2-path-regression-20260923T035443Z.{log,exit}`.
 This closes the missing *test-coverage attribution* of the previous quiet
 395-test log, not either current-baseline Production final-publication proof.
+Two further actual-image, networkless/read-only/no-Production-mount test runs
+recorded **101/101** admission, report-export, frozen-Gate and guardrail
+lifecycle tests, and **76/76** source inventory, subtitle QC/path and
+publication-identity tests. Their full per-test names, image attestation and
+exit codes are under `logs/m2-source-id-20260923/` as
+`m2-path-regression-20260923T040257Z.{log,exit}` and
+`m2-path-regression-20260923T040532Z.{log,exit}`. Both temporary test
+containers were confirmed absent afterward. These runs strengthen current
+code-boundary regression evidence, but neither replays a Production target
+nor proves current-baseline download/extraction or AI final publication.
+An exact-key read-only receipt for Gate ordinal 4 is
+`ordinal4-review-1790136430614121337.json`: its frozen first attempt ended
+in `short_fragment` ASR quality review; later associated diagnosis records
+`repair_attempted=true`, but that later fact is not evidence that the first
+attempt repaired or that a viable alternate source exists. The Gate's review
+outcomes mean its strict 20/20 safety report cannot PASS, even if all remaining slots
+settle and 24 hours elapse; the frozen cohort is preserved for the required
+full outcome and continuity assessment.
 
 Status: **WAITING_FOR_EVIDENCE**. The existing server observer must still
 establish at least 24 hours from the current Gate start, all fixed first 20

@@ -31,7 +31,9 @@ contribute results. All 107 source holds and 60 backups remain.
       acceptance window (three early cycles proven; duration still short).
 - [ ] Retain and assess all first 20 immutable Gate outcomes after at least 24
       hours of existing server-side observation (earliest
-      `2026-09-24T02:54:49.876085Z`).
+      `2026-09-24T02:54:49.876085Z`). Existing review members mean this Gate
+      cannot satisfy its 20/20 strict PASS contract; do not backfill or replace
+      it merely to change that result.
 - [ ] Prove at least two newly published strict formal zh-TW targets on this
       baseline (one proven), without counting historical download/extraction
       or AI outputs.
@@ -40,7 +42,9 @@ contribute results. All 107 source holds and 60 backups remain.
       receipts remain historical PASS; shared publication/identity/QC code
       changed before `e30d3c6…`, while the new 323-dialogue Gate result covers
       `CONVERT_ZH_CN` only. Current-image isolated targeted regression passed
-      40/40 at 2026-09-23T03:54Z; this is not Production path acceptance.
+      40/40 at 03:54Z, followed by 101/101 lifecycle and 76/76 source/QC/
+      publication safety tests at 04:03/04:05Z; none is Production path
+      acceptance.
 - [ ] Confirm no unresolved false completion, source damage, duplicate publish,
       unbounded retry or unexplained admission stop across that window.
 

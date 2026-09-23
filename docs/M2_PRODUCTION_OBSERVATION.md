@@ -73,6 +73,28 @@ An exact frozen-member read then showed ordinal 4 entering NEEDS_REVIEW at
 Evidence: `logs/m2-source-id-20260923/post-owned-release-snapshot-1790134267978741482.json`
 and `precise-gate-publication-evidence-1790134371868111997.json`.
 
+One exact-key, read-only transaction for that ordinal's attempt subsequently
+found `deterministic_asr_quality` at `transcription_review`, with an open
+`asr_quality` review reason `short_fragment`. The frozen first attempt's
+detail has 12 review ranges. The later review diagnosis has 15 ranges, a
+referenced checkpoint and `repair_attempted=true`; those later fields must
+**not** be attributed to the frozen first attempt. The indexed candidate
+queue is paused for `manual_review` after two recorded attempts, although
+this export did not include the second attempt row or verify checkpoint bytes.
+This is a bounded transcription-quality disposition, not evidence of a
+breaker trip or a global admission stop. It does not prove that another safe
+source existed or that a common code defect caused the short fragments.
+Comparison with the other exact `short_fragment` review shows the same
+failure class and only a full-retranscribe candidate; that earlier bounded
+rerun failed again. It does not prove a common implementation defect.
+The exact receipt is
+`logs/m2-source-id-20260923/ordinal4-review-1790136430614121337.json`;
+the frozen review slot remains unchanged. Since this cohort already has
+non-strict terminal members and the report contract requires **20/20 strict**
+for `safety_gate: PASS`, this Gate cannot later become PASS by accepting more
+jobs or reaching 24 hours. Its full fixed-cohort results must still be kept
+and assessed without backfill or a query-triggered replacement.
+
 Ordinal 3 (`m2ai_23e73312e5fc376fb7d4`) is also **one genuinely new** formal
 zh-TW subtitle on this current baseline, not merely a strict revalidation:
 the recorded strategy is `CONVERT_ZH_CN`, terminal state COMPLETED, strict
