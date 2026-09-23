@@ -16,6 +16,13 @@ holds. The first post-recovery attempt was genuinely claimed at
 correctly ended in review at `02:56:11.545679Z`; this is not a new subtitle
 or terminal-to-next-distinct-claim proof. Evidence:
 `logs/m2-source-id-20260923/post-owned-release-snapshot-1790132182183456481.json`.
+One second bounded snapshot at 03:00 UTC records the same Gate **2/20,
+1 settled review, 0 strict**: a *different* obligation automatically claimed
+at `02:57:24.259512Z`, entered transcription and had a fresh heartbeat at
+`02:57:53.217697Z`. The first task finished at `02:56:11.545679Z`; no
+manual dispatch or Retry occurred between them. This proves **one** current-
+baseline terminal-to-next-distinct-claim cycle, not sustained operation.
+Evidence: `logs/m2-source-id-20260923/post-owned-release-snapshot-1790132421559620201.json`.
 
 This handoff repaired two shared safety/recovery boundaries: a distinct
 post-terminal attempt previously bypassed breaker evaluation, and an

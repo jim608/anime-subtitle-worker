@@ -10,14 +10,18 @@ Controlled recovery record `m2breakerrec_3b05273fc89c4f8cb4530721580a241d`
 returned ARMED and resumed automatic admission without clearing another
 owner's pause. The current frozen Gate
 `m2-gate-20260923T025449876085Z-6d5682c2c1` began
-`2026-09-23T02:54:49.876085Z`; the bounded snapshot is 1/20, 1 safe review,
-0 strict. The earlier 3/20 and intermediate 0/20 Gates remain invalidated
+`2026-09-23T02:54:49.876085Z`; the latest bounded snapshot is 2/20,
+1 safe review, 0 strict. A different obligation was automatically claimed
+after that review and reached transcription with a fresh heartbeat: one
+terminal-to-next-distinct-claim cycle, not sustained acceptance. The earlier
+3/20 and intermediate 0/20 Gates remain invalidated
 and do not contribute results. All 107 source holds and 60 backups remain.
 
 - [x] Reproduce, repair, isolate-test and safely deploy the two shared defects.
 - [x] Use exact receipts for runtime handoffs; recover ARMED and verify a real
       post-recovery claim reached preflight/source-selection and a safe terminal.
-- [ ] Observe repeated distinct terminal-to-next-claim cycles on this baseline.
+- [ ] Observe repeated distinct terminal-to-next-claim cycles on this baseline
+      (one proven in `post-owned-release-snapshot-1790132421559620201.json`).
 - [ ] Retain and assess all first 20 immutable Gate outcomes after at least 24
       hours of existing server-side observation (earliest
       `2026-09-24T02:54:49.876085Z`).

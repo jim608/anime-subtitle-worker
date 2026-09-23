@@ -39,7 +39,13 @@ one correctly reviewed claim with preflight/source-selection stages, 0 strict,
 and no new formal subtitle. This proves admission resumed, not sustained
 terminal-to-next-distinct-claim operation. The deployment/test/fault/recovery
 logs are under `logs/m2-source-id-20260923/`; the immutable Gate snapshot is
-`post-owned-release-snapshot-1790132182183456481.json` there. The full-suite
+`post-owned-release-snapshot-1790132182183456481.json` there. A second
+bounded snapshot (`post-owned-release-snapshot-1790132421559620201.json`)
+shows 2/20, 1 settled review and 0 strict. The first review finished
+02:56:11.545679Z; a distinct obligation automatically claimed
+02:57:24.259512Z and entered transcription with a heartbeat at
+02:57:53.217697Z. This is one actual terminal-to-next-distinct-claim
+cycle, not the required repeated sustained evidence. The full-suite
 preflight still has two unrelated `config.example.yaml` v1/v2 expectation
 failures; this work did not change example config or count that suite as PASS.
 
